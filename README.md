@@ -12,7 +12,7 @@ A task passes only if every real-world action:
 
 ## Status
 
-Design phase. Decision records 0001 to 0009 were accepted on 14 Nov 2026, and the spec reflects them. The next step is the repository scaffold. There is no code yet, and nothing here is usable.
+Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and the scaffold, CI and Docker Compose work. Milestone M1 has started with the gateway's state machine (`src/fivefold/gateway/`): the transition tables, the decision steps, and invariants I1 to I7 as checks, tested by Hypothesis in memory. Nothing here runs a benchmark yet.
 
 ## Documents
 

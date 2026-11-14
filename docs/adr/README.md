@@ -20,6 +20,12 @@ Status is **Proposed** until the maintainer marks it **Accepted**. Agents never 
 
 The original M0 list had seven records. Records 0008 and 0009 were added because some review questions did not fit 0001 to 0007. [m0-review-decisions.md](m0-review-decisions.md) maps each of the 44 review questions to its decision, lists every change to items the maintainer owns, and lists the 17 fixes made after an independent review of the drafts.
 
+## Records after M0
+
+| # | Decision | Status |
+| --- | --- | --- |
+| [0010](0010-state-machine-corrections.md) | State machine corrections found while implementing 0003: two reason-code fixes and five clarifications | Proposed |
+
 ## Suggested reading order
 
 1. 0004 (the five properties), because every other record serves it.
