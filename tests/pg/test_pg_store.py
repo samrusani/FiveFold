@@ -392,6 +392,30 @@ def test_a_report_that_closes_an_intent_waits_for_a_proposal_in_progress(
     assert snapshot.run_closed, "the run's only worker reported"
 
 
+def test_a_report_takes_the_intents_before_the_actions(
+    migrated_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A report waits behind a proposal that holds its intent, then sees what it did.
+
+    The proposal holds REQ-1's row and is about to lock its holder, A-0001, to attach to
+    it. A report that took the actions first would hold A-0001 and wait for REQ-1, and
+    the two would deadlock. Taking the intents first, as the lock order says, it waits.
+    """
+    with _store(migrated_database) as gateway, _store(migrated_database, exclusive=False) as worker:
+        first = gateway.propose(_proposal("REQ-1", "k"), 0)
+        assert isinstance(first, ActionResult) and first.action_id == "A-0001"
+        pause = Pause(monkeypatch, "lock_intent")
+        attaching = pause.hold(Call(lambda: gateway.propose(_proposal("REQ-1", "k"), 10)))
+        claims = [Claim("REQ-1", ClaimStatus.NOT_DONE), Claim("REQ-2", ClaimStatus.NOT_DONE)]
+        reporting = Call(lambda: worker.submit_report(claims, 20, worker="W1")).start()
+        assert _a_gateway_connection_waits(migrated_database), "the report did not wait"
+        pause.release()
+        attached, reported = attaching.result(), reporting.result()
+        assert isinstance(attached, ActionResult) and attached.action_id == "A-0001", attached
+        assert isinstance(reported, ReportAccepted), reported
+        assert worker.view("A-0001").action.state is ActionState.REJECTED
+
+
 def test_accepted_reports_survive_a_restart(migrated_database: str) -> None:
     two_workers = GatewaySettings(
         approval_wait_ms=5_000,

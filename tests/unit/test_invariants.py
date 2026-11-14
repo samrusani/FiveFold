@@ -191,6 +191,20 @@ def test_i3_a_send_under_an_approval_that_expires_too_soon(snapshot: Snapshot) -
     assert labels(replace(snapshot, attempts=frozen(attempts))) == {"I3"}
 
 
+def test_i3_counts_the_settle_time_from_the_send_not_from_the_check(snapshot: Snapshot) -> None:
+    """The approval outlives the check by S but not the send (0010, change 4)."""
+    attempts = dict(snapshot.attempts)
+    (attempt,) = attempts["A-0002"]
+    check_vt = attempt.sent_vt - 100
+    expiring = replace(
+        attempt.check,
+        check_vt=check_vt,
+        approval_expires_at=check_vt + SETTINGS.settle_ms + 50,
+    )
+    attempts["A-0002"] = (replace(attempt, check=expiring),)
+    assert labels(replace(snapshot, attempts=frozen(attempts))) == {"I3"}
+
+
 def test_i3_an_event_between_the_check_and_the_send(snapshot: Snapshot) -> None:
     attempts = dict(snapshot.attempts)
     (attempt,) = attempts["A-0002"]

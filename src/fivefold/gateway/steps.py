@@ -485,6 +485,13 @@ def _new_attempt(view: ActionView, check: CheckRecord, vt: int) -> Attempt:
     )
 
 
+def _expiry_details(check: CheckRecord) -> Mapping[str, object]:
+    """When an approved approval counts as expired, the expiry that made it so (0010)."""
+    if check.approval is ApprovalStatus.APPROVED and check.approval_expires_at is not None:
+        return {"expires_at": check.approval_expires_at}
+    return NO_DETAILS
+
+
 def dispatch(
     view: ActionView, check: CheckRecord, vt: int, settings: GatewaySettings
 ) -> Change | None:
@@ -506,7 +513,8 @@ def dispatch(
         rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_REVOKED, vt)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.REVOKED))
     if approval is ApprovalStatus.EXPIRED:
-        rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_EXPIRED, vt)
+        details = _expiry_details(check)
+        rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_EXPIRED, vt, details)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.EXPIRED))
     if approval is not ApprovalStatus.APPROVED or check.basis is None:
         raise ValueError(f"an active grant's approval cannot be {check.approval}")
@@ -555,7 +563,7 @@ def retry(
             action,
             EscalationTrigger.RETRY_CHECK_FAILED,
             vt,
-            {"approval": approval, "stale": stale},
+            {"approval": check.approval, "stale": stale, **_expiry_details(check)},
         )
         return Change(action, (note,), grant=observed, escalation=escalation)
     sent, event = _move(view, _S.DISPATCHED, Reason.RETRY, vt, {"attempt_no": attempt_no})
@@ -676,9 +684,11 @@ def attest(
     else:
         if effect_id is not None:
             raise ValueError("an attestation that nothing committed names no effect")
+        due = _latest_sent_vt(view) + settings.settle_ms
         _require(
-            vt >= _latest_sent_vt(view) + settings.settle_ms,
-            "nothing can be attested as not committed before S has passed since the last send",
+            vt >= due,
+            f"{action.action_id}: nothing can be attested as not committed before vt {due},"
+            " S after the last send",
         )
         moved, event = _move(view, _S.FAILED, Reason.HUMAN_ATTESTED, vt, {"actor": actor})
     resolved = replace(

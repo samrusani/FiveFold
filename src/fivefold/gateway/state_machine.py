@@ -324,8 +324,10 @@ class GatewaySettings:
 
     Times are virtual milliseconds. `approval_wait_ms` comes from the scenario's
     `authority` section (0002, 0009); the other defaults are 0005's. `agent_workers` is
-    how many agent workers report: one, or two when the run's faults include F9 (0009).
-    The run closes in the transaction that accepts the last of their reports (0010).
+    how many agent workers the run config expects to report: one, or two when its fault
+    plan includes F9, which starts a second worker (0009). The run closes in the
+    transaction that accepts the last of their reports (0010). If a planned F9 never
+    fires, the run closes when the agents' phase ends instead (0003).
     """
 
     approval_wait_ms: int

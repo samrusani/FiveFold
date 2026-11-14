@@ -33,7 +33,8 @@ $$;
 
 ALTER TABLE gw.intent ADD COLUMN closed boolean NOT NULL DEFAULT false;
 
--- An intent's id and operation never change, and a closed intent never reopens.
+-- An intent's id and operation never change, and a closed intent never reopens. An
+-- intent is never deleted either, or deleting and re-adding it would reopen it.
 CREATE FUNCTION gw.keep_intent() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF (NEW.intent_id, NEW.operation) IS DISTINCT FROM (OLD.intent_id, OLD.operation)
@@ -48,6 +49,35 @@ $$;
 CREATE TRIGGER intent_keeps_identity BEFORE UPDATE ON gw.intent
     FOR EACH ROW EXECUTE FUNCTION gw.keep_intent();
 
+CREATE FUNCTION gw.reject_row_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'gw.% rows are history; % refused', TG_TABLE_NAME, TG_OP;
+END
+$$;
+
+CREATE TRIGGER intent_is_never_deleted BEFORE DELETE ON gw.intent
+    FOR EACH ROW EXECUTE FUNCTION gw.reject_row_change();
+
+-- A closed run stays closed, and its counters never go back.
+CREATE FUNCTION gw.keep_run_state() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (OLD.run_closed AND NOT NEW.run_closed)
+       OR NEW.last_action_no < OLD.last_action_no
+       OR NEW.last_seq < OLD.last_seq
+       OR NEW.last_call_no < OLD.last_call_no
+    THEN
+        RAISE EXCEPTION 'the run cannot reopen and its counters cannot go back';
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER run_state_moves_forward BEFORE UPDATE ON gw.run_state
+    FOR EACH ROW EXECUTE FUNCTION gw.keep_run_state();
+
+CREATE TRIGGER run_state_is_never_deleted BEFORE DELETE ON gw.run_state
+    FOR EACH ROW EXECUTE FUNCTION gw.reject_row_change();
+
 -- One row per agent worker whose final report was accepted, naming the response that
 -- first accepted it. The gateway only ever adds rows here.
 CREATE TABLE gw.report (
@@ -56,3 +86,6 @@ CREATE TABLE gw.report (
 );
 
 REVOKE UPDATE, DELETE ON gw.report FROM ff_gw;
+
+CREATE TRIGGER report_is_append_only BEFORE UPDATE OR DELETE ON gw.report
+    FOR EACH ROW EXECUTE FUNCTION gw.reject_row_change();

@@ -2,10 +2,10 @@
 
 `PgStore` runs the operations of `ActionStore` (`store.py`) in PostgreSQL transactions.
 It connects as the gateway's role, `ff_gw`, which can write only the `gw` schema and has
-no UPDATE or DELETE privilege on `action_event`. Every operation that writes is one
-transaction: it locks the rows it changes in the order `store.py` describes, writes the
-step's change and its events, checks every invariant on what the transaction sees, and
-commits. Reads take no locks and see one consistent state. Nothing in a transaction calls
+no UPDATE or DELETE privilege on `action_event` or `report`. Every operation that writes
+is one transaction: it locks the rows it changes in the order `store.py` describes,
+writes the step's change and its events, checks every invariant on what the transaction
+sees, and commits. Reads take no locks and see one consistent state. Nothing in a transaction calls
 the network (0003): the store only reads and writes rows.
 
 One gateway serves a run. Its store holds a session advisory lock on the run database,
@@ -14,8 +14,9 @@ The gateway can open further stores on the same run with `exclusive` off, for ex
 one per dispatcher worker. A store is one connection: use it from one thread at a time,
 as the deterministic scheduler does (0009).
 
-The schema itself enforces part of I1, I2, I4, I6 and I7 (`db/migrations/0002_gateway.sql`),
-so even a store with a bug cannot write some broken records.
+The schema itself enforces part of I1, I2, I4, I6 and I7, and record 0010's closing rules
+(`db/migrations/0002_gateway.sql` and `0003_gateway_record_0010.sql`), so even a store
+with a bug cannot write some broken records.
 """
 
 from __future__ import annotations

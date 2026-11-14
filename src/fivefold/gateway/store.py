@@ -279,7 +279,16 @@ class ActionStore(ABC):
         An accepted report closes, in the same transaction, each intent it claims
         `not_done`, and the whole run if it is the last report the run expects (0010,
         item 6). It locks every intent first, as closing the run does.
+
+        `worker` names the agent worker the report comes from: the name the harness gave
+        the worker, which its connection carries and which stays the same when the
+        worker resumes from its checkpoint (0009). Only G2 checks reports (0008), so a
+        store with action identity off refuses this call.
         """
+        if not self._identity:
+            raise ValueError("G1 has no report check and no run closing (0008)")
+        if not worker:
+            raise ValueError("a report names the worker it comes from")
         check_text(worker, "worker")
         self._clock(vt)
         with self._transaction() as tx:

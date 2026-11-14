@@ -299,6 +299,41 @@ def test_a_report_names_the_response_that_accepted_it(migrated_database: str) ->
             conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W2', 1)")
 
 
+def test_an_intent_is_never_deleted(migrated_database: str) -> None:
+    """Deleting and re-adding an intent would reopen it (0010)."""
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _intent(conn)
+        _refused(conn, psycopg.errors.RaiseException, "DELETE FROM gw.intent")
+
+
+def test_a_closed_run_stays_closed_and_its_counters_move_forward(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        conn.execute("UPDATE gw.run_state SET run_closed = true, last_seq = 5")
+        for change in (
+            "UPDATE gw.run_state SET run_closed = false",
+            "UPDATE gw.run_state SET last_seq = 4",
+            "UPDATE gw.run_state SET last_action_no = -1",
+            "UPDATE gw.run_state SET last_call_no = -1",
+            "DELETE FROM gw.run_state",
+        ):
+            _refused(conn, psycopg.errors.RaiseException, change)
+        assert conn.execute("SELECT run_closed, last_seq FROM gw.run_state").fetchone() == (
+            True,
+            5,
+        )
+
+
+def test_reports_are_history_for_every_role(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO gw.tool_call (call_no, tool, result, as_of_seq, vt)"
+            " VALUES (1, 'submit_final_report', '{}', 0, 0)"
+        )
+        conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
+        _refused(conn, psycopg.errors.RaiseException, "UPDATE gw.report SET worker = 'W2'")
+        _refused(conn, psycopg.errors.RaiseException, "DELETE FROM gw.report")
+
+
 def test_the_run_has_one_state_row(migrated_database: str) -> None:
     with psycopg.connect(migrated_database, autocommit=True) as conn:
         with pytest.raises(psycopg.errors.UniqueViolation):
@@ -345,7 +380,8 @@ EXPECTED: dict[str, dict[str, set[str]]] = {
     "ff_harness": {table: set() for table in TABLES},
     "ff_agent": {table: set() for table in TABLES},
 }
-"""Privileges on every gw table, from 0008's table: ff_gw only adds to action_event and report."""
+"""Privileges on every gw table: 0008's table, plus record 0010's `report`, which ff_gw
+only adds to."""
 
 
 @pytest.mark.parametrize("role", sorted(EXPECTED))

@@ -78,6 +78,7 @@ class GatewayDatabase:
         because the log refuses TRUNCATE until its triggers are switched off."""
         with psycopg.connect(self.admin, autocommit=True) as conn, conn.transaction():
             conn.execute("ALTER TABLE gw.action_event DISABLE TRIGGER USER")
+            conn.execute("ALTER TABLE gw.run_state DISABLE TRIGGER USER")
             conn.execute(
                 "TRUNCATE gw.report, gw.tool_call, gw.action_event, gw.escalation, gw.attempt,"
                 ' gw."grant", gw.action, gw.intent'
@@ -87,6 +88,7 @@ class GatewayDatabase:
                 "UPDATE gw.run_state SET run_closed = false, last_action_no = 0, last_seq = 0,"
                 " last_call_no = 0"
             )
+            conn.execute("ALTER TABLE gw.run_state ENABLE TRIGGER USER")
 
 
 @pytest.fixture(scope="session")

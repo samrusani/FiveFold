@@ -153,11 +153,12 @@ I1 to I6 are restated so each one has a check. I5 now also covers the final repo
 ### Data model
 
 - `action`: action_id, task_id, intent_id, operation, target, args, action_key, identity (on for G2, off for G1), basis (fact key to version), state, grant_id, idempotency_key, effect_id, contract, created_vt, updated_vt.
-- `attempt`: attempt_id, action_id, attempt_no, idempotency_key, grant_id, check (kind, approval status seen, versions seen, check_vt), sent_vt, answer_class, answer_ref, answered_vt.
+- `attempt`: attempt_id, action_id, attempt_no, idempotency_key, grant_id, check (kind, approval status seen, the approval's expiry when approved (0010), versions seen, check_vt), sent_vt, answer_class, answer_ref, answered_vt.
 - `action_event`: seq, action_id, kind (transition or note), from_state, to_state (equal for notes), reason, details, vt, wall_at.
 - `escalation`: escalation_id, action_id, opened_vt, resolved_vt, resolution, effect_id, actor.
 - `tool_call`: seq, tool, args, result, action_id, vt.
-- `intent`: intent_id, operation. One row per task intent, created at run start; the lock anchor for 0001.
+- `intent`: intent_id, operation, closed. One row per task intent, created at run start; the lock anchor for 0001. An accepted `not_done` claim closes it (0010).
+- `report`: worker, call_no. Each agent worker's first accepted final report (0010).
 
 ### Testing plan
 

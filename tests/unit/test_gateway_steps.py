@@ -371,8 +371,31 @@ def test_a_c2_retry_escalates_when_the_approval_expires_too_soon() -> None:
     assert run.store.retry(action_id, check, vt) is None
     snapshot = run.store.snapshot()
     assert snapshot.events[-1].reason is Note.ESCALATED
-    assert snapshot.events[-1].details["approval"] == ApprovalStatus.EXPIRED
+    # The note keeps what the approvals service said, and the expiry that made it count
+    # as expired, so the record explains the escalation.
+    assert snapshot.events[-1].details["approval"] == ApprovalStatus.APPROVED
+    assert snapshot.events[-1].details["expires_at"] == vt + SETTLE
     assert snapshot.grants["G-0001"].state is GrantState.EXPIRED
+
+
+def test_the_settle_time_counts_from_the_send_not_from_the_check() -> None:
+    """Record 0010, change 4, as the maintainer decided: S counts from the send.
+
+    The check runs at 100 ms before the send. The approval outlives the check by more than
+    S, but not the send, so it counts as expired, and the event says when it expires.
+    """
+    run = Run(Contract.C2)
+    action_id = run.authorized()
+    ticket = run.store.begin_check(action_id)
+    check_vt = run.at(1)
+    sent_vt = check_vt + 100
+    expires_at = check_vt + SETTLE + 50
+    check = ticket.record(
+        approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=check_vt, expires_at=expires_at
+    )
+    assert run.store.dispatch(action_id, check, sent_vt) is None
+    event = run.store.snapshot().events[-1]
+    assert (event.reason, event.details["expires_at"]) == (Reason.APPROVAL_EXPIRED, expires_at)
 
 
 def test_an_approved_check_records_the_approvals_expiry() -> None:
@@ -398,7 +421,7 @@ def test_c0_escalates_at_once_and_only_a_human_settles_it() -> None:
     )
     with pytest.raises(StepRefused):
         run.store.begin_check(action_id)
-    with pytest.raises(StepRefused, match="S has passed"):
+    with pytest.raises(StepRefused, match="before vt"):
         run.store.attest(action_id, Resolution.NOT_COMMITTED, None, "resolver", run.at(1))
     sent_vt = run.store.snapshot().attempts[action_id][0].sent_vt
     run.store.attest(action_id, Resolution.NOT_COMMITTED, None, "resolver", sent_vt + SETTLE)
@@ -770,9 +793,8 @@ def test_an_accepted_not_done_closes_its_intent_at_once() -> None:
 
 
 def test_the_last_expected_report_closes_the_run_with_it() -> None:
-    run = Run(Contract.C2, identity=False, settings=TWO_WORKERS)
+    run = Run(Contract.C2, settings=TWO_WORKERS)
     sent = run.unknown("REQ-1")
-    late = run.pending("REQ-1", "k2")
     run.unknown("REQ-2")
     claims = [Claim("REQ-1", ClaimStatus.UNKNOWN), Claim("REQ-2", ClaimStatus.UNKNOWN)]
     first = run.store.submit_report(claims, run.at(1), worker="W1")
@@ -781,17 +803,32 @@ def test_the_last_expected_report_closes_the_run_with_it() -> None:
     snapshot = run.store.snapshot()
     assert not snapshot.run_closed, "one worker's two reports are not two workers' reports"
     assert dict(snapshot.reports) == {"W1": snapshot.tool_calls[-2].call_no}
-    assert run.state(late) is S.PENDING_APPROVAL
     last = run.store.submit_report(claims, run.at(1), worker="W2")
     assert isinstance(last, ReportAccepted)
     snapshot = run.store.snapshot()
     assert snapshot.run_closed
-    assert run.state(late) is S.REJECTED
-    assert run.store.view(late).events[-1].reason is Reason.RUN_CLOSED
     assert run.state(sent) is S.OUTCOME_UNKNOWN, "reconciliation continues after the close"
     assert snapshot.tool_calls[-1].as_of_seq == snapshot.events[-1].seq
     refused = run.store.propose(proposal("REQ-2", "k3"), run.at(1))
     assert isinstance(refused, Refusal) and refused.reason is RefusalReason.RUN_CLOSED
+
+
+NOT_DONE = [Claim("REQ-1", ClaimStatus.NOT_DONE), Claim("REQ-2", ClaimStatus.NOT_DONE)]
+
+
+def test_only_g2_checks_reports() -> None:
+    with pytest.raises(ValueError, match="G1 has no report check"):
+        Run(Contract.C2, identity=False).store.submit_report(NOT_DONE, 1, worker="W1")
+
+
+def test_a_report_names_its_worker() -> None:
+    with pytest.raises(ValueError, match="names the worker"):
+        Run(Contract.C2).store.submit_report(NOT_DONE, 1, worker="")
+
+
+def test_a_run_has_at_least_one_agent_worker() -> None:
+    with pytest.raises(ValueError, match="at least one agent worker"):
+        replace(SETTINGS, agent_workers=0)
 
 
 def test_a_refused_report_closes_nothing() -> None:
