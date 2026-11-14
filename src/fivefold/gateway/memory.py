@@ -62,6 +62,8 @@ class MemoryStore(ActionStore):
             escalations=frozen({}),
             tool_calls=(),
             run_closed=False,
+            closed_intents=frozenset(),
+            reports=frozen({}),
         )
 
     def snapshot(self) -> Snapshot:
@@ -93,6 +95,20 @@ class _MemoryTransaction(Transaction):
 
     def close_run(self) -> None:
         self._working = replace(self._working, run_closed=True)
+
+    def closed_intents(self) -> frozenset[str]:
+        return self._working.closed_intents
+
+    def close_intent(self, intent_id: str) -> None:
+        closed = self._working.closed_intents | {intent_id}
+        self._working = replace(self._working, closed_intents=closed)
+
+    def reports(self) -> Mapping[str, int]:
+        return self._working.reports
+
+    def record_report(self, worker: str, call_no: int) -> None:
+        reports = {**self._working.reports, worker: call_no}
+        self._working = replace(self._working, reports=frozen(reports))
 
     def lock_intent(self, intent_id: str) -> None:
         pass
@@ -165,11 +181,12 @@ class _MemoryTransaction(Transaction):
         action_id: str | None,
         result: ActionResult | Refusal | ReportAccepted,
         vt: int,
-    ) -> None:
+    ) -> int:
         snapshot = self._working
         call_no = len(snapshot.tool_calls) + 1
         call = ToolCall(call_no, tool, action_id, result, _last_seq(snapshot), vt)
         self._working = replace(snapshot, tool_calls=(*snapshot.tool_calls, call))
+        return call_no
 
     def snapshot(self) -> Snapshot:
         return self._working

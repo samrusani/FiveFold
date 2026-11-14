@@ -79,8 +79,8 @@ class GatewayDatabase:
         with psycopg.connect(self.admin, autocommit=True) as conn, conn.transaction():
             conn.execute("ALTER TABLE gw.action_event DISABLE TRIGGER USER")
             conn.execute(
-                'TRUNCATE gw.tool_call, gw.action_event, gw.escalation, gw.attempt, gw."grant",'
-                " gw.action, gw.intent"
+                "TRUNCATE gw.report, gw.tool_call, gw.action_event, gw.escalation, gw.attempt,"
+                ' gw."grant", gw.action, gw.intent'
             )
             conn.execute("ALTER TABLE gw.action_event ENABLE TRIGGER USER")
             conn.execute(

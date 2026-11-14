@@ -22,8 +22,10 @@ and responses and guards the invariant check's reads. Every transaction takes th
 it needs in that order, and its foreign key checks lock only rows it already holds, so
 no two transactions can deadlock. A proposal locks its intent before it reads whether
 the run is closed, and closing the run locks every intent first, so a proposal either
-lands before the close, which then rejects it, or sees the run closed. A store is used
-from one thread at a time; a gateway with several workers gives each its own store.
+lands before the close, which then rejects it, or sees the run closed. A final report
+locks every intent the same way, because an accepted report can close intents and the
+run (0010). A store is used from one thread at a time; a gateway with several workers
+gives each its own store.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ from fivefold.gateway.records import (
     ReportAccepted,
     Resolution,
     Snapshot,
+    check_text,
 )
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.steps import ActionView, Change, Match
@@ -85,6 +88,22 @@ class Transaction(ABC):
     @abstractmethod
     def close_run(self) -> None:
         """Mark the run closed."""
+
+    @abstractmethod
+    def closed_intents(self) -> frozenset[str]:
+        """The intents an accepted `not_done` claim closed (0010)."""
+
+    @abstractmethod
+    def close_intent(self, intent_id: str) -> None:
+        """Mark one intent closed. Call it with the intent locked."""
+
+    @abstractmethod
+    def reports(self) -> Mapping[str, int]:
+        """Each worker whose report was accepted, with that report's call number."""
+
+    @abstractmethod
+    def record_report(self, worker: str, call_no: int) -> None:
+        """Record a worker's first accepted report, logged as call `call_no`."""
 
     @abstractmethod
     def view(self, action_id: str) -> ActionView:
@@ -123,8 +142,11 @@ class Transaction(ABC):
         action_id: str | None,
         result: ActionResult | Refusal | ReportAccepted,
         vt: int,
-    ) -> None:
-        """Log a response the agent receives, with the event seq it reflects."""
+    ) -> int:
+        """Log a response the agent receives, with the event seq it reflects.
+
+        Returns the response's call number.
+        """
 
     @abstractmethod
     def snapshot(self) -> Snapshot:
@@ -212,7 +234,7 @@ class ActionStore(ABC):
         operation = tx.intents().get(proposal.intent_id)
         if operation is not None:
             tx.lock_intent(proposal.intent_id)
-        if tx.run_closed():
+        if tx.run_closed() or proposal.intent_id in tx.closed_intents():
             return Refusal(RefusalReason.RUN_CLOSED), None
         if operation is None:
             return Refusal(RefusalReason.UNKNOWN_INTENT), None
@@ -249,10 +271,19 @@ class ActionStore(ABC):
         self._vt = vt
         return result
 
-    def submit_report(self, claims: Sequence[Claim], vt: int) -> ReportAccepted | Refusal:
-        """Check a final report against the records (0003); refuse any contradiction."""
+    def submit_report(
+        self, claims: Sequence[Claim], vt: int, *, worker: str
+    ) -> ReportAccepted | Refusal:
+        """Check a worker's final report against the records (0003); refuse contradictions.
+
+        An accepted report closes, in the same transaction, each intent it claims
+        `not_done`, and the whole run if it is the last report the run expects (0010,
+        item 6). It locks every intent first, as closing the run does.
+        """
+        check_text(worker, "worker")
         self._clock(vt)
         with self._transaction() as tx:
+            tx.lock_intents()
             by_intent: dict[str, list[ActionView]] = {}
             for action_id in tx.action_ids():
                 view = tx.view(action_id)
@@ -261,9 +292,15 @@ class ActionStore(ABC):
             outcome: ReportAccepted | Refusal
             if conflicts:
                 outcome = Refusal(RefusalReason.REPORT_INCONSISTENT, conflicts=conflicts)
+                tx.log("submit_final_report", None, outcome, vt)
             else:
                 outcome = ReportAccepted(tuple(claims))
-            tx.log("submit_final_report", None, outcome, vt)
+                reported = tx.reports()
+                intents, last = steps.report_closes(claims, reported, worker, self._settings)
+                self._close(tx, intents, whole_run=last, vt=vt)
+                call_no = tx.log("submit_final_report", None, outcome, vt)
+                if worker not in reported:
+                    tx.record_report(worker, call_no)
             self._check(tx)
         self._vt = vt
         return outcome
@@ -314,7 +351,7 @@ class ActionStore(ABC):
 
     def dispatch(self, action_id: str, check: CheckRecord, vt: int) -> Attempt | None:
         """T6 or T7. Returns the attempt to send, or None if nothing may be sent."""
-        change = self._step(action_id, vt, lambda v: steps.dispatch(v, check, vt))
+        change = self._step(action_id, vt, lambda v: steps.dispatch(v, check, vt, self._settings))
         return change.attempt if change is not None else None
 
     def retry(self, action_id: str, check: CheckRecord, vt: int) -> Attempt | None:
@@ -356,15 +393,27 @@ class ActionStore(ABC):
         self._clock(vt)
         with self._transaction() as tx:
             tx.lock_intents()
-            for action_id in tx.action_ids():
-                change = steps.close(tx.view(action_id), vt)
-                if change is not None:
-                    tx.apply(change, vt)
-            tx.close_run()
+            self._close(tx, frozenset(), whole_run=True, vt=vt)
             self._check(tx)
         self._vt = vt
 
     # Internals --------------------------------------------------------------------------
+
+    def _close(self, tx: Transaction, intents: frozenset[str], *, whole_run: bool, vt: int) -> None:
+        """Close `intents`, or the whole run: reject their undispatched actions (0003, 0010).
+
+        The caller holds every intent's lock, so no proposal for them can land meanwhile.
+        """
+        for action_id in tx.action_ids():
+            view = tx.view(action_id)
+            if whole_run or view.action.intent_id in intents:
+                change = steps.close(view, vt)
+                if change is not None:
+                    tx.apply(change, vt)
+        for intent_id in sorted(intents - tx.closed_intents()):
+            tx.close_intent(intent_id)
+        if whole_run:
+            tx.close_run()
 
     def _clock(self, vt: int) -> None:
         if vt < self._vt:

@@ -69,7 +69,8 @@ class TwinStore:
     def compare(self) -> None:
         """Raise `StoreMismatch` unless both stores hold the same records."""
         pg, oracle = self.pg.snapshot(), self.oracle.snapshot()
-        for part in ("intents", "actions", "grants", "attempts", "events", "escalations"):
+        parts = ("intents", "actions", "grants", "attempts", "events", "escalations")
+        for part in (*parts, "closed_intents", "reports"):
             if getattr(pg, part) != getattr(oracle, part):
                 raise StoreMismatch(f"{part} differ")
         if pg.tool_calls != oracle.tool_calls:
@@ -103,8 +104,11 @@ class TwinStore:
     def status(self, action_id: str, vt: int, *, tool: str = "get_action_status") -> ActionResult:
         return cast(ActionResult, self._both("status", action_id, vt, tool=tool))
 
-    def submit_report(self, claims: Sequence[Claim], vt: int) -> ReportAccepted | Refusal:
-        return cast(ReportAccepted | Refusal, self._both("submit_report", claims, vt))
+    def submit_report(
+        self, claims: Sequence[Claim], vt: int, *, worker: str
+    ) -> ReportAccepted | Refusal:
+        outcome = self._both("submit_report", claims, vt, worker=worker)
+        return cast(ReportAccepted | Refusal, outcome)
 
     def file_approval(
         self, action_id: str, basis: BasisCheck, approval_id: str | None, vt: int, *, seen_seq: int

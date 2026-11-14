@@ -52,6 +52,7 @@ SETTINGS = GatewaySettings(
     max_probes=3,
 )
 FRESH = BasisCheck(exact_ok=True, sufficient_ok=True)
+FAR = 10**9
 INTENTS = {"REQ-1": "submit_purchase_order", "REQ-2": "submit_purchase_order", "REQ-3": "x"}
 
 
@@ -69,7 +70,9 @@ def _send(store: MemoryStore, intent: str, vt: int) -> tuple[str, int]:
         action_id, ApprovalStatus.APPROVED, FRESH, vt + 2, seen_seq=store.view(action_id).last_seq
     )
     ticket = store.begin_check(action_id)
-    check = ticket.record(approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=vt + 3)
+    check = ticket.record(
+        approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=vt + 3, expires_at=FAR
+    )
     assert store.dispatch(action_id, check, vt + 3) is not None
     return action_id, vt + 3
 
@@ -79,7 +82,10 @@ def snapshot() -> Snapshot:
     """A valid C2 run with every kind of record.
 
     REQ-1 is confirmed after a retry. REQ-2 is unknown and escalated, because its retry
-    check found the approval revoked. REQ-3 is authorized and took a newer basis (a note).
+    check found the approval revoked. REQ-3 was authorized and took a newer basis (a
+    note). The run's only worker then reports REQ-3 `not_done`, which closes the intent
+    and, as the last report the run expects, the run: REQ-3's action is rejected with
+    `run_closed` (0010).
     """
     store = MemoryStore(task_id="TASK-1", intents=INTENTS, contract=Contract.C2, settings=SETTINGS)
     first, vt = _send(store, "REQ-1", 0)
@@ -89,6 +95,7 @@ def snapshot() -> Snapshot:
         approval=ApprovalStatus.APPROVED,
         basis=BasisCheck(exact_ok=True, sufficient_ok=None),
         check_vt=ticket.not_before_vt,
+        expires_at=FAR,
     )
     assert store.retry(first, retry, ticket.not_before_vt) is not None
     committed = Answer(AnswerClass.COMMITTED, Reason.COMMITTED, "PO-0001")
@@ -117,7 +124,7 @@ def snapshot() -> Snapshot:
         Claim("REQ-2", ClaimStatus.UNKNOWN),
         Claim("REQ-3", ClaimStatus.NOT_DONE),
     ]
-    assert isinstance(store.submit_report(claims, vt + 10), ReportAccepted)
+    assert isinstance(store.submit_report(claims, vt + 10, worker="W1"), ReportAccepted)
     return store.snapshot()
 
 
@@ -134,7 +141,9 @@ def with_action(snapshot: Snapshot, action_id: str, **changes: object) -> Snapsh
 def test_the_fixture_is_valid(snapshot: Snapshot) -> None:
     assert check_invariants(snapshot, SETTINGS) == []
     states = [a.state for a in snapshot.actions.values()]
-    assert states == [S.CONFIRMED, S.OUTCOME_UNKNOWN, S.AUTHORIZED]
+    assert states == [S.CONFIRMED, S.OUTCOME_UNKNOWN, S.REJECTED]
+    assert snapshot.run_closed and snapshot.closed_intents == {"REQ-3"}
+    assert dict(snapshot.reports) == {"W1": snapshot.tool_calls[-1].call_no}
     reasons = {str(e.reason) for e in snapshot.events if e.kind is EventKind.NOTE}
     assert reasons == {"escalated", "basis_updated"}
 
@@ -169,8 +178,16 @@ def test_i2_a_grant_state_that_does_not_fit_the_action(snapshot: Snapshot) -> No
 def test_i3_a_send_after_a_failing_check(snapshot: Snapshot) -> None:
     attempts = dict(snapshot.attempts)
     (attempt,) = attempts["A-0002"]
-    failing = replace(attempt.check, approval=ApprovalStatus.REVOKED)
+    failing = replace(attempt.check, approval=ApprovalStatus.REVOKED, approval_expires_at=None)
     attempts["A-0002"] = (replace(attempt, check=failing),)
+    assert labels(replace(snapshot, attempts=frozen(attempts))) == {"I3"}
+
+
+def test_i3_a_send_under_an_approval_that_expires_too_soon(snapshot: Snapshot) -> None:
+    attempts = dict(snapshot.attempts)
+    (attempt,) = attempts["A-0002"]
+    expiring = replace(attempt.check, approval_expires_at=attempt.sent_vt + SETTINGS.settle_ms)
+    attempts["A-0002"] = (replace(attempt, check=expiring),)
     assert labels(replace(snapshot, attempts=frozen(attempts))) == {"I3"}
 
 
@@ -233,8 +250,8 @@ def test_i5_an_accepted_report_that_contradicts_the_records(snapshot: Snapshot) 
     last = calls[-1]
     assert isinstance(last.result, ReportAccepted)
     claims = (
-        Claim("REQ-1", ClaimStatus.DONE, ("PO-0001",)),
-        Claim("REQ-2", ClaimStatus.NOT_DONE),
+        Claim("REQ-1", ClaimStatus.UNKNOWN),
+        Claim("REQ-2", ClaimStatus.UNKNOWN),
         Claim("REQ-3", ClaimStatus.NOT_DONE),
     )
     calls[-1] = replace(last, result=ReportAccepted(claims))
@@ -386,3 +403,37 @@ def test_records_an_open_escalation_on_a_finished_action(snapshot: Snapshot) -> 
     escalations["ESC-0002"] = replace(escalations["ESC-0002"], action_id="A-0001")
     found = messages(replace(snapshot, escalations=frozen(escalations)))
     assert "records: open escalation on a confirmed action" in found
+
+
+# Closing (0003, run closing; 0010, item 6) ------------------------------------------------
+
+
+def test_records_an_accepted_not_done_on_an_open_intent(snapshot: Snapshot) -> None:
+    found = messages(replace(snapshot, closed_intents=frozenset()))
+    call_no = snapshot.tool_calls[-1].call_no
+    assert found == [f"records: call {call_no} accepted not_done, but the intent is open (0010)"]
+
+
+def test_records_a_closed_intent_that_is_not_the_tasks(snapshot: Snapshot) -> None:
+    found = messages(replace(snapshot, closed_intents=snapshot.closed_intents | {"REQ-9"}))
+    assert found == ["records: a closed intent that is not the task's"]
+
+
+def test_records_a_report_that_was_never_accepted(snapshot: Snapshot) -> None:
+    found = messages(replace(snapshot, reports=frozen({"W1": 1})))
+    assert found == ["records: call 1 is not an accepted report"]
+
+
+def test_records_every_report_in_but_the_run_open(snapshot: Snapshot) -> None:
+    found = messages(replace(snapshot, run_closed=False))
+    assert found == ["records: every expected report was accepted, but the run is open (0010)"]
+    two_workers = replace(SETTINGS, agent_workers=2)
+    assert messages(replace(snapshot, run_closed=False), two_workers) == []
+
+
+def test_records_an_unsent_action_in_a_closed_intent() -> None:
+    store = MemoryStore(task_id="TASK-1", intents=INTENTS, contract=Contract.C2, settings=SETTINGS)
+    result = store.propose(Proposal("REQ-1", INTENTS["REQ-1"], "t", {}, "k", {"f": 1}), 0)
+    assert isinstance(result, ActionResult)
+    closed = replace(store.snapshot(), closed_intents=frozenset({"REQ-1"}))
+    assert messages(closed) == ["records: proposed after its intent closed (0010)"]

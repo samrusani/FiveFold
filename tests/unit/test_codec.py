@@ -135,6 +135,7 @@ def test_responses_round_trip(result: ActionResult | Refusal | ReportAccepted) -
             BasisCheck(True, True, frozen({"quote": 1}), ()),
             7,
             30,
+            approval_expires_at=3_600_030,
         ),
         CheckRecord(
             CheckKind.EXACT_ONLY,
@@ -150,7 +151,12 @@ def test_check_records_round_trip(check: CheckRecord) -> None:
     stored_basis = json.loads(json.dumps(basis_to_json(check.basis)))
     approval = None if check.approval is None else str(check.approval)
     rebuilt = check_from_columns(
-        str(check.kind), approval, stored_basis, check.seen_seq, check.check_vt
+        str(check.kind),
+        approval,
+        stored_basis,
+        check.seen_seq,
+        check.check_vt,
+        check.approval_expires_at,
     )
     assert rebuilt == check
 

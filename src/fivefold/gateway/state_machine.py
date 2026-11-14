@@ -75,10 +75,8 @@ class Reason(StrEnum):
     IN_PROGRESS = "in_progress"
     RECOVERED_OPEN_ATTEMPT = "recovered_open_attempt"
     STATUS_FOUND = "status_found"
-    RETRY_COMMITTED = "retry_committed"
     HUMAN_ATTESTED = "human_attested"
     STATUS_SETTLED_EMPTY = "status_settled_empty"
-    RETRY_REJECTED = "retry_rejected"
     RETRY = "retry"
 
 
@@ -141,6 +139,8 @@ TRANSITIONS: tuple[Transition, ...] = (
         _S.REJECTED,
         _R.APPROVAL_DENIED,
         _R.APPROVAL_TIMEOUT,
+        _R.APPROVAL_REVOKED,
+        _R.APPROVAL_EXPIRED,
         _R.STALE_INPUT,
         _R.RUN_CLOSED,
     ),
@@ -166,31 +166,15 @@ TRANSITIONS: tuple[Transition, ...] = (
         _R.IN_PROGRESS,
         _R.RECOVERED_OPEN_ATTEMPT,
     ),
-    _t(
-        "T11",
-        _S.OUTCOME_UNKNOWN,
-        _S.CONFIRMED,
-        _R.STATUS_FOUND,
-        _R.RETRY_COMMITTED,
-        _R.HUMAN_ATTESTED,
-    ),
-    _t(
-        "T12",
-        _S.OUTCOME_UNKNOWN,
-        _S.FAILED,
-        _R.STATUS_SETTLED_EMPTY,
-        _R.RETRY_REJECTED,
-        _R.HUMAN_ATTESTED,
-    ),
+    _t("T11", _S.OUTCOME_UNKNOWN, _S.CONFIRMED, _R.STATUS_FOUND, _R.HUMAN_ATTESTED),
+    _t("T12", _S.OUTCOME_UNKNOWN, _S.FAILED, _R.STATUS_SETTLED_EMPTY, _R.HUMAN_ATTESTED),
     _t("T13", _S.OUTCOME_UNKNOWN, _S.DISPATCHED, _R.RETRY),
 )
-"""The transition table of record 0003. No other transitions exist."""
+"""The transition table of record 0003, as amended by record 0010. No other transitions exist."""
 
 REASON_NEEDS: Mapping[Reason, Capability] = {
     Reason.IN_PROGRESS: Capability.IDEMPOTENCY_KEY,
     Reason.RETRY: Capability.IDEMPOTENCY_KEY,
-    Reason.RETRY_COMMITTED: Capability.IDEMPOTENCY_KEY,
-    Reason.RETRY_REJECTED: Capability.IDEMPOTENCY_KEY,
     Reason.STATUS_FOUND: Capability.STATUS,
     Reason.STATUS_SETTLED_EMPTY: Capability.STATUS,
     Reason.PRECONDITION_FAILED: Capability.CONDITIONAL_WRITE,
@@ -339,7 +323,9 @@ class GatewaySettings:
     """The gateway's timing and limits (0005), with the destination's promises.
 
     Times are virtual milliseconds. `approval_wait_ms` comes from the scenario's
-    `authority` section (0002, 0009); the other defaults are 0005's.
+    `authority` section (0002, 0009); the other defaults are 0005's. `agent_workers` is
+    how many agent workers report: one, or two when the run's faults include F9 (0009).
+    The run closes in the transaction that accepts the last of their reports (0010).
     """
 
     approval_wait_ms: int
@@ -347,12 +333,15 @@ class GatewaySettings:
     dispatch_timeout_ms: int = 2_000
     max_attempts: int = 5
     max_probes: int = 20
+    agent_workers: int = 1
 
     def __post_init__(self) -> None:
         if self.dispatch_timeout_ms <= 2 * self.params.max_hop_latency_ms:
             raise ValueError("dispatch_timeout_ms must exceed 2 x max_hop_latency_ms (0005)")
         if self.approval_wait_ms <= 0 or self.max_attempts < 1 or self.max_probes < 1:
             raise ValueError("approval_wait_ms, max_attempts and max_probes must be positive")
+        if self.agent_workers < 1:
+            raise ValueError("a run has at least one agent worker (0009)")
 
     @property
     def settle_ms(self) -> int:

@@ -20,12 +20,18 @@ Three things are kept apart:
 
 After every step the machine checks I1 to I7, that the log only grew, that effect ids
 never changed, agreement with the model, and safety against the world: no action is
-Failed while its effect committed or may still commit, and every Confirmed action names
-the effect the destination committed.
+Failed while its effect committed or may still commit, every Confirmed action names the
+effect the destination committed, and at C0 to C2 no effect commits after its approval
+expired. At C3 the gateway does not check a retry, and the world does not model the
+destination's own check, so the last property is not asserted there.
 
-One case is left out on purpose: the world revokes or expires an approval only after
-the gateway has seen it approved. The other case has no outcome in the accepted records
-(proposed record 0010) and has its own unit test.
+Approvals expire at the time the approvals service reports (0002). The world grants each
+approval one of three lifetimes: one that ends before a send could commit, one that ends
+before a retry, and one that outlasts the run (0010, change 4). The authority can revoke
+an approval it granted at any time, also before the gateway has seen it approved (0010,
+change 1). Two agent workers report, as when fault F9 starts a second one (0009): an
+accepted report closes the intents it claims `not_done`, and the run closes with the
+second worker's first accepted report (0010, item 6).
 """
 
 from __future__ import annotations
@@ -91,10 +97,14 @@ SETTINGS = GatewaySettings(
     dispatch_timeout_ms=200,
     max_attempts=3,
     max_probes=3,
+    agent_workers=2,
 )
 SETTLE = SETTINGS.settle_ms
 LAG = SETTINGS.params.status_lag_ms
 T = SETTINGS.dispatch_timeout_ms
+TTLS = (SETTLE // 2, SETTLE + 2 * T, 10**9)
+"""Approval lifetimes: ends before a send could commit, ends before a retry, outlasts all."""
+WORKERS = ("W1", "W2")
 QUOTE_CHANGED = StaleFact("quote", 1, 2, ("unit_price_minor",))
 BUDGET_SHORT = StaleFact("budget", 1, 2, ("committed_minor",))
 INTENTS = {
@@ -112,6 +122,8 @@ class World:
     """What is true outside the gateway for one action."""
 
     approval: ApprovalStatus = A.PENDING
+    expires_at: int | None = None
+    """When a granted approval expires, as the approvals service reports it."""
     exact_ok: bool = True
     sufficient_ok: bool = True
     effect_id: str | None = None
@@ -123,6 +135,11 @@ class World:
     @property
     def fresh(self) -> bool:
         return self.exact_ok and self.sufficient_ok
+
+    def status(self, vt: int) -> ApprovalStatus:
+        """What the approvals service reports at `vt`: a granted approval expires."""
+        expired = self.expires_at is not None and self.expires_at <= vt
+        return A.EXPIRED if self.approval is A.APPROVED and expired else self.approval
 
 
 @dataclass
@@ -166,6 +183,9 @@ class GatewayMachine(RuleBasedStateMachine):
         self.expected: dict[str, Expected] = {}
         self.checks: list[InFlight] = []
         self.closed = False
+        self.closed_intents: set[str] = set()
+        self.reports: dict[str, int] = {}
+        """Each worker with an accepted report: the call number of its first one."""
         self.effects = 0
         self.previous: Snapshot = self.store.snapshot()
 
@@ -205,11 +225,12 @@ class GatewayMachine(RuleBasedStateMachine):
     def awaiting_decision(self) -> list[str]:
         return [a for a in self.ids(S.PENDING_APPROVAL) if self.world[a].approval is A.PENDING]
 
-    def seen_approved(self) -> list[str]:
+    def revocable(self) -> list[str]:
+        """Actions whose approval was granted and not revoked, whether seen or not."""
         return sorted(
             a
             for a, e in self.expected.items()
-            if e.grant in (G.ACTIVE, G.CONSUMED) and self.world[a].approval is A.APPROVED
+            if e.grant in (G.PENDING, G.ACTIVE, G.CONSUMED) and self.world[a].approval is A.APPROVED
         )
 
     # The world's bookkeeping ----------------------------------------------------------------
@@ -256,7 +277,22 @@ class GatewayMachine(RuleBasedStateMachine):
         elif fate == "in_progress":
             world.may_commit_until = self.expected[action_id].attempts[-1] + SETTLE
 
+    def approve(self, world: World, ttl: int) -> None:
+        """The policy or the approver grants the approval, valid for `ttl` from now."""
+        world.approval, world.expires_at = A.APPROVED, self.vt + ttl
+
     # The model's bookkeeping ----------------------------------------------------------------
+
+    def close(self, intents: set[str], *, whole_run: bool) -> None:
+        """Close intents, or the whole run: what was never sent is rejected (0003, 0010)."""
+        for expected in self.expected.values():
+            if expected.state in UNDISPATCHED and (whole_run or expected.intent_id in intents):
+                expected.state, expected.reason = S.REJECTED, Reason.RUN_CLOSED
+                if expected.grant is not None:
+                    expected.grant = G.RELEASED
+                expected.events += 1
+        self.closed_intents |= intents
+        self.closed = self.closed or whole_run
 
     def enter_unknown(self, expected: Expected, reason: Reason) -> None:
         """T10, then escalation where record 0003 escalates at once."""
@@ -281,11 +317,14 @@ class GatewayMachine(RuleBasedStateMachine):
 
     # Gateway steps, each with its expected outcome --------------------------------------------
 
-    def do_file(self, action_id: str, policy: ApprovalStatus) -> None:
+    def do_file(self, action_id: str, policy: ApprovalStatus, ttl: int) -> None:
         world, expected = self.world[action_id], self.expected[action_id]
         expected.events += 1
         if world.fresh:
-            world.approval = policy
+            if policy is A.APPROVED:
+                self.approve(world, ttl)
+            else:
+                world.approval = policy
             self.store.file_approval(
                 action_id,
                 self.basis(world),
@@ -305,12 +344,18 @@ class GatewayMachine(RuleBasedStateMachine):
 
     def do_poll(self, action_id: str, check_basis: bool) -> None:
         world, expected = self.world[action_id], self.expected[action_id]
-        approval = world.approval
+        approval = world.status(self.vt)
         basis = self.basis(world) if check_basis or approval is A.APPROVED else None
         self.store.poll_approval(action_id, approval, basis, self.vt, seen_seq=self.seq(action_id))
         if approval is A.DENIED:
             expected.state, expected.grant = S.REJECTED, G.DENIED
             expected.reason = Reason.APPROVAL_DENIED
+        elif approval is A.REVOKED:
+            expected.state, expected.grant = S.REJECTED, G.REVOKED
+            expected.reason = Reason.APPROVAL_REVOKED
+        elif approval is A.EXPIRED:
+            expected.state, expected.grant = S.REJECTED, G.EXPIRED
+            expected.reason = Reason.APPROVAL_EXPIRED
         elif approval is A.APPROVED and world.fresh:
             expected.state, expected.grant = S.AUTHORIZED, G.ACTIVE
             expected.reason = Reason.APPROVED
@@ -323,7 +368,7 @@ class GatewayMachine(RuleBasedStateMachine):
         expected.events += 1
 
     def do_time_out(self, action_id: str) -> None:
-        expected, approval = self.expected[action_id], self.world[action_id].approval
+        expected, approval = self.expected[action_id], self.world[action_id].status(self.vt)
         seen = self.seq(action_id)
         if approval is not A.PENDING or self.vt < expected.requested_vt + SETTINGS.approval_wait_ms:
             self.refused(
@@ -354,7 +399,11 @@ class GatewayMachine(RuleBasedStateMachine):
             record = ticket.record(approval=None, basis=None, check_vt=self.vt)
         else:
             basis = self.basis(world, full=kind is CheckKind.FULL)
-            record = ticket.record(approval=world.approval, basis=basis, check_vt=self.vt)
+            status = world.status(self.vt)
+            expires_at = world.expires_at if status is A.APPROVED else None
+            record = ticket.record(
+                approval=status, basis=basis, check_vt=self.vt, expires_at=expires_at
+            )
         return InFlight(action_id, ticket, record, expected.events)
 
     def do_commit(self, flight: InFlight, wait: bool) -> None:
@@ -379,7 +428,19 @@ class GatewayMachine(RuleBasedStateMachine):
             return
         sent = commit()
         expected.events += 1
-        if record.kind is CheckKind.EXEMPT or record.passed:
+        # The check allows the send only if the approval outlives the send's settle time
+        # (0002 rule 17, 0010 change 4) and the basis held (I3).
+        approval, basis = record.approval, record.basis
+        expires_at = record.approval_expires_at
+        if approval is A.APPROVED and expires_at is not None and expires_at <= self.vt + SETTLE:
+            approval = A.EXPIRED
+        passes = record.kind is CheckKind.EXEMPT or (
+            approval is A.APPROVED
+            and basis is not None
+            and basis.exact_ok
+            and basis.sufficient_ok is not False
+        )
+        if passes:
             assert sent is not None
             expected.state = S.DISPATCHED
             expected.reason = Reason.DISPATCHED if first else Reason.RETRY
@@ -390,7 +451,6 @@ class GatewayMachine(RuleBasedStateMachine):
         assert sent is None
         withdrawn = {A.REVOKED: G.REVOKED, A.EXPIRED: G.EXPIRED}
         reasons = {A.REVOKED: Reason.APPROVAL_REVOKED, A.EXPIRED: Reason.APPROVAL_EXPIRED}
-        approval = record.approval
         assert approval is not None
         if first:
             expected.state = S.REJECTED
@@ -492,16 +552,19 @@ class GatewayMachine(RuleBasedStateMachine):
         self.vt += dt
 
     @precondition(lambda self: self.awaiting_decision())
-    @rule(data=st.data(), approve=st.booleans())
-    def approver_decides(self, data: st.DataObject, approve: bool) -> None:
-        action_id = data.draw(st.sampled_from(self.awaiting_decision()))
-        self.world[action_id].approval = A.APPROVED if approve else A.DENIED
+    @rule(data=st.data(), approve=st.booleans(), ttl=st.sampled_from(TTLS))
+    def approver_decides(self, data: st.DataObject, approve: bool, ttl: int) -> None:
+        world = self.world[data.draw(st.sampled_from(self.awaiting_decision()))]
+        if approve:
+            self.approve(world, ttl)
+        else:
+            world.approval = A.DENIED
 
-    @precondition(lambda self: self.seen_approved())
-    @rule(data=st.data(), revoke=st.booleans())
-    def authority_withdraws(self, data: st.DataObject, revoke: bool) -> None:
-        action_id = data.draw(st.sampled_from(self.seen_approved()))
-        self.world[action_id].approval = A.REVOKED if revoke else A.EXPIRED
+    @precondition(lambda self: self.revocable())
+    @rule(data=st.data())
+    def authority_revokes(self, data: st.DataObject) -> None:
+        """A revocation, also before the gateway has seen the approval (0010, change 1)."""
+        self.world[data.draw(st.sampled_from(self.revocable()))].approval = A.REVOKED
 
     @precondition(lambda self: self.world)
     @rule(data=st.data(), exact=st.booleans(), holds=st.booleans())
@@ -538,7 +601,7 @@ class GatewayMachine(RuleBasedStateMachine):
             a for a, e in self.expected.items() if e.intent_id == intent and e.state in HOLDING
         ]
         assert len(holders) <= 1
-        if self.closed:
+        if self.closed or intent in self.closed_intents:
             assert isinstance(result, Refusal) and result.reason is RefusalReason.RUN_CLOSED
             return
         if not holders:
@@ -590,15 +653,30 @@ class GatewayMachine(RuleBasedStateMachine):
 
     @rule(data=st.data())
     def report(self, data: st.DataObject) -> None:
+        """A worker's final report: true or drawn at random.
+
+        True reports are always accepted, so the closing they cause (0010, item 6) is
+        reached often; random ones are mostly refused. Like closing the run, true reports
+        wait until the run has made some progress, so that runs still reach deep states.
+        """
         claims: list[Claim] = []
         accept = True
+        progressed = len(self.store.snapshot().events) >= 12
+        honest = progressed and data.draw(st.booleans())
         for intent in sorted(INTENTS):
             actions = [e for e in self.expected.values() if e.intent_id == intent]
             states = {e.state for e in actions}
             effects = sorted(e.effect_id for e in actions if e.effect_id is not None)
-            status = data.draw(st.sampled_from(list(ClaimStatus)))
+            if not honest:
+                status = data.draw(st.sampled_from(list(ClaimStatus)))
+            elif S.CONFIRMED in states:
+                status = ClaimStatus.DONE
+            elif states & {S.DISPATCHED, S.OUTCOME_UNKNOWN}:
+                status = ClaimStatus.UNKNOWN
+            else:
+                status = ClaimStatus.NOT_DONE
             if status is ClaimStatus.DONE:
-                use_recorded = bool(effects) and data.draw(st.booleans())
+                use_recorded = bool(effects) and (honest or data.draw(st.booleans()))
                 ids = tuple(effects) if use_recorded else ("PO-9999",)
                 claims.append(Claim(intent, status, ids))
                 accept &= S.CONFIRMED in states and list(ids) == effects
@@ -608,15 +686,24 @@ class GatewayMachine(RuleBasedStateMachine):
                     accept &= states <= UNDISPATCHED | {S.REJECTED, S.FAILED}
                 else:
                     accept &= bool(states & {S.DISPATCHED, S.OUTCOME_UNKNOWN})
-        result = self.store.submit_report(claims, self.vt)
+        worker = data.draw(st.sampled_from(WORKERS))
+        result = self.store.submit_report(claims, self.vt, worker=worker)
         assert isinstance(result, ReportAccepted) == accept
+        if accept:
+            self.reports.setdefault(worker, len(self.store.snapshot().tool_calls))
+            not_done = {c.intent_id for c in claims if c.status is ClaimStatus.NOT_DONE}
+            self.close(not_done, whole_run=len(self.reports) >= SETTINGS.agent_workers)
 
     # Rules: one gateway step at a time ------------------------------------------------------
 
     @precondition(lambda self: self.ids(S.PROPOSED))
-    @rule(data=st.data(), policy=st.sampled_from([A.PENDING, A.APPROVED, A.DENIED]))
-    def file_approval(self, data: st.DataObject, policy: ApprovalStatus) -> None:
-        self.do_file(data.draw(st.sampled_from(self.ids(S.PROPOSED))), policy)
+    @rule(
+        data=st.data(),
+        policy=st.sampled_from([A.PENDING, A.APPROVED, A.DENIED]),
+        ttl=st.sampled_from(TTLS),
+    )
+    def file_approval(self, data: st.DataObject, policy: ApprovalStatus, ttl: int) -> None:
+        self.do_file(data.draw(st.sampled_from(self.ids(S.PROPOSED))), policy, ttl)
 
     @precondition(lambda self: self.ids(S.PENDING_APPROVAL))
     @rule(data=st.data(), check_basis=st.booleans())
@@ -680,13 +767,7 @@ class GatewayMachine(RuleBasedStateMachine):
     @rule()
     def close_run(self) -> None:
         self.store.close_run(self.vt)
-        self.closed = True
-        for expected in self.expected.values():
-            if expected.state in UNDISPATCHED:
-                expected.state, expected.reason = S.REJECTED, Reason.RUN_CLOSED
-                if expected.grant is not None:
-                    expected.grant = G.RELEASED
-                expected.events += 1
+        self.close(set(), whole_run=True)
 
     @initialize()
     def one_proposal_per_intent(self) -> None:
@@ -716,10 +797,14 @@ class GatewayMachine(RuleBasedStateMachine):
             else:
                 world.sufficient_ok = not world.sufficient_ok
         if state is S.PROPOSED:
-            self.do_file(action_id, data.draw(st.sampled_from([A.APPROVED, A.APPROVED, A.PENDING])))
+            policy = data.draw(st.sampled_from([A.APPROVED, A.APPROVED, A.PENDING]))
+            self.do_file(action_id, policy, data.draw(st.sampled_from(TTLS)))
         elif state is S.PENDING_APPROVAL:
             if world.approval is A.PENDING:
-                world.approval = data.draw(st.sampled_from([A.APPROVED, A.APPROVED, A.DENIED]))
+                if data.draw(st.sampled_from([True, True, False])):
+                    self.approve(world, data.draw(st.sampled_from(TTLS)))
+                else:
+                    world.approval = A.DENIED
             self.do_poll(action_id, check_basis=True)
         elif state is S.AUTHORIZED or action_id in self.retryable():
             self.do_commit(self.do_begin(action_id), wait=jump or finish)
@@ -794,6 +879,9 @@ class GatewayMachine(RuleBasedStateMachine):
     def records_agree_with_the_model(self) -> None:
         snapshot = self.store.snapshot()
         assert sorted(snapshot.actions) == sorted(self.expected)
+        assert snapshot.run_closed == self.closed
+        assert snapshot.closed_intents == self.closed_intents
+        assert dict(snapshot.reports) == self.reports
         events: dict[str, int] = {}
         reasons: dict[str, Reason | Note] = {}
         for event in snapshot.events:
@@ -821,6 +909,9 @@ class GatewayMachine(RuleBasedStateMachine):
                 assert world.effect_id is None and world.may_commit_until is None, action_id
             if expected.state is S.CONFIRMED:
                 assert expected.effect_id == world.effect_id, action_id
+            checked_sends = self.contract is not Contract.C3
+            if checked_sends and world.effect_id is not None and world.expires_at is not None:
+                assert world.effect_vt < world.expires_at, f"{action_id} outlived its approval"
             assert all(b - a >= T for a, b in itertools.pairwise(expected.attempts))
 
 

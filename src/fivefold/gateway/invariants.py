@@ -25,8 +25,11 @@ What each check covers:
   backwards; every action's transitions form a legal chain from T1 that ends in its
   current state, with matching timestamps; notes keep the state.
 - I7: at most one live or Confirmed action per intent, among actions with identity on.
-- Records: attempts' answers, escalations and notes agree with each other, and a closed
-  run holds no live action that was never sent (0003, run closing).
+- Records: attempts' answers, escalations and notes agree with each other; a closed run,
+  or a closed intent, holds no live action that was never sent (0003, run closing);
+  every intent an accepted report claims `not_done` is closed, every recorded report
+  is an accepted final report, and the run is closed once every expected worker's
+  report was accepted (0010).
 
 Two parts are checked elsewhere. That the log is append-only and that an effect id
 never changes compare two snapshots, so the Hypothesis suites check them between steps.
@@ -121,7 +124,7 @@ def check_invariants(snapshot: Snapshot, settings: GatewaySettings) -> list[Viol
     for event in snapshot.events:
         events_by_action.setdefault(event.action_id, []).append(event)
     found: list[Violation] = []
-    found += _records(snapshot, events_by_action)
+    found += _records(snapshot, events_by_action, settings)
     found += _i6_log(snapshot)
     for action in snapshot.actions.values():
         events = events_by_action.get(action.action_id, [])
@@ -129,7 +132,7 @@ def check_invariants(snapshot: Snapshot, settings: GatewaySettings) -> list[Viol
         grant = snapshot.grants.get(action.grant_id) if action.grant_id else None
         found += _i1(action, events, attempts)
         found += _i2(action, grant, attempts, snapshot)
-        found += _i3(action, events, attempts)
+        found += _i3(action, events, attempts, settings)
         found += _i4(action, attempts, settings)
         found += _i6_action(action, events)
     found += _i2_global(snapshot)
@@ -229,7 +232,10 @@ def _i2_global(snapshot: Snapshot) -> Iterator[Violation]:
 
 
 def _i3(
-    action: Action, events: list[ActionEvent], attempts: Sequence[Attempt]
+    action: Action,
+    events: list[ActionEvent],
+    attempts: Sequence[Attempt],
+    settings: GatewaySettings,
 ) -> Iterator[Violation]:
     a = action.action_id
     for attempt in attempts:
@@ -241,7 +247,7 @@ def _i3(
             continue
         if check.kind is not expected:
             yield Violation("I3", a, f"attempt {n} had a {check.kind} check, not {expected}")
-        if not check.passed:
+        if not check.passes(attempt.sent_vt, settings.settle_ms):
             yield Violation("I3", a, f"attempt {n} was sent after a failing check")
         if check.check_vt > attempt.sent_vt:
             yield Violation("I3", a, f"attempt {n} was checked after it was sent")
@@ -513,7 +519,9 @@ def _i7(snapshot: Snapshot) -> Iterator[Violation]:
 
 
 def _records(
-    snapshot: Snapshot, events_by_action: Mapping[str, list[ActionEvent]]
+    snapshot: Snapshot,
+    events_by_action: Mapping[str, list[ActionEvent]],
+    settings: GatewaySettings,
 ) -> Iterator[Violation]:
     """Cross-record consistency that the invariants above rely on."""
     for action_id in events_by_action:
@@ -580,9 +588,42 @@ def _records(
     for event in snapshot.events:
         if event.reason is Note.ESCALATED and event.action_id not in escalated_actions:
             yield Violation("records", event.action_id, "an escalated note without an escalation")
-    if snapshot.run_closed:
-        for action in snapshot.actions.values():
-            if action.state in (_S.PROPOSED, _S.PENDING_APPROVAL, _S.AUTHORIZED):
+    yield from _closing(snapshot, settings)
+
+
+def _closing(snapshot: Snapshot, settings: GatewaySettings) -> Iterator[Violation]:
+    """Closing the run and closing intents (0003, run closing; 0010, item 6)."""
+    unsent = (_S.PROPOSED, _S.PENDING_APPROVAL, _S.AUTHORIZED)
+    for action in snapshot.actions.values():
+        if action.state not in unsent:
+            continue
+        if snapshot.run_closed:
+            yield Violation(
+                "records", action.action_id, f"{action.state} after the run closed (0003)"
+            )
+        elif action.intent_id in snapshot.closed_intents:
+            yield Violation(
+                "records", action.action_id, f"{action.state} after its intent closed (0010)"
+            )
+    for intent_id in sorted(snapshot.closed_intents - snapshot.intents.keys()):
+        yield Violation("records", intent_id, "a closed intent that is not the task's")
+    calls = {call.call_no: call for call in snapshot.tool_calls}
+    for call in snapshot.tool_calls:
+        if not isinstance(call.result, ReportAccepted):
+            continue
+        for claim in call.result.claims:
+            open_intent = claim.intent_id not in snapshot.closed_intents
+            if claim.status is ClaimStatus.NOT_DONE and open_intent:
                 yield Violation(
-                    "records", action.action_id, f"{action.state} after the run closed (0003)"
+                    "records",
+                    claim.intent_id,
+                    f"call {call.call_no} accepted not_done, but the intent is open (0010)",
                 )
+    for worker, call_no in snapshot.reports.items():
+        reported = calls.get(call_no)
+        if reported is None or not isinstance(reported.result, ReportAccepted):
+            yield Violation("records", worker, f"call {call_no} is not an accepted report")
+    if len(snapshot.reports) >= settings.agent_workers and not snapshot.run_closed:
+        yield Violation(
+            "records", "run", "every expected report was accepted, but the run is open (0010)"
+        )
