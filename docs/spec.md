@@ -115,7 +115,8 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | gw | Attempt | attempt_id, action_id, attempt_no, idempotency_key, grant_id, check, sent_vt, answer_class, answered_vt | One send (0003) |
 | gw | ActionEvent | seq, action_id, kind, from_state, to_state, reason, details, vt | Append-only transition log |
 | gw | Escalation | escalation_id, action_id, opened_vt, resolved_vt, resolution, effect_id, actor | A human's resolution of an unknown outcome |
-| gw | ToolCall | seq, tool, args, result, action_id, vt | Every agent-facing response |
+| gw | ToolCall | call_no, tool, args, result, action_id, as_of_seq, vt | Every agent-facing response; `as_of_seq` is the event seq it reflects (I5) |
+| gw | RunState | run_closed, last_action_no, last_seq, last_call_no | One row: whether the run is closed (0003), and the counters that number actions, events and responses |
 | sim | FactVersion | key, version, value, valid_from_seq, valid_from_vt, cause | The full history of quotes, budgets and inventory |
 | sim | Effect | effect_id, intent_id, operation, args, approval_id, basis, idempotency_key, client_ref, commit_seq, committed_vt | The ground-truth ledger |
 | sim | Approval, ApprovalEvent | approval_id, intent_id, scope, expires_at; requested, approved, denied, revoked | The authority record (0002) |

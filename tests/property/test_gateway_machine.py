@@ -8,7 +8,10 @@ them, as they can between the gateway's unlocked check and its commit.
 
 Three things are kept apart:
 
-- The store under test: `MemoryStore`, which runs the step functions.
+- The store under test: `MemoryStore`, which runs the step functions. The Postgres
+  machines at the end run every operation on `PgStore` too, through `TwinStore`, and
+  require the same results, the same refusals and the same records as the in-memory
+  store, the oracle (0003, testing plan, item 3).
 - The world it cannot see (`World`): the approvals service, the facts, and the
   destination's ledger, including requests whose reply was lost. The world keeps its
   contract (0005), so a correct gateway must stay safe in it.
@@ -28,10 +31,11 @@ the gateway has seen it approved. The other case has no outcome in the accepted 
 from __future__ import annotations
 
 import itertools
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar, Protocol, cast
 
+import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -45,6 +49,7 @@ from hypothesis.stateful import (
 from fivefold.domain.contracts import Capability, Contract, ContractParams
 from fivefold.gateway.invariants import check_invariants
 from fivefold.gateway.memory import MemoryStore
+from fivefold.gateway.pg_store import PgStore
 from fivefold.gateway.records import (
     ActionResult,
     Answer,
@@ -75,6 +80,7 @@ from fivefold.gateway.state_machine import (
     Reason,
     ReconcileHow,
 )
+from fivefold.gateway.twin import TwinStore
 
 S = ActionState
 G = GrantState
@@ -125,7 +131,7 @@ class Expected:
 
     intent_id: str
     key: str
-    quote_version: int
+    basis: dict[str, int]
     state: ActionState = S.PROPOSED
     reason: Reason = Reason.ADMITTED
     stale: tuple[StaleFact, ...] = ()
@@ -155,15 +161,19 @@ class GatewayMachine(RuleBasedStateMachine):
     def __init__(self) -> None:
         super().__init__()
         self.vt = 0
-        self.store = MemoryStore(
-            task_id="TASK-1", intents=INTENTS, contract=self.contract, settings=SETTINGS
-        )
+        self.store: MemoryStore | TwinStore = self.new_store()
         self.world: dict[str, World] = {}
         self.expected: dict[str, Expected] = {}
         self.checks: list[InFlight] = []
         self.closed = False
         self.effects = 0
         self.previous: Snapshot = self.store.snapshot()
+
+    def new_store(self) -> MemoryStore | TwinStore:
+        """The store under test; the Postgres machines override this."""
+        return MemoryStore(
+            task_id="TASK-1", intents=INTENTS, contract=self.contract, settings=SETTINGS
+        )
 
     # Queries ------------------------------------------------------------------------------
 
@@ -514,12 +524,15 @@ class GatewayMachine(RuleBasedStateMachine):
         intent=st.sampled_from(sorted(INTENTS)),
         variant=st.sampled_from(["a", "b"]),
         quote_version=st.integers(1, 3),
+        budget_version=st.integers(1, 2),
     )
-    def propose(self, intent: str, variant: str, quote_version: int) -> None:
+    def propose(self, intent: str, variant: str, quote_version: int, budget_version: int) -> None:
         key = f"{intent}-{variant}"
-        proposal = Proposal(
-            intent, INTENTS[intent], "target", {"variant": variant}, key, {"quote": quote_version}
-        )
+        # Two keys each, in an order that PostgreSQL's jsonb does not keep, so the Postgres
+        # machines show that key order never changes a result.
+        args: dict[str, str | int] = {"quantity": 2, "variant": variant}
+        basis = {"budget": budget_version, "quote": quote_version}
+        proposal = Proposal(intent, INTENTS[intent], "target", args, key, basis)
         result = self.store.propose(proposal, self.vt)
         holders = [
             a for a, e in self.expected.items() if e.intent_id == intent and e.state in HOLDING
@@ -532,7 +545,7 @@ class GatewayMachine(RuleBasedStateMachine):
             action_id = f"A-{len(self.expected) + 1:04d}"
             assert isinstance(result, ActionResult)
             assert (result.action_id, result.state) == (action_id, S.PROPOSED)
-            self.expected[action_id] = Expected(intent, key, quote_version)
+            self.expected[action_id] = Expected(intent, key, basis)
             self.world[action_id] = World()
             self.check_status(action_id, tool=INTENTS[intent])
             return
@@ -545,8 +558,9 @@ class GatewayMachine(RuleBasedStateMachine):
             return
         assert isinstance(result, ActionResult) and result.action_id == holders[0]
         assert result.state is holder.state
-        if holder.state in UNDISPATCHED and quote_version > holder.quote_version:
-            holder.quote_version = quote_version
+        newer = basis != holder.basis and all(basis[k] >= v for k, v in holder.basis.items())
+        if holder.state in UNDISPATCHED and newer:
+            holder.basis = basis
             holder.events += 1
         self.check_status(holders[0], tool=INTENTS[intent])
 
@@ -677,7 +691,7 @@ class GatewayMachine(RuleBasedStateMachine):
     @initialize()
     def one_proposal_per_intent(self) -> None:
         for intent in sorted(INTENTS):
-            self.propose(intent, "a", 1)
+            self.propose(intent, "a", 1, 1)
 
     @precondition(lambda self: self.ids(*LIVE))
     @rule(data=st.data(), steps=st.integers(1, 8))
@@ -839,3 +853,82 @@ TestGatewayC0 = GatewayC0.TestCase
 TestGatewayC1 = GatewayC1.TestCase
 TestGatewayC2 = GatewayC2.TestCase
 TestGatewayC3 = GatewayC3.TestCase
+
+
+# The same machine against Postgres --------------------------------------------------------
+
+
+class RunDatabase(Protocol):
+    """What the Postgres machines use of the `gateway_database` fixture."""
+
+    @property
+    def gateway(self) -> str: ...
+
+    def reset(self) -> None: ...
+
+
+class GatewayPgMachine(GatewayMachine):
+    """The machine with `TwinStore`: Postgres, with the in-memory store as the oracle."""
+
+    database: ClassVar[RunDatabase | None] = None
+    """The run database, set by the `pg_machines` fixture while a Postgres machine runs."""
+
+    def new_store(self) -> MemoryStore | TwinStore:
+        database = GatewayPgMachine.database
+        if database is None:
+            raise RuntimeError("the Postgres machines need the pg_machines fixture")
+        database.reset()
+        kwargs: dict[str, Any] = {
+            "task_id": "TASK-1",
+            "intents": INTENTS,
+            "contract": self.contract,
+            "settings": SETTINGS,
+        }
+        return TwinStore(MemoryStore(**kwargs), PgStore(database.gateway, **kwargs))
+
+    def teardown(self) -> None:
+        if isinstance(self.store, TwinStore):
+            self.store.pg.close()
+
+
+@pytest.fixture
+def pg_machines(gateway_database: RunDatabase) -> Iterator[None]:
+    """Point the Postgres machines at the session's run database while one runs."""
+    GatewayPgMachine.database = gateway_database
+    yield
+    GatewayPgMachine.database = None
+
+
+# Every step reaches the database several times, so the Postgres machines run fewer
+# examples; the nightly profile scales them up with everything else.
+PG_MACHINE_SETTINGS = settings(max_examples=max(25, settings().max_examples // 10))
+
+
+@PG_MACHINE_SETTINGS
+class GatewayPgC0(GatewayPgMachine):
+    contract = Contract.C0
+
+
+@PG_MACHINE_SETTINGS
+class GatewayPgC1(GatewayPgMachine):
+    contract = Contract.C1
+
+
+@PG_MACHINE_SETTINGS
+class GatewayPgC2(GatewayPgMachine):
+    contract = Contract.C2
+
+
+@PG_MACHINE_SETTINGS
+class GatewayPgC3(GatewayPgMachine):
+    contract = Contract.C3
+
+
+def _on_postgres(case: type[Any]) -> type[Any]:
+    return cast(type[Any], pytest.mark.pg(pytest.mark.usefixtures("pg_machines")(case)))
+
+
+TestGatewayPgC0 = _on_postgres(GatewayPgC0.TestCase)
+TestGatewayPgC1 = _on_postgres(GatewayPgC1.TestCase)
+TestGatewayPgC2 = _on_postgres(GatewayPgC2.TestCase)
+TestGatewayPgC3 = _on_postgres(GatewayPgC3.TestCase)

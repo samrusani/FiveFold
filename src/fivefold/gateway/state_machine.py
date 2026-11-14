@@ -97,6 +97,15 @@ class Note(StrEnum):
     BASIS_UPDATED = "basis_updated"
 
 
+class EscalationTrigger(StrEnum):
+    """Why an OutcomeUnknown action was escalated (0003, escalation table)."""
+
+    AT_ONCE = "at_once"
+    MAX_PROBES = "max_probes"
+    RETRY_CHECK_FAILED = "retry_check_failed"
+    MAX_ATTEMPTS = "max_attempts"
+
+
 class EventKind(StrEnum):
     """Kinds of `action_event` rows (0003, data model)."""
 

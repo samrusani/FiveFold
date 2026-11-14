@@ -1,10 +1,16 @@
-"""The gateway's steps, one rule at a time, through the in-memory store (0001 to 0005).
+"""The gateway's steps, one rule at a time, through both stores (0001 to 0005).
 
 Each test drives one path from the decision records and checks the records it leaves.
-The store checks I1 to I7 after every operation, so every test also checks them.
+The store checks I1 to I7 after every operation, so every test also checks them. Every
+test runs twice: on the in-memory store, and on PostgreSQL checked against the in-memory
+store at every operation (marker `pg`), so each rule is also shown to hold in the
+database.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from typing import ClassVar
 
 import pytest
 
@@ -37,6 +43,7 @@ from fivefold.gateway.state_machine import (
     ReconcileHow,
 )
 from fivefold.gateway.steps import StepRefused, UnspecifiedCase
+from fivefold.gateway.twin import TwinStore
 
 S = ActionState
 SETTINGS = GatewaySettings(
@@ -58,11 +65,18 @@ def proposal(intent: str = "REQ-1", key: str = "k1", quote_version: int = 1) -> 
     return Proposal(intent, "submit_purchase_order", "supplier/S-1", {"quantity": 100}, key, basis)
 
 
+@pytest.fixture(autouse=True)
+def _on_each_store(make_store: Callable[..., MemoryStore | TwinStore]) -> None:
+    Run.factory = make_store
+
+
 class Run:
     """One run's store with a virtual clock and shortcuts to common states."""
 
+    factory: ClassVar[Callable[..., MemoryStore | TwinStore]]
+
     def __init__(self, contract: Contract, *, identity: bool = True) -> None:
-        self.store = MemoryStore(
+        self.store = Run.factory(
             task_id="TASK-1",
             intents={"REQ-1": "submit_purchase_order", "REQ-2": "submit_purchase_order"},
             contract=contract,
@@ -669,3 +683,19 @@ def test_a_refused_step_changes_nothing() -> None:
     with pytest.raises(ValueError, match="backwards"):
         run.store.status(action_id, 0)
     assert run.store.snapshot() is before
+
+
+@pytest.mark.parametrize(
+    ("args", "basis", "message"),
+    [
+        ({"sku": "W\x00100"}, {"quote": 1}, "NUL"),
+        ({"quantity": 1.5}, {"quote": 1}, "text or an integer"),
+        ({"urgent": True}, {"quote": 1}, "text or an integer"),
+        ({"sku": "W-100"}, {"quote": True}, "integer"),
+    ],
+)
+def test_a_proposal_no_store_can_keep_is_refused_before_any_store(
+    args: dict[str, object], basis: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Proposal("REQ-1", "submit_purchase_order", "t", args, "k", basis)  # type: ignore[arg-type]

@@ -201,11 +201,19 @@ class Escalation:
 # Step inputs ---------------------------------------------------------------------------
 
 
+def check_text(value: str, what: str) -> None:
+    """Refuse text that no store can keep: PostgreSQL text cannot hold a NUL character."""
+    if "\x00" in value:
+        raise ValueError(f"{what} contains a NUL character")
+
+
 @dataclass(frozen=True)
 class Proposal:
     """A write proposal that passed the schema and read checks (0001, item 17).
 
-    The store checks the intent and applies the matching rule.
+    The store checks the intent and applies the matching rule. Arguments are text or
+    integers and versions are integers (0001, item 6); this is checked here, so every
+    store refuses the same proposals.
     """
 
     intent_id: str
@@ -214,6 +222,20 @@ class Proposal:
     args: Mapping[str, str | int]
     action_key: str
     basis: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        for what in ("intent_id", "operation", "target", "action_key"):
+            check_text(getattr(self, what), what)
+        for key, value in self.args.items():
+            check_text(key, "an argument name")
+            if isinstance(value, bool) or not isinstance(value, str | int):
+                raise ValueError(f"argument {key} must be text or an integer")
+            if isinstance(value, str):
+                check_text(value, f"argument {key}")
+        for key, version in self.basis.items():
+            check_text(key, "a fact key")
+            if isinstance(version, bool) or not isinstance(version, int):
+                raise ValueError(f"the version of {key} must be an integer")
 
 
 @dataclass(frozen=True)
@@ -287,6 +309,8 @@ class Claim:
     def __post_init__(self) -> None:
         if (self.status is ClaimStatus.DONE) != bool(self.effect_ids):
             raise ValueError("effect_ids must be non-empty for done and empty otherwise")
+        for text in (self.intent_id, self.note, *self.effect_ids):
+            check_text(text, "a claim")
 
 
 # Agent-facing results ------------------------------------------------------------------
