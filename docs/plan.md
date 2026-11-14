@@ -52,7 +52,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [ ] T2: fault scheduler that fires F2 on an event counter
 - [ ] T3: evaluator that reads the sim ledger and the harness message log, and scores properties 1 and 5 to JSON
 - [ ] T4: LangGraph agent for the procurement task over gateway tools, the B0 variant and the scripted model
-- [ ] T5: repo scaffold, CI with pytest and Hypothesis, Docker Compose, a `make demo` stub
+- [x] T5: repo scaffold, CI with pytest and Hypothesis, Docker Compose, a `make demo` stub
 - [ ] T6: 10 held-out scenarios in a location the other teams cannot see
 
 ## Budget

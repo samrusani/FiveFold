@@ -345,12 +345,13 @@ fivefold/
   CLAUDE.md          rules for coding agents
   CONTRIBUTING.md    how to propose changes
   LICENSE            Apache License 2.0
+  .github/workflows/ CI on every pull request; nightly property tests
   docs/              product.md, spec.md, plan.md, adr/
   src/fivefold/
     domain/          ids, operations, dependency rules
     gateway/         MCP server, admin API, state machine, dispatcher, recovery
     sim/             procurement services, contracts, approvals, ledger
-    harness/         scheduler, virtual clock, transports, run lifecycle, scripted humans
+    harness/         scheduler, virtual clock, transports, run lifecycle, scripted humans, migrations
     faults/          catalog, plans, expected outcomes
     evaluator/       property checks, metrics, report
     agents/          LangGraph agent, model adapters, scripted policy, baselines

@@ -10,6 +10,7 @@ The project is in its design phase. Most contributions today are reviews of the 
 
 ## Pull requests
 
+- Run `make check` before asking for review. The Development section of README.md explains the setup.
 - One change per pull request, kept small.
 - Name the spec section or decision record it implements.
 - List every library API you used and where you checked it: the official docs, or the installed package source with its version. If you are unsure an API exists, say so instead of guessing.

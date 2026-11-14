@@ -1,0 +1,56 @@
+# Deterministic checks on every pull request and every push to main (0007).
+# Live-model runs never run in CI.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, type check and test
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      FIVEFOLD_ADMIN_DSN: postgresql://postgres@127.0.0.1:5432/postgres
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv==0.13.8
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Lint
+        run: make lint
+      - name: Type check
+        run: make typecheck
+      - name: Test
+        run: make test
+
+  container:
+    name: Compose file and app image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the Compose file
+        run: docker compose config --quiet
+      - name: Build the app image
+        run: docker build .

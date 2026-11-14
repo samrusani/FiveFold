@@ -1,0 +1,27 @@
+# Local development only (0007). PostgreSQL trusts every connection, so it listens on
+# 127.0.0.1 and nowhere else. Never use this configuration on a shared machine.
+#
+#   make db-up                    start PostgreSQL
+#   docker compose run --rm app   build the app image and run `make check` inside it
+
+services:
+  postgres:
+    image: postgres:16.15
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FIVEFOLD_ADMIN_DSN: postgresql://postgres@postgres:5432/postgres
