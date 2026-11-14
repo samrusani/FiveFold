@@ -1,0 +1,321 @@
+"""Messages between components, through the scheduler (0006, 0009).
+
+Every interaction between components is a message on a hop: `agent_gw` and `gw_sim` in
+gateway configurations, `agent_sim` in baselines. Each message takes a latency drawn from
+the run's `latency` generator, between 5 and `max_hop_latency` virtual ms, and arrives in
+order of (arrival time, send order). The harness log records every message as it is sent
+and then its fate: delivered, with the number of the delivery, or dropped, with why.
+
+Transport rules (0006, as amended by 0010):
+
+- A component that is down sends nothing: what its cancelled tasks try to send while
+  they unwind is discarded, and never logged.
+- A message addressed to a component that is down is dropped.
+- When a caller times out, every later answer to that request is dropped, as when an
+  HTTP client closes its connection.
+- When a component crashes, every later answer to a request it sent before the crash is
+  dropped.
+- Faults fire at `net.{hop}.request` and `net.{hop}.answer`, before the message travels.
+
+A message's body is copied when it is sent: the log and the receiver each get their own
+copy, so nothing done to a body later changes what was sent.
+
+`call` is a request and its answer, like an HTTP call: the agent's tools in baselines and
+the gateway's calls to the simulator use it. `post` sends one message and runs a callback
+when it arrives; stream transports, such as MCP's in-process connection, build on it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Literal
+
+from fivefold.faults.catalog import HOPS, Action
+from fivefold.faults.plan import FaultInjector, Fired
+from fivefold.harness.log import (
+    DropReason,
+    FaultRecord,
+    HarnessLog,
+    JsonValue,
+    Kind,
+    MessageRecord,
+)
+from fivefold.harness.rng import Generator
+from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
+
+Hop = Literal["agent_gw", "gw_sim", "agent_sim"]
+
+MIN_LATENCY_MS = 5
+"""The shortest hop latency, in virtual ms (0009)."""
+
+
+class TransportTimeout(Exception):
+    """No answer arrived within the caller's timeout.
+
+    Not an `OSError`, so LangGraph's default retry predicate retries it (0008).
+    """
+
+
+@dataclass(frozen=True)
+class Envelope:
+    """One message, as the receiver gets it."""
+
+    seq: int
+    hop: Hop
+    kind: Kind
+    sender: str
+    receiver: str
+    api: str | None
+    correlation: int | None
+    intent_id: str | None
+    idempotency_key: str | None
+    answer_class: str | None
+    body: JsonValue
+    sent_vt: int
+
+
+@dataclass(frozen=True)
+class Reply:
+    """A handler's answer to a request: a body and its answer class, if it has one."""
+
+    body: JsonValue
+    answer_class: str | None = None
+
+
+Handler = Callable[[Envelope], Awaitable[Reply]]
+
+
+class Transport:
+    """Carries messages between a run's components, on the scheduler's clock."""
+
+    def __init__(
+        self,
+        scheduler: Scheduler,
+        log: HarnessLog,
+        latency: Generator,
+        *,
+        max_hop_latency_ms: int,
+        faults: FaultInjector | None = None,
+    ) -> None:
+        if max_hop_latency_ms < MIN_LATENCY_MS:
+            raise ValueError(f"max_hop_latency_ms must be at least {MIN_LATENCY_MS}")
+        self._scheduler = scheduler
+        self._log = log
+        self._latency = latency
+        self._max_latency = max_hop_latency_ms
+        self._faults = faults if faults is not None else FaultInjector()
+        self._handlers: dict[str, Handler] = {}
+
+    def draw_latency(self) -> int:
+        """One hop's latency, from the run's latency generator (0009)."""
+        return self._latency.randint(MIN_LATENCY_MS, self._max_latency)
+
+    # One message ----------------------------------------------------------------------------
+
+    def post(
+        self,
+        *,
+        hop: Hop,
+        kind: Kind,
+        sender: str,
+        receiver: str,
+        body: JsonValue,
+        on_arrival: Callable[[Envelope], None],
+        api: str | None = None,
+        correlation: int | None = None,
+        intent_id: str | None = None,
+        idempotency_key: str | None = None,
+        answer_class: str | None = None,
+        wanted: Callable[[], DropReason | None] | None = None,
+    ) -> Envelope | None:
+        """Send one message; `on_arrival` runs when it is delivered.
+
+        `wanted`, checked on arrival, names a reason to drop the message instead, for
+        example that the caller has timed out. Returns None, sending nothing, when the
+        sender is down.
+        """
+        if hop not in HOPS:
+            raise ValueError(f"unknown hop {hop!r}")
+        if not self._scheduler.is_up(sender):
+            return None
+        text = json.dumps(body, sort_keys=True)
+        envelope = Envelope(
+            seq=self._log.next_seq(),
+            hop=hop,
+            kind=kind,
+            sender=sender,
+            receiver=receiver,
+            api=api,
+            correlation=correlation,
+            intent_id=intent_id,
+            idempotency_key=idempotency_key,
+            answer_class=answer_class,
+            body=json.loads(text),
+            sent_vt=self._scheduler.now,
+        )
+        self._log.message_sent(
+            MessageRecord(
+                seq=envelope.seq,
+                hop=hop,
+                kind=kind,
+                sender=sender,
+                receiver=receiver,
+                api=api,
+                correlation=correlation,
+                intent_id=intent_id,
+                idempotency_key=idempotency_key,
+                answer_class=answer_class,
+                body=json.loads(text),
+                sent_vt=envelope.sent_vt,
+            )
+        )
+        point = f"net.{hop}.{'answer' if kind == 'answer' else 'request'}"
+        fields = {"api": api, "tool": api, "answer": answer_class, "intent_id": intent_id}
+        dropped = False
+        for fired in self._faults.at(point, fields):
+            self._record(fired, point, envelope)
+            dropped = dropped or fired.planned.kind.action is Action.DROP
+        if dropped:
+            self._log.message_fate(envelope.seq, "dropped", vt=self._scheduler.now, reason="fault")
+            return envelope
+        self._scheduler.call_later(
+            self.draw_latency(),
+            lambda: self._arrive(envelope, on_arrival, wanted),
+            label=f"deliver {envelope.seq}",
+        )
+        return envelope
+
+    def _arrive(
+        self,
+        envelope: Envelope,
+        on_arrival: Callable[[Envelope], None],
+        wanted: Callable[[], DropReason | None] | None,
+    ) -> None:
+        reason: DropReason | None = None
+        if not self._scheduler.is_up(envelope.receiver):
+            reason = "receiver_down"
+        elif wanted is not None:
+            reason = wanted()
+        now = self._scheduler.now
+        if reason is not None:
+            self._log.message_fate(envelope.seq, "dropped", vt=now, reason=reason)
+            return
+        self._log.message_fate(
+            envelope.seq, "delivered", vt=now, delivered_seq=self._log.next_seq()
+        )
+        on_arrival(envelope)
+
+    def _record(self, fired: Fired, point: str, envelope: Envelope) -> None:
+        self._log.fault_fired(
+            FaultRecord(
+                seq=self._log.next_seq(),
+                fault=str(fired.fault),
+                variant=fired.planned.variant,
+                point=point,
+                occurrence=fired.occurrence,
+                action=str(fired.planned.kind.action),
+                vt=self._scheduler.now,
+                target_seq=envelope.seq,
+                params=dict(fired.planned.params),
+            )
+        )
+
+    # A request and its answer ------------------------------------------------------------------
+
+    def serve(self, component: str, handler: Handler, *, replace: bool = False) -> None:
+        """Answer requests addressed to `component` with `handler`.
+
+        Each request runs as a task of the component, so a crash cancels it. A component
+        rebuilt after a crash registers its new handler with `replace`, so no request
+        reaches the memory the crash discarded. The handler is looked up when a request
+        arrives.
+        """
+        if component in self._handlers and not replace:
+            raise ValueError(f"{component} already has a handler")
+        self._handlers[component] = handler
+
+    async def call(
+        self,
+        *,
+        hop: Hop,
+        sender: str,
+        receiver: str,
+        api: str,
+        body: JsonValue,
+        timeout_ms: int,
+        intent_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Reply:
+        """Send a request and wait for its answer, at most `timeout_ms` virtual ms.
+
+        Raises `TransportTimeout` if no answer arrives in time. A later answer is dropped.
+        """
+        if receiver not in self._handlers:
+            raise ValueError(f"{receiver} serves no requests")
+        answered: asyncio.Future[Envelope] = asyncio.get_running_loop().create_future()
+        incarnation = self._scheduler.incarnation(sender)
+        abandoned = False
+
+        def still_wanted() -> DropReason | None:
+            if self._scheduler.incarnation(sender) != incarnation:
+                return "caller_crashed"
+            if abandoned or answered.cancelled():
+                return "caller_timed_out"
+            return None
+
+        def on_answer(answer: Envelope) -> None:
+            if not answered.done():
+                answered.set_result(answer)
+
+        def on_request(request: Envelope) -> None:
+            self._scheduler.spawn(
+                receiver,
+                self._answer(request, self._handlers[receiver], on_answer, still_wanted),
+                name=f"{api} {request.seq}",
+            )
+
+        self.post(
+            hop=hop,
+            kind="request",
+            sender=sender,
+            receiver=receiver,
+            body=body,
+            on_arrival=on_request,
+            api=api,
+            intent_id=intent_id,
+            idempotency_key=idempotency_key,
+        )
+        try:
+            answer = await self._scheduler.wait_for(answered, timeout_ms)
+        except SchedulerTimeout:
+            abandoned = True
+            raise TransportTimeout(
+                f"{api} from {sender} to {receiver}: no answer within {timeout_ms} ms"
+            ) from None
+        return Reply(answer.body, answer.answer_class)
+
+    async def _answer(
+        self,
+        request: Envelope,
+        handler: Handler,
+        on_answer: Callable[[Envelope], None],
+        still_wanted: Callable[[], DropReason | None],
+    ) -> None:
+        reply = await handler(request)
+        self.post(
+            hop=request.hop,
+            kind="answer",
+            sender=request.receiver,
+            receiver=request.sender,
+            body=reply.body,
+            on_arrival=on_answer,
+            api=request.api,
+            correlation=request.seq,
+            intent_id=request.intent_id,
+            idempotency_key=request.idempotency_key,
+            answer_class=reply.answer_class,
+            wanted=still_wanted,
+        )

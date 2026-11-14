@@ -123,7 +123,7 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | sim | Approval, ApprovalEvent | approval_id, intent_id, scope, expires_at; requested, approved, denied, revoked | The authority record (0002) |
 | sim | ReadLog | seq, key, version, caller, vt | Every read served |
 | harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009) |
-| harness | MessageLog | seq, hop, kind, correlation id, intent_id, idempotency_key, sent_vt, fate, delivered_vt, answer class, body | Every message and its fate (0004) |
+| harness | MessageLog | seq, hop, kind, sender, receiver, api, correlation id, intent_id, idempotency_key, sent_vt, fate, drop reason, delivered_seq, delivered_vt, answer class, body | Every message and its fate (0004). One counter numbers every harness event, so `seq` and `delivered_seq` order sends and deliveries |
 | harness | FaultLog, ActorLog, FinalReport | | Faults fired and the deliveries they voided; scripted human actions; submitted reports |
 | eval | Result | run_id, property, verdict, reason codes, metrics | One row per run and property |
 
