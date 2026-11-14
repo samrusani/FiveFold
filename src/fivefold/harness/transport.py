@@ -17,6 +17,9 @@ Transport rules (0006, as amended by 0010):
   dropped.
 - Faults fire at `net.{hop}.request` and `net.{hop}.answer`, before the message travels.
 
+A message's body is copied when it is sent: the log and the receiver each get their own
+copy, so nothing done to a body later changes what was sent.
+
 `call` is a request and its answer, like an HTTP call: the agent's tools in baselines and
 the gateway's calls to the simulator use it. `post` sends one message and runs a callback
 when it arrives; stream transports, such as MCP's in-process connection, build on it.
@@ -25,6 +28,7 @@ when it arrives; stream transports, such as MCP's in-process connection, build o
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -137,6 +141,7 @@ class Transport:
             raise ValueError(f"unknown hop {hop!r}")
         if not self._scheduler.is_up(sender):
             return None
+        text = json.dumps(body, sort_keys=True)
         envelope = Envelope(
             seq=self._log.next_seq(),
             hop=hop,
@@ -148,7 +153,7 @@ class Transport:
             intent_id=intent_id,
             idempotency_key=idempotency_key,
             answer_class=answer_class,
-            body=body,
+            body=json.loads(text),
             sent_vt=self._scheduler.now,
         )
         self._log.message_sent(
@@ -163,19 +168,19 @@ class Transport:
                 intent_id=intent_id,
                 idempotency_key=idempotency_key,
                 answer_class=answer_class,
-                body=body,
+                body=json.loads(text),
                 sent_vt=envelope.sent_vt,
             )
         )
         point = f"net.{hop}.{'answer' if kind == 'answer' else 'request'}"
         fields = {"api": api, "tool": api, "answer": answer_class, "intent_id": intent_id}
+        dropped = False
         for fired in self._faults.at(point, fields):
             self._record(fired, point, envelope)
-            if fired.planned.kind.action is Action.DROP:
-                self._log.message_fate(
-                    envelope.seq, "dropped", vt=self._scheduler.now, reason="fault"
-                )
-                return envelope
+            dropped = dropped or fired.planned.kind.action is Action.DROP
+        if dropped:
+            self._log.message_fate(envelope.seq, "dropped", vt=self._scheduler.now, reason="fault")
+            return envelope
         self._scheduler.call_later(
             self.draw_latency(),
             lambda: self._arrive(envelope, on_arrival, wanted),
@@ -220,12 +225,15 @@ class Transport:
 
     # A request and its answer ------------------------------------------------------------------
 
-    def serve(self, component: str, handler: Handler) -> None:
+    def serve(self, component: str, handler: Handler, *, replace: bool = False) -> None:
         """Answer requests addressed to `component` with `handler`.
 
-        Each request runs as a task of the component, so a crash cancels it.
+        Each request runs as a task of the component, so a crash cancels it. A component
+        rebuilt after a crash registers its new handler with `replace`, so no request
+        reaches the memory the crash discarded. The handler is looked up when a request
+        arrives.
         """
-        if component in self._handlers:
+        if component in self._handlers and not replace:
             raise ValueError(f"{component} already has a handler")
         self._handlers[component] = handler
 
@@ -245,8 +253,7 @@ class Transport:
 
         Raises `TransportTimeout` if no answer arrives in time. A later answer is dropped.
         """
-        handler = self._handlers.get(receiver)
-        if handler is None:
+        if receiver not in self._handlers:
             raise ValueError(f"{receiver} serves no requests")
         answered: asyncio.Future[Envelope] = asyncio.get_running_loop().create_future()
         incarnation = self._scheduler.incarnation(sender)
@@ -266,7 +273,7 @@ class Transport:
         def on_request(request: Envelope) -> None:
             self._scheduler.spawn(
                 receiver,
-                self._answer(request, handler, on_answer, still_wanted),
+                self._answer(request, self._handlers[receiver], on_answer, still_wanted),
                 name=f"{api} {request.seq}",
             )
 

@@ -302,3 +302,70 @@ def test_calls_need_a_registered_receiver_and_valid_settings() -> None:
         rig.transport.serve("sim", rig.handle)
     with pytest.raises(ValueError, match="max_hop_latency_ms"):
         Transport(Scheduler(), MemoryHarnessLog(), Generators(1).get("x"), max_hop_latency_ms=4)
+
+
+def test_a_sent_body_is_a_copy_that_nobody_can_change_afterwards() -> None:
+    rig = Rig()
+    body: dict[str, list[int]] = {"n": [1]}
+    received: list[Envelope] = []
+
+    def send() -> None:
+        rig.transport.post(
+            hop="agent_sim",
+            kind="notification",
+            sender="agent-1",
+            receiver="sim",
+            body=body,
+            on_arrival=received.append,
+        )
+        body["n"].append(2)
+
+    rig.go(send)
+    (envelope,) = received
+    assert envelope.body == {"n": [1]}
+    assert isinstance(envelope.body, dict)
+    envelope.body["n"].append(3)
+    assert rig.log.messages[0].body == {"n": [1]}
+
+
+def test_a_handler_replaced_while_a_request_travels_answers_it() -> None:
+    """A service rebuilt after a crash answers with its new handler, not the old memory."""
+    rig = Rig()
+    answers: list[object] = []
+
+    async def rebuilt(request: Envelope) -> Reply:
+        return Reply({"from": "rebuilt"}, "committed")
+
+    async def caller() -> None:
+        answers.append((await rig.call(1)).body)
+
+    def start() -> None:
+        rig.scheduler.spawn("gateway", caller(), name="call")
+        rig.scheduler.call_at(1, lambda: rig.transport.serve("sim", rebuilt, replace=True))
+
+    rig.go(start)
+    assert answers == [{"from": "rebuilt"}]
+
+
+def test_every_fault_that_fires_on_one_message_is_logged() -> None:
+    plan: list[dict[str, object]] = [
+        {"fault": "F2", "at": {"point": "net.gw_sim.answer", "match": {"answer": "committed"}}},
+        {"fault": "F2", "at": {"point": "net.gw_sim.answer"}},
+    ]
+    rig = Rig(plan=plan)
+    outcome: list[str] = []
+
+    async def caller() -> None:
+        try:
+            await rig.call(1, timeout_ms=1_000)
+        except TransportTimeout:
+            outcome.append("timeout")
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", caller(), name="call"))
+    assert outcome == ["timeout"]
+    answer = rig.log.messages[1]
+    assert (answer.fate, answer.drop_reason) == ("dropped", "fault")
+    assert [(f.fault, f.target_seq) for f in rig.log.faults] == [
+        ("F2", answer.seq),
+        ("F2", answer.seq),
+    ]
