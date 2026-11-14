@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 decisions accepted, 14 Nov 2026. Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 in progress. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
@@ -33,7 +33,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 
 ## Exit criteria
 
-1. **M0 Design freeze.** Decision records cover action identity, grant lifecycle, state machine, property definitions, tool contracts and the fault catalog (done: 0001 to 0009 accepted on 14 Nov 2026). Repo scaffold, CI and Docker Compose work.
+1. **M0 Design freeze.** Decision records cover action identity, grant lifecycle, state machine, property definitions, tool contracts and the fault catalog (done: 0001 to 0009 accepted on 14 Nov 2026). Repo scaffold, CI and Docker Compose work (done: merged on 14 Nov 2026).
 2. **M1 Thin slice.** One agent with the scripted model, submit_purchase_order at contract level C2, approval by policy with grant binding, recorded reads, faults F2 and F11, the deterministic scheduler and virtual clock, gateway states and recovery, evaluator properties 1 and 5. Demo 1 runs from a seed; B0 places a second order and G2 does not.
 3. **M2 Authority and freshness.** The scripted approver, revocation, expiry and stale-input rejections, contract levels C0 to C3, faults F1, F6, F7, F9 and F12, properties 2 to 4. Hypothesis tests for I1 to I7 pass.
 4. **M3 Full scenarios.** Demos 2 and 3, faults F3, F4, F5 and F10, recorded playback, viewer v1 (its tooling gets its own decision record) and T6's held-out set.
@@ -46,7 +46,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [x] Maintainer: define the five properties as checks over ground truth (decision record 0004)
 - [x] Maintainer: choose the name and license (Fivefold, Apache-2.0)
 - [ ] T1: gw schema with migrations; action and grant tables with unique constraints
-- [ ] T1: state machine module with the transition table and I1 to I7 as assertions
+- [x] T1: state machine module with the transition table and I1 to I7 as assertions, tested by Hypothesis in memory (the Postgres run comes with the gw schema)
 - [ ] T2: purchase-order service with the idempotency_key capability (C2), the effects ledger and fact history, plus policy approvals in the approvals service
 - [ ] T2: deterministic scheduler with the virtual clock and in-process transports, tested for ordering, timers, crash and restart
 - [ ] T2: fault scheduler that fires F2 on an event counter
