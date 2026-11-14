@@ -36,7 +36,7 @@ S = ActionState
 R = Reason
 G = GrantState
 
-# Record 0003, transition table: id, from, to, reason codes.
+# Record 0003's transition table, as amended by record 0010: id, from, to, reason codes.
 EXPECTED: dict[str, tuple[ActionState | None, ActionState, set[str]]] = {
     "T1": (None, S.PROPOSED, {"admitted"}),
     "T2": (S.PROPOSED, S.PENDING_APPROVAL, {"approval_requested"}),
@@ -45,7 +45,14 @@ EXPECTED: dict[str, tuple[ActionState | None, ActionState, set[str]]] = {
     "T5": (
         S.PENDING_APPROVAL,
         S.REJECTED,
-        {"approval_denied", "approval_timeout", "stale_input", "run_closed"},
+        {
+            "approval_denied",
+            "approval_timeout",
+            "approval_revoked",
+            "approval_expired",
+            "stale_input",
+            "run_closed",
+        },
     ),
     "T6": (S.AUTHORIZED, S.DISPATCHED, {"dispatched"}),
     "T7": (
@@ -60,12 +67,8 @@ EXPECTED: dict[str, tuple[ActionState | None, ActionState, set[str]]] = {
         S.OUTCOME_UNKNOWN,
         {"timeout", "transport_error", "server_error", "in_progress", "recovered_open_attempt"},
     ),
-    "T11": (S.OUTCOME_UNKNOWN, S.CONFIRMED, {"status_found", "retry_committed", "human_attested"}),
-    "T12": (
-        S.OUTCOME_UNKNOWN,
-        S.FAILED,
-        {"status_settled_empty", "retry_rejected", "human_attested"},
-    ),
+    "T11": (S.OUTCOME_UNKNOWN, S.CONFIRMED, {"status_found", "human_attested"}),
+    "T12": (S.OUTCOME_UNKNOWN, S.FAILED, {"status_settled_empty", "human_attested"}),
     "T13": (S.OUTCOME_UNKNOWN, S.DISPATCHED, {"retry"}),
 }
 
@@ -73,8 +76,6 @@ EXPECTED: dict[str, tuple[ActionState | None, ActionState, set[str]]] = {
 NEEDS: dict[str, Capability] = {
     "in_progress": Capability.IDEMPOTENCY_KEY,
     "retry": Capability.IDEMPOTENCY_KEY,
-    "retry_committed": Capability.IDEMPOTENCY_KEY,
-    "retry_rejected": Capability.IDEMPOTENCY_KEY,
     "status_found": Capability.STATUS,
     "status_settled_empty": Capability.STATUS,
     "precondition_failed": Capability.CONDITIONAL_WRITE,

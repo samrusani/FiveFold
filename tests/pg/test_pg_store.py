@@ -31,9 +31,12 @@ from fivefold.gateway.records import (
     ApprovalStatus,
     Attempt,
     BasisCheck,
+    Claim,
+    ClaimStatus,
     Proposal,
     Refusal,
     RefusalReason,
+    ReportAccepted,
 )
 from fivefold.gateway.state_machine import ActionState, AnswerClass, GatewaySettings, Reason
 from fivefold.gateway.store import UnknownAction
@@ -47,18 +50,26 @@ SETTINGS = GatewaySettings(
 )
 INTENTS = {"REQ-1": "submit_purchase_order", "REQ-2": "submit_purchase_order"}
 FRESH = BasisCheck(exact_ok=True, sufficient_ok=True)
+FAR = 10**9
+"""An approval expiry far beyond any test's virtual time."""
 WAIT_S = 30
 """How long a test waits for another thread before it fails."""
 
 
-def _store(dsn: str, intents: dict[str, str] = INTENTS, *, exclusive: bool = True) -> PgStore:
+def _store(
+    dsn: str,
+    intents: dict[str, str] = INTENTS,
+    *,
+    exclusive: bool = True,
+    settings: GatewaySettings = SETTINGS,
+) -> PgStore:
     gateway = make_conninfo(dsn, user="ff_gw")
     return PgStore(
         gateway,
         task_id="TASK-1",
         intents=intents,
         contract=Contract.C2,
-        settings=SETTINGS,
+        settings=settings,
         exclusive=exclusive,
     )
 
@@ -81,7 +92,9 @@ def _authorized(store: PgStore, intent_id: str = "REQ-1", key: str = "k", vt: in
 def _dispatched(store: PgStore, intent_id: str = "REQ-1", key: str = "k", vt: int = 0) -> str:
     action_id = _authorized(store, intent_id, key, vt)
     ticket = store.begin_check(action_id)
-    check = ticket.record(approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=vt + 3)
+    check = ticket.record(
+        approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=vt + 3, expires_at=FAR
+    )
     assert store.dispatch(action_id, check, vt + 3) is not None
     return action_id
 
@@ -252,7 +265,9 @@ def test_a_check_overtaken_on_another_connection_commits_nothing(migrated_databa
     with _store(migrated_database) as first, _store(migrated_database, exclusive=False) as second:
         action_id = _authorized(first)
         ticket = first.begin_check(action_id)
-        check = ticket.record(approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=3)
+        check = ticket.record(
+            approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=3, expires_at=FAR
+        )
         assert first.dispatch(action_id, check, 3) is not None
         assert second.dispatch(action_id, check, 3) is None
         assert len(second.snapshot().attempts[action_id]) == 1
@@ -270,7 +285,9 @@ def test_a_step_reads_the_action_only_once_it_holds_its_row(
     with _store(migrated_database) as gateway, _store(migrated_database, exclusive=False) as worker:
         action_id = _authorized(gateway)
         ticket = gateway.begin_check(action_id)
-        check = ticket.record(approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=3)
+        check = ticket.record(
+            approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=3, expires_at=FAR
+        )
         pause = Pause(monkeypatch, "apply")
         first = pause.hold(Call(lambda: gateway.dispatch(action_id, check, 3)))
         second = Call(lambda: worker.dispatch(action_id, check, 3)).start()
@@ -349,6 +366,73 @@ def test_closing_the_run_waits_for_a_proposal_in_progress(
     assert snapshot.run_closed
     assert snapshot.actions["A-0001"].state is ActionState.REJECTED
     assert snapshot.events[-1].reason is Reason.RUN_CLOSED
+
+
+def test_a_report_that_closes_an_intent_waits_for_a_proposal_in_progress(
+    migrated_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proposal that found its intent open lands before the report that closes it.
+
+    The report locks every intent before it reads the actions, as closing the run does,
+    so it sees the new action and rejects it with the intent (0010, item 6).
+    """
+    with _store(migrated_database) as gateway, _store(migrated_database, exclusive=False) as worker:
+        pause = Pause(monkeypatch, "run_closed")
+        proposing = pause.hold(Call(lambda: gateway.propose(_proposal("REQ-2", "late"), 10)))
+        claims = [Claim("REQ-1", ClaimStatus.NOT_DONE), Claim("REQ-2", ClaimStatus.NOT_DONE)]
+        reporting = Call(lambda: worker.submit_report(claims, 20, worker="W1")).start()
+        assert _a_gateway_connection_waits(migrated_database), "the report did not wait"
+        pause.release()
+        proposed, reported = proposing.result(), reporting.result()
+        assert isinstance(proposed, ActionResult) and proposed.action_id == "A-0001"
+        assert isinstance(reported, ReportAccepted), reported
+        snapshot = worker.snapshot()
+    assert snapshot.closed_intents == {"REQ-1", "REQ-2"}
+    assert snapshot.actions["A-0001"].state is ActionState.REJECTED
+    assert snapshot.run_closed, "the run's only worker reported"
+
+
+def test_a_report_takes_the_intents_before_the_actions(
+    migrated_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A report waits behind a proposal that holds its intent, then sees what it did.
+
+    The proposal holds REQ-1's row and is about to lock its holder, A-0001, to attach to
+    it. A report that took the actions first would hold A-0001 and wait for REQ-1, and
+    the two would deadlock. Taking the intents first, as the lock order says, it waits.
+    """
+    with _store(migrated_database) as gateway, _store(migrated_database, exclusive=False) as worker:
+        first = gateway.propose(_proposal("REQ-1", "k"), 0)
+        assert isinstance(first, ActionResult) and first.action_id == "A-0001"
+        pause = Pause(monkeypatch, "lock_intent")
+        attaching = pause.hold(Call(lambda: gateway.propose(_proposal("REQ-1", "k"), 10)))
+        claims = [Claim("REQ-1", ClaimStatus.NOT_DONE), Claim("REQ-2", ClaimStatus.NOT_DONE)]
+        reporting = Call(lambda: worker.submit_report(claims, 20, worker="W1")).start()
+        assert _a_gateway_connection_waits(migrated_database), "the report did not wait"
+        pause.release()
+        attached, reported = attaching.result(), reporting.result()
+        assert isinstance(attached, ActionResult) and attached.action_id == "A-0001", attached
+        assert isinstance(reported, ReportAccepted), reported
+        assert worker.view("A-0001").action.state is ActionState.REJECTED
+
+
+def test_accepted_reports_survive_a_restart(migrated_database: str) -> None:
+    two_workers = GatewaySettings(
+        approval_wait_ms=5_000,
+        params=ContractParams(max_hop_latency_ms=50, commit_deadline_ms=1_000),
+        dispatch_timeout_ms=200,
+        agent_workers=2,
+    )
+    claims = [Claim("REQ-1", ClaimStatus.NOT_DONE), Claim("REQ-2", ClaimStatus.NOT_DONE)]
+    with _store(migrated_database, settings=two_workers) as before_crash:
+        assert isinstance(before_crash.submit_report(claims, 10, worker="W1"), ReportAccepted)
+        assert not before_crash.snapshot().run_closed
+    with _store(migrated_database, settings=two_workers) as after_restart:
+        after_restart.restart(20)
+        assert isinstance(after_restart.submit_report(claims, 30, worker="W1"), ReportAccepted)
+        assert not after_restart.snapshot().run_closed
+        assert isinstance(after_restart.submit_report(claims, 40, worker="W2"), ReportAccepted)
+        assert after_restart.snapshot().run_closed
 
 
 def test_the_invariant_check_reads_one_state(

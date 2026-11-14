@@ -139,7 +139,12 @@ def basis_to_json(basis: BasisCheck | None) -> JSON:
 
 
 def check_from_columns(
-    kind: str, approval: str | None, basis: JSON, seen_seq: int, check_vt: int
+    kind: str,
+    approval: str | None,
+    basis: JSON,
+    seen_seq: int,
+    check_vt: int,
+    approval_expires_at: int | None,
 ) -> CheckRecord:
     """Rebuild a check record from an attempt row's check columns."""
     decoded: BasisCheck | None = None
@@ -153,7 +158,7 @@ def check_from_columns(
             stale=tuple(_stale(item) for item in _list(values.get("stale", []))),
         )
     status = None if approval is None else ApprovalStatus(approval)
-    return CheckRecord(CheckKind(kind), status, decoded, seen_seq, check_vt)
+    return CheckRecord(CheckKind(kind), status, decoded, seen_seq, check_vt, approval_expires_at)
 
 
 # Responses -------------------------------------------------------------------------------

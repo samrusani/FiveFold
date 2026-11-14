@@ -14,7 +14,7 @@ Two fields go beyond the data model, as implementation detail:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -118,18 +118,26 @@ class BasisCheck:
 
 @dataclass(frozen=True)
 class CheckRecord:
-    """The check made before a send, stored with the attempt (I3)."""
+    """The check made before a send, stored with the attempt (I3).
+
+    `approval_expires_at` is the approval's expiry as the approvals service reported it,
+    recorded exactly when the approval is approved: an approval that expires before a
+    send could commit counts as expired (0010, change 4).
+    """
 
     kind: CheckKind
     approval: ApprovalStatus | None
     basis: BasisCheck | None
     seen_seq: int
     check_vt: int
+    approval_expires_at: int | None = None
 
     def __post_init__(self) -> None:
         if self.kind is CheckKind.EXEMPT:
             if self.approval is not None or self.basis is not None:
                 raise ValueError("an exempt check records no approval and no basis")
+            if self.approval_expires_at is not None:
+                raise ValueError("an exempt check records no approval expiry")
             return
         if self.approval is None or self.basis is None:
             raise ValueError(f"a {self.kind} check records the approval and the basis")
@@ -137,13 +145,28 @@ class CheckRecord:
             raise ValueError(
                 "a full check covers the sufficient rules; an exact_only check does not"
             )
+        if (self.approval is ApprovalStatus.APPROVED) != (self.approval_expires_at is not None):
+            raise ValueError("an approved approval's expiry is recorded, and only that")
 
-    @property
-    def passed(self) -> bool:
-        """Whether this check allows the send (0002 rule 17, I3)."""
+    def approval_at_send(self, sent_vt: int, settle_ms: int) -> ApprovalStatus | None:
+        """The approval's status for a send at `sent_vt` (0002 rule 17, 0010 change 4).
+
+        A request sent at `sent_vt` commits by `sent_vt + S` or never, so an approved
+        approval that expires by then counts as expired. The send is at or after the
+        check, so this also keeps the approval alive past the check's time plus S.
+        """
+        expires_at = self.approval_expires_at
+        approved = self.approval is ApprovalStatus.APPROVED
+        if approved and expires_at is not None and expires_at <= sent_vt + settle_ms:
+            return ApprovalStatus.EXPIRED
+        return self.approval
+
+    def passes(self, sent_vt: int, settle_ms: int) -> bool:
+        """Whether this check allows a send at `sent_vt` (0002 rule 17, I3)."""
         if self.kind is CheckKind.EXEMPT:
             return True
-        if self.approval is not ApprovalStatus.APPROVED or self.basis is None:
+        approved = self.approval_at_send(sent_vt, settle_ms) is ApprovalStatus.APPROVED
+        if not approved or self.basis is None:
             return False
         return self.basis.exact_ok and self.basis.sufficient_ok is not False
 
@@ -254,9 +277,13 @@ class CheckTicket:
         approval: ApprovalStatus | None,
         basis: BasisCheck | None,
         check_vt: int,
+        expires_at: int | None = None,
     ) -> CheckRecord:
-        """Return the check record for what the dispatcher found."""
-        return CheckRecord(self.kind, approval, basis, self.seen_seq, check_vt)
+        """Return the check record for what the dispatcher found.
+
+        `expires_at` is the approval's expiry, given exactly when it is approved.
+        """
+        return CheckRecord(self.kind, approval, basis, self.seen_seq, check_vt, expires_at)
 
 
 @dataclass(frozen=True)
@@ -417,7 +444,9 @@ class Snapshot:
     """Every gateway record of one run, for the invariant checks.
 
     `attempts` maps each action id to its attempts in attempt order. `events` and
-    `tool_calls` are in seq and call order.
+    `tool_calls` are in seq and call order. `closed_intents` are the intents an accepted
+    `not_done` claim closed, and `reports` maps each agent worker whose report was
+    accepted to the call number of its first accepted report (0010, item 6).
     """
 
     intents: Mapping[str, str]
@@ -428,3 +457,5 @@ class Snapshot:
     escalations: Mapping[str, Escalation]
     tool_calls: tuple[ToolCall, ...]
     run_closed: bool
+    closed_intents: frozenset[str] = frozenset()
+    reports: Mapping[str, int] = field(default_factory=lambda: frozen({}))

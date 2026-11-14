@@ -2,10 +2,10 @@
 
 `PgStore` runs the operations of `ActionStore` (`store.py`) in PostgreSQL transactions.
 It connects as the gateway's role, `ff_gw`, which can write only the `gw` schema and has
-no UPDATE or DELETE privilege on `action_event`. Every operation that writes is one
-transaction: it locks the rows it changes in the order `store.py` describes, writes the
-step's change and its events, checks every invariant on what the transaction sees, and
-commits. Reads take no locks and see one consistent state. Nothing in a transaction calls
+no UPDATE or DELETE privilege on `action_event` or `report`. Every operation that writes
+is one transaction: it locks the rows it changes in the order `store.py` describes,
+writes the step's change and its events, checks every invariant on what the transaction
+sees, and commits. Reads take no locks and see one consistent state. Nothing in a transaction calls
 the network (0003): the store only reads and writes rows.
 
 One gateway serves a run. Its store holds a session advisory lock on the run database,
@@ -14,8 +14,9 @@ The gateway can open further stores on the same run with `exclusive` off, for ex
 one per dispatcher worker. A store is one connection: use it from one thread at a time,
 as the deterministic scheduler does (0009).
 
-The schema itself enforces part of I1, I2, I4, I6 and I7 (`db/migrations/0002_gateway.sql`),
-so even a store with a bug cannot write some broken records.
+The schema itself enforces part of I1, I2, I4, I6 and I7, and record 0010's closing rules
+(`db/migrations/0002_gateway.sql` and `0003_gateway_record_0010.sql`), so even a store
+with a bug cannot write some broken records.
 """
 
 from __future__ import annotations
@@ -81,7 +82,7 @@ _GRANT: LiteralString = (
 _ATTEMPT: LiteralString = (
     "SELECT attempt_id, action_id, attempt_no, idempotency_key, grant_id, check_kind,"
     " check_approval, check_basis, check_seen_seq, check_vt, sent_vt, answer_class,"
-    " answer_ref, answered_vt FROM gw.attempt"
+    " answer_ref, answered_vt, check_approval_expires_at FROM gw.attempt"
 )
 _EVENT: LiteralString = (
     "SELECT seq, action_id, kind, from_state, to_state, reason, details, vt FROM gw.action_event"
@@ -227,6 +228,22 @@ class _PgTransaction(Transaction):
     def close_run(self) -> None:
         self._conn.execute("UPDATE gw.run_state SET run_closed = true")
 
+    def closed_intents(self) -> frozenset[str]:
+        rows = self._conn.execute("SELECT intent_id FROM gw.intent WHERE closed").fetchall()
+        return frozenset(str(row[0]) for row in rows)
+
+    def close_intent(self, intent_id: str) -> None:
+        self._conn.execute("UPDATE gw.intent SET closed = true WHERE intent_id = %s", (intent_id,))
+
+    def reports(self) -> Mapping[str, int]:
+        rows = self._conn.execute("SELECT worker, call_no FROM gw.report").fetchall()
+        return frozen({str(worker): int(call_no) for worker, call_no in rows})
+
+    def record_report(self, worker: str, call_no: int) -> None:
+        self._conn.execute(
+            "INSERT INTO gw.report (worker, call_no) VALUES (%s, %s)", (worker, call_no)
+        )
+
     def lock_intent(self, intent_id: str) -> None:
         if self._lock:
             self._conn.execute(
@@ -333,8 +350,8 @@ class _PgTransaction(Transaction):
             self._conn.execute(
                 "INSERT INTO gw.attempt (attempt_id, action_id, attempt_no, idempotency_key,"
                 " grant_id, check_kind, check_approval, check_basis, check_seen_seq, check_vt,"
-                " sent_vt, answer_class, answer_ref, answered_vt)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " check_approval_expires_at, sent_vt, answer_class, answer_ref, answered_vt)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 " ON CONFLICT (attempt_id) DO UPDATE SET answer_class = EXCLUDED.answer_class,"
                 " answer_ref = EXCLUDED.answer_ref, answered_vt = EXCLUDED.answered_vt",
                 (
@@ -348,6 +365,7 @@ class _PgTransaction(Transaction):
                     None if check.basis is None else Jsonb(basis_to_json(check.basis)),
                     check.seen_seq,
                     check.check_vt,
+                    check.approval_expires_at,
                     t.sent_vt,
                     None if t.answer_class is None else str(t.answer_class),
                     t.answer_ref,
@@ -402,17 +420,19 @@ class _PgTransaction(Transaction):
         action_id: str | None,
         result: ActionResult | Refusal | ReportAccepted,
         vt: int,
-    ) -> None:
+    ) -> int:
         row = self._one(
             "UPDATE gw.run_state SET last_call_no = last_call_no + 1"
             " RETURNING last_call_no, last_seq",
             (),
         )
+        call_no = int(row[0])
         self._conn.execute(
             "INSERT INTO gw.tool_call (call_no, tool, action_id, result, as_of_seq, vt)"
             " VALUES (%s, %s, %s, %s, %s, %s)",
-            (int(row[0]), tool, action_id, Jsonb(result_to_json(result)), int(row[1]), vt),
+            (call_no, tool, action_id, Jsonb(result_to_json(result)), int(row[1]), vt),
         )
+        return call_no
 
     def snapshot(self) -> Snapshot:
         if self._lock:
@@ -440,6 +460,8 @@ class _PgTransaction(Transaction):
                 for r in self._conn.execute(_TOOL_CALL + " ORDER BY call_no").fetchall()
             ),
             run_closed=self.run_closed(),
+            closed_intents=self.closed_intents(),
+            reports=self.reports(),
         )
 
     def _one(self, query: LiteralString, params: tuple[object, ...]) -> Row:
@@ -484,7 +506,7 @@ def _attempt(row: Row) -> Attempt:
         attempt_no=row[2],
         idempotency_key=row[3],
         grant_id=row[4],
-        check=check_from_columns(row[5], row[6], row[7], row[8], row[9]),
+        check=check_from_columns(row[5], row[6], row[7], row[8], row[9], row[14]),
         sent_vt=row[10],
         answer_class=None if row[11] is None else AnswerClass(row[11]),
         answer_ref=row[12],

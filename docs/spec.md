@@ -72,7 +72,7 @@ Each component connects with its own role in the run's database:
 | Role | sim | gw | harness | agent | eval |
 | --- | --- | --- | --- | --- | --- |
 | `ff_sim` | all | none | none | none | none |
-| `ff_gw` | none | all, except UPDATE and DELETE on `action_event` | none | none | none |
+| `ff_gw` | none | all, except UPDATE and DELETE on `action_event` and `report` (0010) | none | none | none |
 | `ff_harness` | select | none | all | none | none |
 | `ff_agent` | none | none | none | all | none |
 | `ff_eval` | select | select | select | none | all |
@@ -107,16 +107,17 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 
 | Schema | Entity | Key fields | Notes |
 | --- | --- | --- | --- |
-| gw | Intent | intent_id, operation | One row per task intent; the lock anchor for identity (0001) |
+| gw | Intent | intent_id, operation, closed | One row per task intent; the lock anchor for identity (0001). An accepted `not_done` claim closes it (0010) |
 | gw | Read | read_id, key, version, vt | Recorded on every read tool call |
 | gw | Proposal | proposal_id, intent_id, operation, args, based_on, outcome | Every write call, admitted or refused |
 | gw | Action | action_id, task_id, intent_id, operation, target, args, action_key, identity, basis, state, grant_id, idempotency_key, effect_id, contract | One logical effect (0001, 0003) |
 | gw | Grant | grant_id, action_id, approval_id, state | Binds one approval to one action (0002) |
-| gw | Attempt | attempt_id, action_id, attempt_no, idempotency_key, grant_id, check, sent_vt, answer_class, answered_vt | One send (0003) |
+| gw | Attempt | attempt_id, action_id, attempt_no, idempotency_key, grant_id, check, sent_vt, answer_class, answered_vt | One send (0003). The check keeps the approval's expiry when it found the approval approved (0010) |
 | gw | ActionEvent | seq, action_id, kind, from_state, to_state, reason, details, vt | Append-only transition log |
 | gw | Escalation | escalation_id, action_id, opened_vt, resolved_vt, resolution, effect_id, actor | A human's resolution of an unknown outcome |
 | gw | ToolCall | call_no, tool, args, result, action_id, as_of_seq, vt | Every agent-facing response; `as_of_seq` is the event seq it reflects (I5) |
 | gw | RunState | run_closed, last_action_no, last_seq, last_call_no | One row: whether the run is closed (0003), and the counters that number actions, events and responses |
+| gw | Report | worker, call_no | Each agent worker's first accepted final report; the run closes when every expected worker has one (0010) |
 | sim | FactVersion | key, version, value, valid_from_seq, valid_from_vt, cause | The full history of quotes, budgets and inventory |
 | sim | Effect | effect_id, intent_id, operation, args, approval_id, basis, idempotency_key, client_ref, commit_seq, committed_vt | The ground-truth ledger |
 | sim | Approval, ApprovalEvent | approval_id, intent_id, scope, expires_at; requested, approved, denied, revoked | The authority record (0002) |
@@ -144,7 +145,7 @@ Detail: 0002.
 - The simulator's approvals service is the system of record. The scenario's `authority` section is the policy: a supplier allowlist, a per-order ceiling, an auto-approval threshold, the approval lifetime and the scripted approver's rules. The gateway has no policy file of its own in v0.1.
 - Every write cites exactly one approval. Policy decides each request at once: it denies orders from suppliers off the allowlist or above the per-order ceiling, approves orders at or below the auto-approval threshold and every reservation, and queues the rest for the scripted approver. An approval backs at most one effect.
 - A gateway grant binds one approval to one action. Its states are pending, active, consumed (at the first dispatch), denied, timed_out, released, revoked and expired.
-- Before the first send and before every C2 retry, the gateway checks the approval with the approvals service. C3 retries rely on the destination, which checks the approval atomically at commit.
+- Before the first send and before every C2 retry, the gateway checks the approval with the approvals service. An approval that expires at or before the send's time plus the settle time S counts as expired (0010). C3 retries rely on the destination, which checks the approval atomically at commit.
 
 ## Action state machine
 
@@ -167,21 +168,22 @@ Detail: 0003.
 | T2 | Proposed | PendingApproval | Basis fresh; approval request filed |
 | T3 | Proposed | Rejected | A cited fact is stale, or the run has closed |
 | T4 | PendingApproval | Authorized | Approval granted and basis fresh |
-| T5 | PendingApproval | Rejected | Denied, timed out, a cited fact went stale, or the run has closed |
+| T5 | PendingApproval | Rejected | Denied, timed out, revoked or expired before the gateway saw the approval, a cited fact went stale, or the run has closed |
 | T6 | Authorized | Dispatched | The I3 check passed; the attempt row is committed before the send |
 | T7 | Authorized | Rejected | Authority invalid or basis stale at the dispatch check, or the run has closed |
 | T8 | Dispatched | Confirmed | The destination answered committed, new or replayed |
 | T9 | Dispatched | Failed | The destination answered with a definitive rejection |
 | T10 | Dispatched | OutcomeUnknown | Timeout, transport error, 5xx, in_progress, or an open attempt found at startup |
-| T11 | OutcomeUnknown | Confirmed | C1 status lists the effect; a C2 or C3 retry answers committed; a human attests committed |
-| T12 | OutcomeUnknown | Failed | Settled negative: C1 status empty after the settle time; a C2 or C3 retry definitively rejected; a human attests not committed |
+| T11 | OutcomeUnknown | Confirmed | C1 status lists the effect; a human attests committed |
+| T12 | OutcomeUnknown | Failed | Settled negative: C1 status empty after the settle time; a human attests not committed, at or after the settle time |
 | T13 | OutcomeUnknown | Dispatched | Retry with the same idempotency key; C2 or C3 only; at C2 the retry check must pass first |
 
 - Only definitive answers (committed or rejected) end an attempt. Timeouts, transport errors, 5xx and `in_progress` lead to OutcomeUnknown.
-- Escalation is a note event plus an escalation row, not a state. C0 escalates at once; C1 after `max_probes`; C2 when the retry check fails or after `max_attempts`; C3 after `max_attempts`. A human resolves it through the admin API by attesting committed or not committed.
+- Escalation is a note event plus an escalation row, not a state. C0 escalates at once; C1 after `max_probes`; C2 when the retry check fails or after `max_attempts`; C3 after `max_attempts`. Escalation ends automatic recovery. A human resolves it through the admin API by attesting committed or not committed.
+- A retry's answer arrives while the action is Dispatched, so it fires T8, T9 or T10.
 - Authorized actions form an outbox. The dispatcher runs the I3 check without holding a lock, then locks the action, confirms nothing changed, and commits T6 with the attempt row. Only then does it send.
 - On startup the gateway moves open attempts to OutcomeUnknown, resumes their recovery, and returns Authorized actions to the outbox.
-- G2 checks the final report against its records, refusing claims that contradict them. When every agent worker has finished, G2 closes the run: it refuses new proposals and rejects actions not yet dispatched.
+- G2 checks the final report against its records, refusing claims that contradict them. When every agent worker has finished, G2 closes the run: it refuses new proposals and rejects actions not yet dispatched. It closes the run in the transaction that accepts the last report it expects, and an earlier report's accepted `not_done` claim closes its intent the same way (0010).
 
 Invariants. 0003 gives the check for each one.
 
@@ -289,7 +291,7 @@ This table is a summary. 0006 is the full catalog: fault points, B0 equivalents,
 | F11 | Agent killed and resumed from checkpoint | all | 1, 2, 5 |
 | F12 | Request lost before it reaches the destination | all | 4, 5 |
 
-Faults fire at named points, on per-point event counters, never on wall-clock time. A fault's action applies at its point, before any further message is delivered. A crash restarts the component after a delay, and voids any delivery it had not recorded.
+Faults fire at named points, on per-point event counters, never on wall-clock time. A fault's action applies at its point, before any further message is delivered. A crash restarts the component after a delay, voids any delivery it had not recorded, and drops later answers to the requests it sent before the crash (0010).
 
 ## Evaluator
 

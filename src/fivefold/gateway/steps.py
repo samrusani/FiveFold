@@ -8,8 +8,7 @@ lock (I6). Both stores, in memory and in PostgreSQL, call these functions throug
 operations in `store.py`, so each rule exists once.
 
 Steps raise `StepRefused` when a step does not apply (wrong state, too early, already
-escalated) and `UnspecifiedCase` when the accepted records define no outcome. Malformed
-inputs raise `ValueError`. In all three cases nothing changes.
+escalated). Malformed inputs raise `ValueError`. In both cases nothing changes.
 
 Ids that depend on one action are derived from its id: grant `G-0007` and escalation
 `ESC-0007` belong to action `A-0007`, and its attempts are `A-0007/1`, `A-0007/2` and so
@@ -73,10 +72,6 @@ _S = ActionState
 
 class StepRefused(GatewayRuleError):
     """The step does not apply to the action in its current state, or not yet."""
-
-
-class UnspecifiedCase(GatewayRuleError):
-    """The accepted decision records define no outcome for this case (see record 0010)."""
 
 
 @dataclass(frozen=True)
@@ -382,9 +377,10 @@ def poll_approval(
     """T4 or T5 from what the approvals service reports while the action waits (0002).
 
     `basis` is the basis check made with this poll. It is optional while the approval is
-    pending and required once it is approved (T4 needs a fresh basis). A denial is named
-    before a stale basis. Nothing is written if the action has an event newer than
-    `seen_seq`, as in `file_approval`.
+    pending and required once it is approved (T4 needs a fresh basis). Dead authority
+    (denied, or revoked or expired before the gateway saw it, 0010) is named before a
+    stale basis. Nothing is written if the action has an event newer than `seen_seq`, as
+    in `file_approval`.
     """
     if seen_seq != view.last_seq:
         return None
@@ -396,12 +392,12 @@ def poll_approval(
     if approval is ApprovalStatus.DENIED:
         rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_DENIED, vt)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.DENIED))
-    if approval in (ApprovalStatus.REVOKED, ApprovalStatus.EXPIRED):
-        raise UnspecifiedCase(
-            f"the first poll for {action.action_id} found the approval {approval}: record "
-            "0002 moves the grant to revoked or expired, but T5 in record 0003 has no reason "
-            "for it (proposed record 0010)"
-        )
+    if approval is ApprovalStatus.REVOKED:
+        rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_REVOKED, vt)
+        return Change(rejected, (event,), grant=_grant_to(grant, GrantState.REVOKED))
+    if approval is ApprovalStatus.EXPIRED:
+        rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_EXPIRED, vt)
+        return Change(rejected, (event,), grant=_grant_to(grant, GrantState.EXPIRED))
     stale = {"stale": basis.stale} if basis is not None else NO_DETAILS
     if approval is ApprovalStatus.PENDING:
         if basis is None or basis.fresh:
@@ -489,10 +485,21 @@ def _new_attempt(view: ActionView, check: CheckRecord, vt: int) -> Attempt:
     )
 
 
-def dispatch(view: ActionView, check: CheckRecord, vt: int) -> Change | None:
+def _expiry_details(check: CheckRecord) -> Mapping[str, object]:
+    """When an approved approval counts as expired, the expiry that made it so (0010)."""
+    if check.approval is ApprovalStatus.APPROVED and check.approval_expires_at is not None:
+        return {"expires_at": check.approval_expires_at}
+    return NO_DETAILS
+
+
+def dispatch(
+    view: ActionView, check: CheckRecord, vt: int, settings: GatewaySettings
+) -> Change | None:
     """T6 or T7: commit the first send, or reject, after a full check (I3; 0002, rule 17-18).
 
-    Returns None, committing nothing, if the action has a newer event than the check saw.
+    The send is at `vt`, so an approval that expires by `vt + S` counts as expired
+    (0010, change 4). Returns None, committing nothing, if the action has a newer event
+    than the check saw.
     """
     if check.seen_seq != view.last_seq:
         return None
@@ -501,15 +508,17 @@ def dispatch(view: ActionView, check: CheckRecord, vt: int) -> Change | None:
     _require(check.kind is CheckKind.FULL, "the first send needs a full check (I3)")
     _require(check.check_vt <= vt, "the check must come before the send")
     grant = _grant_in(view, GrantState.ACTIVE)
-    if check.approval is ApprovalStatus.REVOKED:
+    approval = check.approval_at_send(vt, settings.settle_ms)
+    if approval is ApprovalStatus.REVOKED:
         rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_REVOKED, vt)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.REVOKED))
-    if check.approval is ApprovalStatus.EXPIRED:
-        rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_EXPIRED, vt)
+    if approval is ApprovalStatus.EXPIRED:
+        details = _expiry_details(check)
+        rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_EXPIRED, vt, details)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.EXPIRED))
-    if check.approval is not ApprovalStatus.APPROVED or check.basis is None:
+    if approval is not ApprovalStatus.APPROVED or check.basis is None:
         raise ValueError(f"an active grant's approval cannot be {check.approval}")
-    if not check.passed:
+    if not check.passes(vt, settings.settle_ms):
         stale = {"stale": check.basis.stale}
         rejected, event = _move(view, _S.REJECTED, Reason.STALE_INPUT, vt, stale)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.RELEASED))
@@ -524,7 +533,8 @@ def retry(
     """T13 with the same idempotency key, or escalation if the retry check fails (0005).
 
     At C2 the retry check covers authority and the exact rules; if it fails, nothing is
-    sent and the action is escalated (0002, rule 19). C3 retries are exempt (rule 20).
+    sent and the action is escalated (0002, rule 19). An approval that expires by
+    `vt + S` counts as expired (0010, change 4). C3 retries are exempt (rule 20).
     Returns None, committing nothing, if the action has a newer event than the check saw.
     """
     if check.seen_seq != view.last_seq:
@@ -539,20 +549,21 @@ def retry(
     _require(vt >= due, f"{action.action_id}: the retry backoff has not passed")
     _require(check.check_vt <= vt, "the check must come before the send")
     grant = _grant_in(view, GrantState.CONSUMED)
-    if check.kind is CheckKind.EXACT_ONLY and not check.passed:
+    if check.kind is CheckKind.EXACT_ONLY and not check.passes(vt, settings.settle_ms):
+        approval = check.approval_at_send(vt, settings.settle_ms)
         observed: Grant | None = None
-        if check.approval is ApprovalStatus.REVOKED:
+        if approval is ApprovalStatus.REVOKED:
             observed = _grant_to(grant, GrantState.REVOKED)
-        elif check.approval is ApprovalStatus.EXPIRED:
+        elif approval is ApprovalStatus.EXPIRED:
             observed = _grant_to(grant, GrantState.EXPIRED)
-        elif check.approval is not ApprovalStatus.APPROVED:
+        elif approval is not ApprovalStatus.APPROVED:
             raise ValueError(f"a consumed grant's approval cannot be {check.approval}")
         stale = check.basis.stale if check.basis is not None else ()
         escalation, note = _escalate(
             action,
             EscalationTrigger.RETRY_CHECK_FAILED,
             vt,
-            {"approval": check.approval, "stale": stale},
+            {"approval": check.approval, "stale": stale, **_expiry_details(check)},
         )
         return Change(action, (note,), grant=observed, escalation=escalation)
     sent, event = _move(view, _S.DISPATCHED, Reason.RETRY, vt, {"attempt_no": attempt_no})
@@ -673,9 +684,11 @@ def attest(
     else:
         if effect_id is not None:
             raise ValueError("an attestation that nothing committed names no effect")
+        due = _latest_sent_vt(view) + settings.settle_ms
         _require(
-            vt >= _latest_sent_vt(view) + settings.settle_ms,
-            "nothing can be attested as not committed before S has passed since the last send",
+            vt >= due,
+            f"{action.action_id}: nothing can be attested as not committed before vt {due},"
+            " S after the last send",
         )
         moved, event = _move(view, _S.FAILED, Reason.HUMAN_ATTESTED, vt, {"actor": actor})
     resolved = replace(
@@ -750,6 +763,20 @@ def known_effects(view: ActionView) -> tuple[str, ...]:
             if isinstance(effect_id, str) and effect_id not in found:
                 found.append(effect_id)
     return tuple(found)
+
+
+def report_closes(
+    claims: Sequence[Claim], reported: Collection[str], worker: str, settings: GatewaySettings
+) -> tuple[frozenset[str], bool]:
+    """What an accepted report from `worker` closes in its own transaction (0010, item 6).
+
+    Each intent the report claims `not_done` closes, so the claim stays true whichever
+    report counts (0004). The whole run closes too if this is the last report the run
+    expects: each of the `agent_workers` workers (0009) has now had a report accepted.
+    `reported` are the workers whose reports were accepted before.
+    """
+    intents = frozenset(c.intent_id for c in claims if c.status is ClaimStatus.NOT_DONE)
+    return intents, len({*reported, worker}) >= settings.agent_workers
 
 
 def report_conflicts(

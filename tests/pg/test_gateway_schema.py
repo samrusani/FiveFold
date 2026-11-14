@@ -20,7 +20,7 @@ pytestmark = pytest.mark.pg
 
 Connection = psycopg.Connection[TupleRow]
 TABLES = ["run_state", "intent", "action", "grant", "attempt", "action_event", "escalation"]
-TABLES.append("tool_call")
+TABLES += ["tool_call", "report"]
 LIVE = ["proposed", "pending_approval", "authorized", "dispatched", "outcome_unknown"]
 
 
@@ -236,6 +236,7 @@ def test_a_grant_never_moves(migrated_database: str, column: str, value: object)
         ("check_basis", Jsonb({"exact_ok": True})),
         ("check_seen_seq", 2),
         ("check_vt", 1),
+        ("check_approval_expires_at", 5),
         ("sent_vt", 1),
     ],
 )
@@ -249,6 +250,88 @@ def test_an_attempt_is_history(migrated_database: str, column: str, value: objec
         _set(conn, "attempt", "answer_class", "unknown")
         _set(conn, "attempt", "answer_ref", "lost")
         _set(conn, "attempt", "answered_vt", 5)
+
+
+def test_an_approved_check_keeps_the_approvals_expiry(migrated_database: str) -> None:
+    """The expiry is kept exactly when the check found the approval approved (0010)."""
+    insert = (
+        "INSERT INTO gw.attempt (attempt_id, action_id, attempt_no, idempotency_key, grant_id,"
+        " check_kind, check_approval, check_basis, check_seen_seq, check_vt,"
+        " check_approval_expires_at, sent_vt) VALUES ('A-0001/1', 'A-0001', 1, 'A-0001',"
+        " 'G-0001', %s, %s, %s, 1, 0, %s, 0)"
+    )
+    basis = Jsonb({"exact_ok": True, "sufficient_ok": True})
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _action(conn, "A-0001", state="dispatched")
+        _with_grant(conn, "A-0001", "G-0001")
+        for kind, approval, expires_at in [
+            ("full", "approved", None),
+            ("full", "revoked", 5),
+            ("exempt", None, 5),
+        ]:
+            with pytest.raises(psycopg.errors.CheckViolation):
+                conn.execute(
+                    insert, (kind, approval, None if approval is None else basis, expires_at)
+                )
+        conn.execute(insert, ("full", "approved", basis, 3_600_000))
+
+
+def test_an_intent_never_changes_and_never_reopens(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _intent(conn)
+        with pytest.raises(psycopg.errors.RaiseException, match="cannot change or reopen"):
+            _set(conn, "intent", "operation", "reserve_inventory")
+        _set(conn, "intent", "closed", True)
+        with pytest.raises(psycopg.errors.RaiseException, match="cannot change or reopen"):
+            _set(conn, "intent", "closed", False)
+
+
+def test_a_report_names_the_response_that_accepted_it(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
+        conn.execute(
+            "INSERT INTO gw.tool_call (call_no, tool, result, as_of_seq, vt)"
+            " VALUES (1, 'submit_final_report', '{}', 0, 0)"
+        )
+        conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W2', 1)")
+
+
+def test_an_intent_is_never_deleted(migrated_database: str) -> None:
+    """Deleting and re-adding an intent would reopen it (0010)."""
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _intent(conn)
+        _refused(conn, psycopg.errors.RaiseException, "DELETE FROM gw.intent")
+
+
+def test_a_closed_run_stays_closed_and_its_counters_move_forward(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        conn.execute("UPDATE gw.run_state SET run_closed = true, last_seq = 5")
+        for change in (
+            "UPDATE gw.run_state SET run_closed = false",
+            "UPDATE gw.run_state SET last_seq = 4",
+            "UPDATE gw.run_state SET last_action_no = -1",
+            "UPDATE gw.run_state SET last_call_no = -1",
+            "DELETE FROM gw.run_state",
+        ):
+            _refused(conn, psycopg.errors.RaiseException, change)
+        assert conn.execute("SELECT run_closed, last_seq FROM gw.run_state").fetchone() == (
+            True,
+            5,
+        )
+
+
+def test_reports_are_history_for_every_role(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO gw.tool_call (call_no, tool, result, as_of_seq, vt)"
+            " VALUES (1, 'submit_final_report', '{}', 0, 0)"
+        )
+        conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
+        _refused(conn, psycopg.errors.RaiseException, "UPDATE gw.report SET worker = 'W2'")
+        _refused(conn, psycopg.errors.RaiseException, "DELETE FROM gw.report")
 
 
 def test_the_run_has_one_state_row(migrated_database: str) -> None:
@@ -287,7 +370,7 @@ def test_action_event_is_append_only_for_every_role(migrated_database: str) -> N
 EXPECTED: dict[str, dict[str, set[str]]] = {
     "ff_gw": {
         table: {"SELECT", "INSERT", "UPDATE", "DELETE"}
-        if table != "action_event"
+        if table not in ("action_event", "report")
         else {"SELECT", "INSERT"}
         for table in TABLES
     },
@@ -297,7 +380,8 @@ EXPECTED: dict[str, dict[str, set[str]]] = {
     "ff_harness": {table: set() for table in TABLES},
     "ff_agent": {table: set() for table in TABLES},
 }
-"""Privileges on every gw table, from 0008's table: ff_gw writes all but action_event."""
+"""Privileges on every gw table: 0008's table, plus record 0010's `report`, which ff_gw
+only adds to."""
 
 
 @pytest.mark.parametrize("role", sorted(EXPECTED))

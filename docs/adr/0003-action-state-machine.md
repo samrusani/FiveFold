@@ -1,6 +1,7 @@
 # 0003: Action state machine and invariants
 
 Status: Accepted (2026-11-14)
+Amended by: 0010 (2026-11-14): T5, T11 and T12 reasons; escalation; final report and run closing
 Date: 2026-11-14
 Spec sections affected: Action state machine, Gateway (write tools, get_action_status, submit_final_report, startup), Data model (Action, Attempt, ActionEvent)
 Resolves M0 questions: 8, 9, 10, 11, 12 (state side), 15 (state side), 16; part of 38
@@ -36,14 +37,14 @@ No other transitions exist. Final states have no outgoing transitions.
 | T2 | Proposed | PendingApproval | Basis fresh; approval request filed (0002) | approval_requested |
 | T3 | Proposed | Rejected | A cited fact is stale, or the run has closed | stale_input, run_closed |
 | T4 | PendingApproval | Authorized | Approval granted and basis fresh | approved |
-| T5 | PendingApproval | Rejected | Denied, timed out, a cited fact went stale, or the run has closed | approval_denied, approval_timeout, stale_input, run_closed |
+| T5 | PendingApproval | Rejected | Denied, timed out, revoked or expired before the gateway saw the approval (0010), a cited fact went stale, or the run has closed | approval_denied, approval_timeout, approval_revoked, approval_expired, stale_input, run_closed |
 | T6 | Authorized | Dispatched | I3 check passed; attempt row committed before the send | dispatched |
 | T7 | Authorized | Rejected | Authority invalid or basis stale at the dispatch check, or the run has closed | approval_revoked, approval_expired, stale_input, run_closed |
 | T8 | Dispatched | Confirmed | The destination answered committed, new or replayed | committed |
 | T9 | Dispatched | Failed | The destination answered with a definitive rejection | destination_rejected, precondition_failed |
 | T10 | Dispatched | OutcomeUnknown | Timeout, transport error, 5xx, in_progress, or an open attempt found at startup | timeout, transport_error, server_error, in_progress, recovered_open_attempt |
-| T11 | OutcomeUnknown | Confirmed | C1 status lists the effect; a C2 or C3 retry answers committed; a human attests committed | status_found, retry_committed, human_attested |
-| T12 | OutcomeUnknown | Failed | Settled negative (0005): C1 status empty after the settle time; a C2 or C3 retry definitively rejected; a human attests not committed | status_settled_empty, retry_rejected, human_attested |
+| T11 | OutcomeUnknown | Confirmed | C1 status lists the effect; a human attests committed. A retry's answer arrives in Dispatched and fires T8 (0010). | status_found, human_attested |
+| T12 | OutcomeUnknown | Failed | Settled negative (0005): C1 status empty after the settle time; a human attests not committed. A retry's rejection arrives in Dispatched and fires T9 (0010). | status_settled_empty, human_attested |
 | T13 | OutcomeUnknown | Dispatched | Retry with the same idempotency key; C2 or C3 only; at C2 the retry check (I3) must pass first | retry |
 
 ### Classifying a destination answer
@@ -71,6 +72,8 @@ Escalation is not a state. The gateway writes an `escalated` note event on an Ou
 | C3 | After `max_attempts` |
 
 A human resolves an escalation through the admin API by attesting committed (with the effect id) or not committed. This fires T11 or T12 with reason `human_attested`, and counts as a human intervention. If nobody resolves it, the action stays OutcomeUnknown when the run ends.
+
+Escalation ends automatic recovery: after the `escalated` note, the gateway sends no more status probes or retries. An attestation that nothing committed is accepted only at or after the settle time S past the action's latest send (0010).
 
 ### Dispatch: Authorized actions are the outbox
 
@@ -106,6 +109,8 @@ G2 checks the final report against its records before accepting it, using the ev
 - A report with any conflicting claim is refused with `report_inconsistent`. The refusal names each conflicting claim and the gateway's record for it, so the agent can correct the report and resubmit.
 - The agents' phase ends when every agent worker has submitted a report, stopped with an error, or used up its budget (0009). The gateway then closes the run. It refuses new proposals with `run_closed`, and moves every action not yet dispatched (Proposed, PendingApproval, Authorized) to Rejected with reason `run_closed`. Reconciliation of dispatched actions continues during the drain window.
 - Closing stops a late approval from sending an order after the report said it was not done.
+- The gateway closes the run in the same transaction that accepts the last report it expects. An accepted `not_done` claim from an earlier report closes its intent in the same transaction: the intent's undispatched actions move to Rejected with reason `run_closed`, and later proposals for it are refused with `run_closed` (0010).
+- "The effect ids the gateway recorded for the intent" include every effect a C1 status answer listed (0010).
 
 ### What the agent is told
 
@@ -148,11 +153,12 @@ I1 to I6 are restated so each one has a check. I5 now also covers the final repo
 ### Data model
 
 - `action`: action_id, task_id, intent_id, operation, target, args, action_key, identity (on for G2, off for G1), basis (fact key to version), state, grant_id, idempotency_key, effect_id, contract, created_vt, updated_vt.
-- `attempt`: attempt_id, action_id, attempt_no, idempotency_key, grant_id, check (kind, approval status seen, versions seen, check_vt), sent_vt, answer_class, answer_ref, answered_vt.
+- `attempt`: attempt_id, action_id, attempt_no, idempotency_key, grant_id, check (kind, approval status seen, the approval's expiry when approved (0010), versions seen, check_vt), sent_vt, answer_class, answer_ref, answered_vt.
 - `action_event`: seq, action_id, kind (transition or note), from_state, to_state (equal for notes), reason, details, vt, wall_at.
 - `escalation`: escalation_id, action_id, opened_vt, resolved_vt, resolution, effect_id, actor.
 - `tool_call`: seq, tool, args, result, action_id, vt.
-- `intent`: intent_id, operation. One row per task intent, created at run start; the lock anchor for 0001.
+- `intent`: intent_id, operation, closed. One row per task intent, created at run start; the lock anchor for 0001. An accepted `not_done` claim closes it (0010).
+- `report`: worker, call_no. Each agent worker's first accepted final report (0010).
 
 ### Testing plan
 
