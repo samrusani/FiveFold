@@ -25,7 +25,7 @@ import hashlib
 import os
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import psycopg
@@ -42,6 +42,13 @@ MIGRATION_FILE = re.compile(r"^(?P<number>\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$"
 ADVISORY_LOCK_KEY = 5_000_005
 """Session advisory lock held while migrating, so two runners never interleave."""
 
+DATABASE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+"""Database names this runner creates or drops: lowercase ASCII, at most 63 bytes.
+
+PostgreSQL truncates longer identifiers to 63 bytes (NAMEDATALEN - 1) without an error,
+so dropping an overlong name would drop whichever database has its first 63 bytes.
+"""
+
 Connection = psycopg.Connection[TupleRow]
 
 
@@ -51,12 +58,18 @@ class MigrationError(Exception):
 
 @dataclass(frozen=True)
 class Migration:
-    """One migration file."""
+    """One migration file, read once.
+
+    `sql` holds the bytes that were hashed, and the runner executes exactly those bytes,
+    so the recorded checksum always describes what ran, even if the file changes while
+    the runner waits for its lock.
+    """
 
     number: int
     name: str
     path: Path
     sha256: str
+    sql: bytes = field(repr=False)
 
 
 def discover(directory: Path) -> list[Migration]:
@@ -73,8 +86,9 @@ def discover(directory: Path) -> list[Migration]:
         match = MIGRATION_FILE.match(path.name)
         if match is None:
             raise MigrationError(f"bad migration file name: {path.name}")
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        migrations.append(Migration(int(match["number"]), path.name, path, digest))
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        migrations.append(Migration(int(match["number"]), path.name, path, digest, content))
     migrations.sort(key=lambda migration: migration.number)
     numbers = [migration.number for migration in migrations]
     if numbers != list(range(1, len(numbers) + 1)):
@@ -125,7 +139,7 @@ def migrate(conn: Connection, directory: Path) -> list[str]:
                     raise MigrationError(f"{migration.name} changed after it was applied")
                 continue
             with conn.transaction():
-                conn.execute(migration.path.read_bytes())
+                conn.execute(migration.sql)
                 conn.execute(
                     "INSERT INTO public.schema_migration (filename, sha256) VALUES (%s, %s)",
                     (migration.name, migration.sha256),
@@ -143,6 +157,7 @@ def recreate_database(admin_dsn: str, name: str) -> str:
     collation orders text by byte value, so query results do not depend on the host's
     locale (0009).
     """
+    check_database_name(name)
     drop_database(admin_dsn, name)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
         conn.execute(
@@ -155,9 +170,19 @@ def recreate_database(admin_dsn: str, name: str) -> str:
 
 def drop_database(admin_dsn: str, name: str) -> None:
     """Drop the database `name` if it exists, closing any open connections to it."""
+    check_database_name(name)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
         conn.execute(
             sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+        )
+
+
+def check_database_name(name: str) -> None:
+    """Refuse a name PostgreSQL would truncate or that needs quoting, before any change."""
+    if DATABASE_NAME.fullmatch(name) is None:
+        raise MigrationError(
+            f"database names must be lowercase letters, digits and underscores, "
+            f"start with a letter or underscore, and be at most 63 bytes: {name!r}"
         )
 
 
