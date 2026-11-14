@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fivefold.harness.migrations import MigrationError, discover
+from fivefold.harness.migrations import MigrationError, check_database_name, discover, drop_database
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "db" / "migrations"
 
@@ -71,3 +71,21 @@ def test_checksum_follows_content(tmp_path: Path) -> None:
     before = discover(tmp_path)[0].sha256
     path.write_text("SELECT 2;\n", encoding="utf-8")
     assert discover(tmp_path)[0].sha256 != before
+
+
+@pytest.mark.parametrize("name", ["fivefold_dev", "_x", "run_0001", "a" * 63])
+def test_database_names_the_runner_accepts(name: str) -> None:
+    check_database_name(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["a" * 64, "Fivefold", "fivefold-dev", "1abc", "", "fivefold_dev\n", "f\u00efvefold"]
+)
+def test_database_names_the_runner_refuses(name: str) -> None:
+    with pytest.raises(MigrationError):
+        check_database_name(name)
+
+
+def test_an_overlong_name_is_refused_before_any_connection() -> None:
+    with pytest.raises(MigrationError, match="at most 63 bytes"):
+        drop_database("postgresql://nobody@invalid.invalid/postgres", "a" * 64)
