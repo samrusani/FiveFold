@@ -46,6 +46,19 @@ def test_bad_names_are_rejected(tmp_path: Path, name: str) -> None:
         discover(tmp_path)
 
 
+def test_a_missing_directory_is_an_error(tmp_path: Path) -> None:
+    # A mistyped path must not look like a database with nothing to apply.
+    with pytest.raises(MigrationError, match="not found"):
+        discover(tmp_path / "no-such-directory")
+
+
+def test_a_file_is_not_a_migration_directory(tmp_path: Path) -> None:
+    path = tmp_path / "0001_schemas.sql"
+    path.write_text("SELECT 1;\n", encoding="utf-8")
+    with pytest.raises(MigrationError, match="not found"):
+        discover(path)
+
+
 def test_other_files_are_ignored(tmp_path: Path) -> None:
     _write(tmp_path, "0001_only.sql")
     (tmp_path / "README.md").write_text("notes\n", encoding="utf-8")

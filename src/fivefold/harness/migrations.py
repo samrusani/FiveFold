@@ -63,8 +63,11 @@ def discover(directory: Path) -> list[Migration]:
     """Return the migrations in `directory` in number order.
 
     Every `.sql` file must be named `NNNN_name.sql`, and the numbers must run 1, 2, 3 and
-    so on, with no gap and no duplicate.
+    so on, with no gap and no duplicate. A missing directory is an error, not an empty
+    list: otherwise a mistyped path would look like a database with nothing to apply.
     """
+    if not directory.is_dir():
+        raise MigrationError(f"migration directory not found: {directory}")
     migrations: list[Migration] = []
     for path in sorted(directory.glob("*.sql")):
         match = MIGRATION_FILE.match(path.name)
@@ -99,14 +102,16 @@ def migrate(conn: Connection, directory: Path) -> list[str]:
     if encoding != "UTF8":
         raise MigrationError(f"the database must use UTF8 encoding, not {encoding}")
     migrations = discover(directory)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS public.schema_migration ("
-        " filename text PRIMARY KEY,"
-        " sha256 text NOT NULL,"
-        " applied_at timestamptz NOT NULL DEFAULT now())"
-    )
+    # Take the lock before anything else: CREATE TABLE IF NOT EXISTS does not serialize
+    # concurrent creators, and two runners on a fresh database would otherwise collide.
     conn.execute("SELECT pg_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
     try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS public.schema_migration ("
+            " filename text PRIMARY KEY,"
+            " sha256 text NOT NULL,"
+            " applied_at timestamptz NOT NULL DEFAULT now())"
+        )
         rows = conn.execute("SELECT filename, sha256 FROM public.schema_migration").fetchall()
         applied = {str(row[0]): str(row[1]) for row in rows}
         missing = sorted(set(applied) - {migration.name for migration in migrations})

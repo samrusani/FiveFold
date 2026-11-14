@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import threading
 from pathlib import Path
 
 import psycopg
@@ -16,6 +17,7 @@ from fivefold.harness.migrations import (
     discover,
     drop_database,
     migrate,
+    recreate_database,
 )
 
 pytestmark = pytest.mark.pg
@@ -97,6 +99,56 @@ def test_refuses_a_database_that_is_not_utf8(admin_dsn: str) -> None:
             migrate(conn, DB_DIR / "migrations")
     finally:
         drop_database(admin_dsn, name)
+
+
+def test_runners_started_together_apply_each_migration_once(admin_dsn: str) -> None:
+    """Runners started at the same moment on a fresh database must not collide.
+
+    The runner once created its tracking table before taking the advisory lock, and
+    PostgreSQL could reject one runner's CREATE TABLE IF NOT EXISTS with a duplicate key.
+    A race shows up only some of the time, so the test runs several rounds, each releasing
+    all runners at once on a new database.
+    """
+    rounds, runners = 10, 8
+    expected = sorted(migration.name for migration in discover(DB_DIR / "migrations"))
+    name = "fivefold_test_race"
+    try:
+        for _ in range(rounds):
+            applied, errors = _migrate_together(recreate_database(admin_dsn, name), runners)
+            assert errors == []
+            assert sorted(applied) == expected
+    finally:
+        drop_database(admin_dsn, name)
+
+
+def _migrate_together(dsn: str, runners: int) -> tuple[list[str], list[Exception]]:
+    """Release `runners` migration runners on `dsn` at the same moment.
+
+    Returns every migration name any runner applied, and every error raised.
+    """
+    start = threading.Barrier(runners)
+    guard = threading.Lock()
+    applied: list[str] = []
+    errors: list[Exception] = []
+
+    def run() -> None:
+        try:
+            with psycopg.connect(dsn, autocommit=True) as conn:
+                start.wait()
+                names = migrate(conn, DB_DIR / "migrations")
+        except Exception as error:
+            with guard:
+                errors.append(error)
+        else:
+            with guard:
+                applied.extend(names)
+
+    threads = [threading.Thread(target=run) for _ in range(runners)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return applied, errors
 
 
 def test_run_databases_use_utf8_and_c_collation(empty_database: str) -> None:
