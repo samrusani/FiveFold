@@ -145,7 +145,7 @@ Detail: 0002.
 - The simulator's approvals service is the system of record. The scenario's `authority` section is the policy: a supplier allowlist, a per-order ceiling, an auto-approval threshold, the approval lifetime and the scripted approver's rules. The gateway has no policy file of its own in v0.1.
 - Every write cites exactly one approval. Policy decides each request at once: it denies orders from suppliers off the allowlist or above the per-order ceiling, approves orders at or below the auto-approval threshold and every reservation, and queues the rest for the scripted approver. An approval backs at most one effect.
 - A gateway grant binds one approval to one action. Its states are pending, active, consumed (at the first dispatch), denied, timed_out, released, revoked and expired.
-- Before the first send and before every C2 retry, the gateway checks the approval with the approvals service. An approval that expires before the check's time plus the settle time S counts as expired (0010). C3 retries rely on the destination, which checks the approval atomically at commit.
+- Before the first send and before every C2 retry, the gateway checks the approval with the approvals service. An approval that expires before the send's time plus the settle time S counts as expired (0010). C3 retries rely on the destination, which checks the approval atomically at commit.
 
 ## Action state machine
 
