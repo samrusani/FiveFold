@@ -6,11 +6,16 @@ results are reproducible. The nightly job uses `nightly`, which explores far mor
 Tests that need PostgreSQL carry the marker `pg`. FIVEFOLD_ADMIN_DSN must point at a
 PostgreSQL 16 server, connecting as a superuser. The default is the local Docker Compose
 database (`make db-up`).
+
+Every database the tests create starts with FIVEFOLD_TEST_DB_PREFIX (default
+`fivefold_test`). Test runs that share one server at the same time need different
+prefixes, or they drop each other's databases.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +43,15 @@ settings.register_profile("nightly", max_examples=2_000, deadline=None, print_bl
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
-TEST_DATABASE = "fivefold_test"
+DB_PREFIX = os.environ.get("FIVEFOLD_TEST_DB_PREFIX", "fivefold_test")
+if not re.fullmatch(r"[a-z_][a-z0-9_]{0,39}", DB_PREFIX):
+    raise ValueError("FIVEFOLD_TEST_DB_PREFIX must be at most 40 lowercase letters, digits or _")
+
+
+@pytest.fixture(scope="session")
+def db_prefix() -> str:
+    """The prefix of every database this test run creates."""
+    return DB_PREFIX
 
 
 @pytest.fixture(scope="session")
@@ -53,9 +66,9 @@ def admin_dsn() -> str:
 @pytest.fixture
 def empty_database(admin_dsn: str) -> Iterator[str]:
     """A fresh, empty database for one test, dropped afterwards. Yields its DSN."""
-    dsn = recreate_database(admin_dsn, TEST_DATABASE)
+    dsn = recreate_database(admin_dsn, DB_PREFIX)
     yield dsn
-    drop_database(admin_dsn, TEST_DATABASE)
+    drop_database(admin_dsn, DB_PREFIX)
 
 
 @pytest.fixture
@@ -94,7 +107,7 @@ class GatewayDatabase:
 @pytest.fixture(scope="session")
 def gateway_database(admin_dsn: str) -> Iterator[GatewayDatabase]:
     """One migrated run database for the session's gateway stores, dropped at the end."""
-    name = "fivefold_test_gateway"
+    name = f"{DB_PREFIX}_gateway"
     dsn = recreate_database(admin_dsn, name)
     with psycopg.connect(dsn, autocommit=True) as conn:
         migrate(conn, DB_DIR / "migrations")

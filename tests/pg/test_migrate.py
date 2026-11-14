@@ -85,8 +85,8 @@ def test_refuses_when_an_applied_migration_is_missing(empty_database: str, tmp_p
             migrate(conn, migrations)
 
 
-def test_refuses_a_database_that_is_not_utf8(admin_dsn: str) -> None:
-    name = "fivefold_test_ascii"
+def test_refuses_a_database_that_is_not_utf8(admin_dsn: str, db_prefix: str) -> None:
+    name = f"{db_prefix}_ascii"
     drop_database(admin_dsn, name)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
         conn.execute(
@@ -106,7 +106,7 @@ def test_refuses_a_database_that_is_not_utf8(admin_dsn: str) -> None:
         drop_database(admin_dsn, name)
 
 
-def test_runners_started_together_apply_each_migration_once(admin_dsn: str) -> None:
+def test_runners_started_together_apply_each_migration_once(admin_dsn: str, db_prefix: str) -> None:
     """Runners started at the same moment on a fresh database must not collide.
 
     The runner once created its tracking table before taking the advisory lock, and
@@ -116,7 +116,7 @@ def test_runners_started_together_apply_each_migration_once(admin_dsn: str) -> N
     """
     rounds, runners = 10, 8
     expected = sorted(migration.name for migration in discover(DB_DIR / "migrations"))
-    name = "fivefold_test_race"
+    name = f"{db_prefix}_race"
     try:
         for _ in range(rounds):
             applied, errors = _migrate_together([recreate_database(admin_dsn, name)] * runners)
@@ -246,9 +246,11 @@ def test_the_runner_executes_the_bytes_it_hashed(empty_database: str, tmp_path: 
     assert recorded == (hashlib.sha256(first).hexdigest(),)
 
 
-def test_a_name_postgres_would_truncate_never_reaches_the_server(admin_dsn: str) -> None:
+def test_a_name_postgres_would_truncate_never_reaches_the_server(
+    admin_dsn: str, db_prefix: str
+) -> None:
     """PostgreSQL truncates identifiers to 63 bytes, so an overlong name could drop another."""
-    victim = "fivefold_test_" + "v" * 49
+    victim = f"{db_prefix}_" + "v" * (62 - len(db_prefix))
     assert len(victim.encode()) == 63
     recreate_database(admin_dsn, victim)
     try:
