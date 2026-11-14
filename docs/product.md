@@ -10,7 +10,7 @@ Agents now write to real systems through tools, and ordinary failures break them
 
 - **Duplicates after a lost reply.** In the LIMBO study, agents still reported success in 90% of runs that produced a duplicate. Idempotency keys cut duplicates from 28% to 4%.
 - **Stale approvals.** In the CommitGuard study, 207 of 216 runs whose approval had been invalidated still committed.
-- **Judges miss it.** LLM judges passed 6 to 11 of 11 forbidden database writes; a rule-based check of the writes caught all 11.
+- **Judges miss it.** LLM judges passed 6 to 11 of 11 forbidden database writes; a rule-based check of the writes caught all 11. The source for this finding is not yet confirmed (see Sources).
 - **The plumbing does not solve it.** Temporal warns activities may run more than once. LangGraph re-runs model and API calls after a checkpoint. MCP has no idempotency field, and a proposal to add one was closed unmerged.
 
 All of this evidence comes from 2026 preprints that have not been peer-reviewed. See Sources at the end.
@@ -57,11 +57,11 @@ Out of scope (non-goals): an agent framework, a durable execution engine, a mode
 2. **Approval goes stale.** After approval, the quote changes or the approval is revoked. The gateway refuses to send and names which fact or approval invalidated which action. Without the gateway, the order goes through anyway.
 3. **Outcome unknown.** The same lost reply hits a destination with no idempotency key and no status query (contract level C0). The system reports "outcome unknown" and what must be reconciled, instead of guessing.
 
-Each demo runs the baseline and the gateway side by side on the same seed, in about three minutes. Demos use a scripted model, so they need no API key. Decision record 0006 pins each demo's faults and contract level.
+Each demo runs the baseline and the gateway side by side on the same seed. A run takes seconds; walking through a demo in the viewer takes about three minutes. Demos use a scripted model, so they need no API key. Decision record 0006 pins each demo's faults and contract level.
 
 ## Success measures
 
-These are proposed targets for the maintainer to confirm, not commitments.
+These are working targets, not commitments.
 
 - A stranger reproduces demo 1 from the README in under 15 minutes on a clean machine.
 - The report publishes raw results, denominators, configurations and model versions.
@@ -74,7 +74,7 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 
 | Prior work | What it covers | What Fivefold adds |
 | --- | --- | --- |
-| LIMBO (Microsoft preprint) | Duplicates and false success after lost replies | Authority and freshness checks; runnable code (LIMBO's release unconfirmed) |
+| LIMBO (preprint) | Duplicates and false success after lost replies | Authority and freshness checks; runnable code (LIMBO's release unconfirmed) |
 | CapLease | One approval executed more than once | Freshness and reporting checks |
 | CommitGuard | Stale or revoked authority at commit | Duplicates and reporting checks |
 | Cordon | Outbox, idempotency keys, scoped approval | Released code, a reporting check, baselines |
@@ -93,15 +93,15 @@ Two openings are untaken: an MCP conformance test for lost replies (requested in
 
 ## Sources
 
-Checked 14 Nov 2026. All papers are preprints.
+All papers are preprints that have not been peer-reviewed. Titles and IDs were checked by web search on 14 Nov 2026, with the exceptions noted. Check every figure quoted above against its paper before the report is published.
 
-- [Where Does Exactly-Once Live? (LIMBO), arXiv 2609.29095](https://arxiv.org/abs/2609.29095)
-- [Beyond Single-Use Tokens (CapLease), arXiv 2608.01710](https://arxiv.org/pdf/2608.01710)
-- [When Evaluators of AI Agents Disagree, arXiv 2611.14581](https://arxiv.org/abs/2611.14581)
-- [ReliabilityBench, arXiv 2601.06112](https://arxiv.org/abs/2601.06112v1)
-- [Temporary Authority, Permanent Effects (CommitGuard), arXiv 2607.10487](https://arxiv.org/pdf/2607.10487)
-- [Cordon, arXiv 2606.17573](https://arxiv.org/pdf/2606.17573)
-- [UndoBench, arXiv 2610.05622](https://arxiv.org/html/2610.05622)
+- [Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents (LIMBO), arXiv 2609.29095](https://arxiv.org/abs/2609.29095)
+- [Beyond Single-Use Tokens: Durable Authorization State for Replay-Resistant LLM Agent Actions (CapLease), arXiv 2608.01710](https://arxiv.org/abs/2608.01710)
+- [When Evaluators of AI Agents Disagree, arXiv 2611.14581](https://arxiv.org/abs/2611.14581). Not confirmed: a web search on 14 Nov 2026 found no paper with this ID or title. Confirm or remove before launch.
+- [ReliabilityBench: Evaluating LLM Agent Reliability Under Production-Like Stress Conditions, arXiv 2601.06112](https://arxiv.org/abs/2601.06112)
+- [Temporary Authority, Permanent Effects: Commit-Time Authorization for LLM Agents (CommitGuard), arXiv 2607.10487](https://arxiv.org/abs/2607.10487)
+- [Cordon: Semantic Transactions for Tool-Using LLM Agents, arXiv 2606.17573](https://arxiv.org/abs/2606.17573)
+- [UndoBench: Separating Task Competence from Recovery Capability in Tool-Using AI Agents, arXiv 2610.05622](https://arxiv.org/abs/2610.05622). The title comes from secondary coverage; confirm it against arXiv.
 - [IdempotencyBench](https://github.com/gssanjana4/idempotencybench)
 - [ActionProxy](https://github.com/ActionProxy/actionproxy)
 - [MCP issue #3394](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/3394) and [idempotencyKey proposal, closed](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3182)

@@ -91,7 +91,7 @@ CLAUDE.md reserves these for the maintainer, who accepted these changes on 14 No
 
 ## Changes after the independent review
 
-An independent reviewer read all nine drafts against the original docs and walked through concrete failure cases. It reported 17 findings. All are fixed in the current drafts:
+An independent reviewer read all nine drafts against the original docs and walked through concrete failure cases. It reported 17 findings. All were fixed before acceptance:
 
 1. C2 retries no longer re-check the sufficient rules. The action's own earlier commit would fail them, so demo 1 could never reconcile (0002, 0003, 0005).
 2. The scripted agent waited too little:

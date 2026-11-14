@@ -13,7 +13,7 @@ Status: M0 decisions accepted, 14 Nov 2026. Milestone contents follow decision r
 | M2 | 3 | Authority and freshness | I1 to I7 pass |
 | M3 | 4 | Full scenarios | All 3 demos run |
 | M4 | 5 | Live study | Report drafted |
-| M5 | 6 | Release v0.1 | Repo public |
+| M5 | 6 | Release v0.1 | v0.1 released |
 
 After v0.1: Temporal and DBOS baselines, the MCP conformance test, the TLA+ model, run shrinking and the AliceMemory adapter for F8 (v0.2), then receipt export (v0.3).
 
@@ -22,8 +22,8 @@ After v0.1: Temporal and DBOS baselines, the MCP conformance test, the TLA+ mode
 | Team | Owns | First deliverable |
 | --- | --- | --- |
 | Maintainer (architect) | The semantics: action identity, grants, states, the five property definitions; approves every contract change | Frozen design doc |
-| T1 Gateway | Gateway, state machine, recovery, policy | Recovery from a lost reply |
-| T2 Simulator and faults | Simulator services, tool contracts, effects ledger, fault scheduler | Purchase-order service with fault F2 |
+| T1 Gateway | Gateway, state machine, recovery, grants, admin API | Recovery from a lost reply |
+| T2 Simulator, harness and faults | Simulator services, approvals service, tool contracts, effects ledger, the harness (scheduler, virtual clock, transports) and the fault scheduler | Purchase-order service with fault F2 |
 | T3 Evaluator | Property checks, metrics, report generator | Scoring for properties 1 and 5 |
 | T4 Agents and baselines | LangGraph agent, model adapter, B0, later B1 and B2 | Agent completing demo 1 |
 | T5 Viewer and docs | Viewer, README, decision records | Run timeline |
@@ -34,8 +34,8 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 ## Exit criteria
 
 1. **M0 Design freeze.** Decision records cover action identity, grant lifecycle, state machine, property definitions, tool contracts and the fault catalog (done: 0001 to 0009 accepted on 14 Nov 2026). Repo scaffold, CI and Docker Compose work.
-2. **M1 Thin slice.** One agent with the scripted model, submit_purchase_order at contract level C2, faults F2 and F11, the deterministic scheduler and virtual clock, gateway states and recovery, evaluator properties 1 and 5. Demo 1 runs from a seed; B0 places a second order and G2 does not.
-3. **M2 Authority and freshness.** Approvals and grants, recorded reads, contract levels C0 to C3, faults F1, F6, F7, F9 and F12, properties 2 to 4. Hypothesis tests for I1 to I7 pass.
+2. **M1 Thin slice.** One agent with the scripted model, submit_purchase_order at contract level C2, approval by policy with grant binding, recorded reads, faults F2 and F11, the deterministic scheduler and virtual clock, gateway states and recovery, evaluator properties 1 and 5. Demo 1 runs from a seed; B0 places a second order and G2 does not.
+3. **M2 Authority and freshness.** The scripted approver, revocation, expiry and stale-input rejections, contract levels C0 to C3, faults F1, F6, F7, F9 and F12, properties 2 to 4. Hypothesis tests for I1 to I7 pass.
 4. **M3 Full scenarios.** Demos 2 and 3, faults F3, F4, F5 and F10, recorded playback, viewer v1 (its tooling gets its own decision record) and T6's held-out set.
 5. **M4 Study.** Pilot 10 to 20 live episodes, set the spend cap, run B0, G1 and G2 across contract levels, draft the report.
 6. **M5 Release v0.1.** README with a two-minute and a twenty-minute path, a three-minute video, the report with raw data, a limitations section and full citations.
@@ -47,7 +47,8 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [x] Maintainer: choose the name and license (Fivefold, Apache-2.0)
 - [ ] T1: gw schema with migrations; action and grant tables with unique constraints
 - [ ] T1: state machine module with the transition table and I1 to I7 as assertions
-- [ ] T2: purchase-order service with the C0 to C3 capability flags, the effects ledger and fact history
+- [ ] T2: purchase-order service with the idempotency_key capability (C2), the effects ledger and fact history, plus policy approvals in the approvals service
+- [ ] T2: deterministic scheduler with the virtual clock and in-process transports, tested for ordering, timers, crash and restart
 - [ ] T2: fault scheduler that fires F2 on an event counter
 - [ ] T3: evaluator that reads the sim ledger and the harness message log, and scores properties 1 and 5 to JSON
 - [ ] T4: LangGraph agent for the procurement task over gateway tools, the B0 variant and the scripted model
@@ -57,7 +58,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 ## Budget
 
 - **GPUs:** none. Local models run on contributors' own machines through Ollama.
-- **Live model spend:** set the cap after the pilot, which measures the real cost per episode. Runs needed = scenarios × configs × trials, for example 30 × 3 × 5 = 450.
+- **Live model spend:** set the cap after the pilot, which measures the real cost per episode. Runs needed = scenarios × configs × contract levels × trials, for example 30 × 3 × 4 × 5 = 1,800.
 - **Hosting:** none; everything runs locally.
 
 ## Risks
@@ -78,6 +79,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [ ] Report includes raw results, denominators, configurations and model versions
 - [ ] Limitations section states what each guarantee depends on
 - [ ] Citations give full titles and arXiv IDs, labelled as preprints
+- [ ] Every figure quoted from a preprint is checked against the paper; unconfirmed citations are fixed or removed
 - [ ] Report shared with the cited papers' authors; MCP issue #3394 gets a link once the conformance test exists
 - [ ] Open-source files in place: LICENSE, CODE_OF_CONDUCT and a security policy
 - [ ] Docs and git history audited for secrets and personal identifiers

@@ -6,7 +6,7 @@ The project is in its design phase. Most contributions today are reviews of the 
 
 - The contracts live in `docs/spec.md`. The maintainer owns their meaning: action identity, the grant lifecycle, states and transitions, invariants, the five property definitions, tool names and return shapes, contract levels and fault IDs.
 - To change any of these, open a pull request that adds a decision record in `docs/adr/`. Copy `0000-template.md`, set the status to **Proposed**, state the rule so that a test could check it, and list the alternatives you considered.
-- Only the maintainer marks a record **Accepted**. The pull request that accepts a record also updates every document it affects.
+- Only the maintainer marks a record **Accepted**. Accepted records are binding, like the spec. The pull request that accepts a record also updates every document it affects.
 
 ## Pull requests
 
@@ -24,7 +24,7 @@ Short sentences, plain words, specific numbers with units. No em dashes. Cite pa
 ## What never goes in the repository
 
 - Secrets. Keys come from environment variables.
-- Personal names, email addresses, local paths and machine details.
+- Personal names, personal email addresses, local paths and machine details. GitHub noreply addresses in commit metadata, and links to other people's public work in citations, are fine.
 - Held-out evaluation scenarios. They live outside this repository.
 
 ## License

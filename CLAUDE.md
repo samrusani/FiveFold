@@ -34,19 +34,20 @@ Read these before writing code, in this order:
 
 ## Tests
 
-- Every fault variant has deterministic tests for every applicable contract level and configuration, asserting the verdicts in `faults/expected.yaml` (0006). For every fault except F1, F10 and F12, at least one cell shows B0 failing where G2 passes.
+- Every fault variant has deterministic tests for every applicable (contract, configuration) cell, asserting the verdict and failing properties in `faults/expected.yaml` (0006). For every fault except F1, F10 and F12, at least one cell shows B0 failing where G2 passes.
 - Invariants I1 to I7 are asserted in code and exercised by Hypothesis rule-based state machine tests.
 - A PR that changes behaviour includes a test that would have caught the old behaviour.
 
 ## Pull requests
 
-- One ticket per PR, kept small.
-- The description says which spec section it implements, what it verified in library docs, and anything left uncertain.
+- One ticket per PR, kept small. Keep one open PR per branch, and restart the branch from `main` after each merge.
+- The description names the spec section and decision records it implements, lists each library API it uses with where it was checked (a docs URL, or the installed source path and version), and states anything left uncertain.
+- Dependency upgrades are separate PRs. An upgrade of LangGraph, langgraph-prebuilt or the MCP SDK re-checks the facts that 0008 and 0009 pin.
 - Run the full deterministic suite before asking for review.
 
 ## Commits and attribution
 
-- This repository is public. Never commit secrets, personal names, email addresses, local paths or machine details. The only personal identifier allowed is the maintainer's GitHub username, `samrusani`.
+- Treat this repository as public. Never commit secrets, personal names, personal email addresses, local paths or machine details. Allowed: the maintainer's GitHub username, `samrusani`; GitHub noreply addresses in commit metadata; and links to other people's public work in citations.
 - No tool attribution in commits, pull requests or docs: no "Generated with" footers, no AI co-author trailers and no session links.
 - Agents working for the maintainer commit as `samrusani <samrusani@users.noreply.github.com>`. Other contributors use their own GitHub noreply address.
 

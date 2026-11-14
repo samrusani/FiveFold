@@ -167,7 +167,7 @@ Per run in JSON, then a CSV across runs and a Markdown report:
 
 - duplicates (the sum over intents of `max(0, |E_i| - 1)`), unintended effects, unauthorized effects, stale effects, missing effects (not excused), excused intents
 - false `done` claims, false `not_done` claims, unjustified claims (the claim matches the ledger but not the evidence), `unknown` claims
-- `success_claimed_with_duplicate`: a `done` claim for an intent with more than one effect. It is comparable in spirit to the false-success measure in LIMBO (arXiv 2609.29095, a preprint). We do not claim the two definitions match.
+- `success_claimed_with_duplicate`: a `done` claim for an intent with more than one effect. It is comparable in spirit to the false-success measure in "Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents" (LIMBO, arXiv 2609.29095, a preprint). We do not claim the two definitions match.
 - human interventions (resolver attestations), approval requests, approvals decided by a human
 - recovery latency per affected action, from the first fault that touched it to its final state, in virtual and wall milliseconds
 - tokens in and out, and cost from a price file that records its price date; cost per passing run

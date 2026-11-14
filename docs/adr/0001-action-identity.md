@@ -75,7 +75,7 @@ Price is part of the key. An order at a different price is a different action.
 
 - **No intent in the key (the spec minus intent).** Two identical orders that the task wants separately would merge into one action. A replanned order with a different quantity would become a second order. Rejected.
 - **Free-text intent written by the agent.** A model rewrites free text after a resume, so the key changes and the duplicate guard fails. Rejected.
-- **Deduplicate by action_key only, without one action per intent.** This catches exact re-proposals but not replans with different args, which is the replay case studied in CapLease (arXiv 2608.01710, a preprint). Rejected.
+- **Deduplicate by action_key only, without one action per intent.** This catches exact re-proposals but not replans with different args, which is the replay case studied in "Beyond Single-Use Tokens: Durable Authorization State for Replay-Resistant LLM Agent Actions" (CapLease, arXiv 2608.01710, a preprint). Rejected.
 - **Auto-supersede: a new proposal replaces a live action that has not been sent.** The agent could change its mind without a new tool, but two workers with different args could replace each other forever. Rejected for v0.1. A `cancel_action` tool can come later if scenarios need it.
 - **Leave price out of the key.** Orders at different prices would merge, so the approved price and the sent price could differ. Rejected.
 

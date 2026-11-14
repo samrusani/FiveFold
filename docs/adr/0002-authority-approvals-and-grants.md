@@ -86,7 +86,7 @@ There is a second problem. If the evaluator judges authority from the gateway's 
 
 - **Grants live only in the gateway (the spec as written).** Simple, and close to single-use grant gateways. But B0 cannot be scored on property 2, and the evaluator would grade the gateway with the gateway's own records. Rejected.
 - **The gateway issues auto-approvals itself from a policy file.** This keeps the spec's YAML policy in the gateway, but the system under test would write the authority records it is graded on. Rejected for v0.1. Agent-specific guardrails in the gateway (the spec's later Cedar adapter) can sit on top of the authority system, not replace it.
-- **Re-bind an unused approval to a new action for the same intent.** This saves a human round trip after a stale-input rejection. But the human approved a decision made on facts that have since changed, which is the failure studied in CommitGuard (arXiv 2607.10487, a preprint). Rejected.
+- **Re-bind an unused approval to a new action for the same intent.** This saves a human round trip after a stale-input rejection. But the human approved a decision made on facts that have since changed, which is the failure studied in "Temporary Authority, Permanent Effects: Commit-Time Authorization for LLM Agents" (CommitGuard, arXiv 2607.10487, a preprint). Rejected.
 - **Consume the grant at Confirmed instead of at first dispatch.** The difference only matters if grants can move between actions, which rule 12 forbids. Consuming at dispatch records that the grant has been used to send. Chosen.
 - **Retry at C2 even when authority has lapsed.** Better liveness, but it can commit a new effect without valid authority. Rejected; the action stays unknown and a human decides.
 
