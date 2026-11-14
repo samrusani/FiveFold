@@ -16,7 +16,7 @@ Building the state machine module (`src/fivefold/gateway/state_machine.py` and `
 
 The module implements the accepted records exactly. For case 1 it raises `UnspecifiedCase` and changes nothing; a unit test pins this. The two dead reasons stay legal in the table and are never produced. Cases 3 to 5 are not handled in the module.
 
-Several more rules are implied by the accepted records but not written in them. The module follows the readings below, except reading 13, which belongs to the transport layer. This record asks the maintainer to confirm them, so the text and the code say the same thing.
+Several more rules are implied by the accepted records but not written in them. The module follows readings 7 to 10, 12 and 14 below. Reading 11 belongs to the dispatcher and reading 13 to the transport layer, neither of which is built yet. This record asks the maintainer to confirm them, so the text and the code say the same thing.
 
 ## Decision
 
