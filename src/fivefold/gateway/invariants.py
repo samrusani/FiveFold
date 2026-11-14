@@ -18,9 +18,11 @@ What each check covers:
 - I4: attempts are numbered 1 to n and share the action's key, which is its id; at most
   one attempt without idempotency keys; at most `max_attempts`.
 - I5: every logged response reports the state derived from the event log at its seq,
-  and every accepted report agrees with the records at its seq.
-- I6: the event log is gap-free and ordered in time, every action's transitions form a
-  legal chain from T1 that ends in its current state, and notes keep the state.
+  responses reflect the log in the order they were given, every refusal states the
+  records truthfully, and every accepted report agrees with the records at its seq.
+- I6: event seqs increase (a database sequence may leave gaps) and time never runs
+  backwards; every action's transitions form a legal chain from T1 that ends in its
+  current state, with matching timestamps; notes keep the state.
 - I7: at most one live or Confirmed action per intent, among actions with identity on.
 - Records: attempts' answers, escalations and notes agree with each other.
 
@@ -35,7 +37,7 @@ import itertools
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-from fivefold.domain.contracts import Capability
+from fivefold.domain.contracts import Capability, Contract
 from fivefold.gateway.records import (
     Action,
     ActionEvent,
@@ -56,20 +58,39 @@ from fivefold.gateway.state_machine import (
     LIVE_STATES,
     ActionState,
     AnswerClass,
+    CheckKind,
     EventKind,
-    GatewayRuleError,
     GatewaySettings,
     GrantState,
     IllegalTransition,
     Note,
     Reason,
+    ReconcileHow,
     check_transition,
-    reconcile_how,
-    required_check,
 )
 
 _S = ActionState
 _G = GrantState
+
+
+def _expected_check(contract: Contract, attempt_no: int) -> CheckKind | None:
+    """The check a send needs (I3), or None for a retry the contract forbids (I4)."""
+    if attempt_no == 1:
+        return CheckKind.FULL
+    if not contract.has(Capability.IDEMPOTENCY_KEY):
+        return None
+    if contract.has(Capability.CONDITIONAL_WRITE):
+        return CheckKind.EXEMPT
+    return CheckKind.EXACT_ONLY
+
+
+def _expected_how(contract: Contract, *, escalated: bool) -> ReconcileHow:
+    """What the agent is told about an unknown outcome (0003, 0005)."""
+    if escalated or not contract.capabilities:
+        return ReconcileHow.ESCALATED_TO_HUMAN
+    if contract.has(Capability.STATUS):
+        return ReconcileHow.QUERYING_STATUS
+    return ReconcileHow.RETRYING_WITH_SAME_KEY
 
 
 @dataclass(frozen=True)
@@ -212,9 +233,8 @@ def _i3(
     for attempt in attempts:
         n = attempt.attempt_no
         check = attempt.check
-        try:
-            expected = required_check(action.contract, n)
-        except GatewayRuleError:
+        expected = _expected_check(action.contract, n)
+        if expected is None:
             yield Violation("I3", a, f"attempt {n} is a retry, which {action.contract} forbids")
             continue
         if check.kind is not expected:
@@ -271,6 +291,8 @@ class _Derived:
     reason: Reason
     effect_id: str | None
     escalation_id: str | None
+    effects: tuple[str, ...]
+    """Every effect id learned so far: the recorded one and any a status answer listed."""
 
 
 def _derive(events: Sequence[ActionEvent], as_of_seq: int) -> _Derived | None:
@@ -281,25 +303,32 @@ def _derive(events: Sequence[ActionEvent], as_of_seq: int) -> _Derived | None:
             break
         if event.kind is EventKind.TRANSITION and isinstance(event.reason, Reason):
             effect = event.details.get("effect_id") if event.to_state is _S.CONFIRMED else None
+            effect_id = effect if isinstance(effect, str) else None
+            effects = list(derived.effects) if derived is not None else []
+            listed = event.details.get("listed", ())
+            for found in (effect_id, *(listed if isinstance(listed, tuple) else ())):
+                if isinstance(found, str) and found not in effects:
+                    effects.append(found)
             escalation = derived.escalation_id if derived is not None else None
-            derived = _Derived(
-                event.to_state,
-                event.reason,
-                effect if isinstance(effect, str) else None,
-                escalation,
-            )
+            derived = _Derived(event.to_state, event.reason, effect_id, escalation, tuple(effects))
         elif event.reason is Note.ESCALATED and derived is not None:
             escalation_id = event.details.get("escalation_id")
             if isinstance(escalation_id, str):
-                derived = _Derived(derived.state, derived.reason, derived.effect_id, escalation_id)
+                derived = _Derived(
+                    derived.state, derived.reason, derived.effect_id, escalation_id, derived.effects
+                )
     return derived
 
 
 def _i5(
     snapshot: Snapshot, events_by_action: Mapping[str, list[ActionEvent]]
 ) -> Iterator[Violation]:
+    previous = 0
     for call in snapshot.tool_calls:
         subject = f"call {call.call_no}"
+        if call.as_of_seq < previous:
+            yield Violation("I5", subject, "reflects an older log than the response before it")
+        previous = max(previous, call.as_of_seq)
         result = call.result
         if isinstance(result, ActionResult):
             yield from _i5_result(snapshot, events_by_action, call, result, subject)
@@ -333,7 +362,7 @@ def _i5_result(
     action = snapshot.actions.get(result.action_id)
     if result.reconcile is not None and action is not None:
         escalated = derived.escalation_id is not None
-        if result.reconcile.how is not reconcile_how(action.contract, escalated=escalated):
+        if result.reconcile.how is not _expected_how(action.contract, escalated=escalated):
             yield Violation("I5", subject, f"reconcile says {result.reconcile.how}")
         if result.reconcile.escalation_id != derived.escalation_id:
             yield Violation("I5", subject, "the escalation id differs from the records")
@@ -345,6 +374,18 @@ def _i5_refusal(
     refusal: Refusal,
     subject: str,
 ) -> Iterator[Violation]:
+    if refusal.reason is RefusalReason.REPORT_INCONSISTENT:
+        for conflict in refusal.conflicts:
+            for recorded in conflict.recorded:
+                derived = _derive(events_by_action.get(recorded.action_id, []), call.as_of_seq)
+                if derived is None or (recorded.state, recorded.effect_ids) != (
+                    derived.state,
+                    derived.effects,
+                ):
+                    yield Violation(
+                        "I5", subject, f"the refusal misstates the record of {recorded.action_id}"
+                    )
+        return
     if refusal.reason not in (RefusalReason.INTENT_BUSY, RefusalReason.INTENT_DONE):
         return
     if refusal.action_id is None:
@@ -381,8 +422,7 @@ def _i5_report(
             if derived is None:
                 continue
             states.append(derived.state)
-            if derived.effect_id is not None:
-                effects.append(derived.effect_id)
+            effects.extend(e for e in derived.effects if e not in effects)
         if not _claim_holds(claim, states, effects):
             yield Violation("I5", subject, f"accepted {claim.status} for {claim.intent_id}")
 
@@ -402,14 +442,16 @@ def _claim_holds(claim: Claim, states: list[ActionState], effects: list[str]) ->
 
 
 def _i6_log(snapshot: Snapshot) -> Iterator[Violation]:
-    seqs = [event.seq for event in snapshot.events]
-    if seqs != list(range(1, len(seqs) + 1)):
-        yield Violation("I6", "log", "event seqs are not 1 to n in order")
+    if snapshot.events and snapshot.events[0].seq < 1:
+        yield Violation("I6", "log", "event seqs start at 1")
     for before, after in itertools.pairwise(snapshot.events):
+        if after.seq <= before.seq:
+            yield Violation("I6", f"seq {after.seq}", "event seqs must increase")
         if after.vt < before.vt:
             yield Violation("I6", f"seq {after.seq}", "virtual time went backwards")
+    last = snapshot.events[-1].seq if snapshot.events else 0
     for call in snapshot.tool_calls:
-        if call.as_of_seq > len(seqs):
+        if call.as_of_seq > last:
             yield Violation("I6", f"call {call.call_no}", "reflects an event that does not exist")
 
 

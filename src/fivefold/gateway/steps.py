@@ -346,12 +346,19 @@ def attach(view: ActionView, proposal: Proposal) -> Change | None:
 # Approval (0002) ---------------------------------------------------------------------
 
 
-def file_approval(view: ActionView, basis: BasisCheck, approval_id: str | None, vt: int) -> Change:
+def file_approval(
+    view: ActionView, basis: BasisCheck, approval_id: str | None, vt: int, *, seen_seq: int
+) -> Change | None:
     """T2 or T3: check the basis; if fresh, record the filed approval request as a grant.
 
     The gateway files the request (keyed by the action id) only after the basis passed,
-    so a stale basis comes with no approval id.
+    so a stale basis comes with no approval id. `seen_seq` is the seq of the action's
+    latest event when the gateway began its check, which reads facts over the network
+    and so runs without a lock. If the action has a newer event, such as a newer basis
+    from an attaching proposal, nothing is written (0003, dispatch).
     """
+    if seen_seq != view.last_seq:
+        return None
     action = view.action
     _require(action.state is _S.PROPOSED, f"{action.action_id} is {action.state}")
     _require(view.grant is None, f"{action.action_id} already has a grant")
@@ -373,13 +380,22 @@ def file_approval(view: ActionView, basis: BasisCheck, approval_id: str | None, 
 
 
 def poll_approval(
-    view: ActionView, approval: ApprovalStatus, basis: BasisCheck | None, vt: int
+    view: ActionView,
+    approval: ApprovalStatus,
+    basis: BasisCheck | None,
+    vt: int,
+    *,
+    seen_seq: int,
 ) -> Change | None:
     """T4 or T5 from what the approvals service reports while the action waits (0002).
 
     `basis` is the basis check made with this poll. It is optional while the approval is
-    pending and required once it is approved (T4 needs a fresh basis).
+    pending and required once it is approved (T4 needs a fresh basis). A denial is named
+    before a stale basis. Nothing is written if the action has an event newer than
+    `seen_seq`, as in `file_approval`.
     """
+    if seen_seq != view.last_seq:
+        return None
     action = view.action
     _require(action.state is _S.PENDING_APPROVAL, f"{action.action_id} is {action.state}")
     grant = _grant_in(view, GrantState.PENDING)
@@ -410,11 +426,29 @@ def poll_approval(
     return Change(rejected, (event,), grant=_grant_to(active, GrantState.RELEASED))
 
 
-def time_out_approval(view: ActionView, vt: int, settings: GatewaySettings) -> Change:
-    """T5 when no decision came within the scenario's `approval_wait_ms` (0002, rule 14)."""
+def time_out_approval(
+    view: ActionView,
+    approval: ApprovalStatus,
+    vt: int,
+    settings: GatewaySettings,
+    *,
+    seen_seq: int,
+) -> Change | None:
+    """T5 when no decision came within the scenario's `approval_wait_ms` (0002, rule 14).
+
+    "No decision" is checked, not assumed: `approval` is what a final poll found, and it
+    must still be pending. A decision that arrived first is acted on by `poll_approval`.
+    Nothing is written if the action has an event newer than `seen_seq`.
+    """
+    if seen_seq != view.last_seq:
+        return None
     action = view.action
     _require(action.state is _S.PENDING_APPROVAL, f"{action.action_id} is {action.state}")
     grant = _grant_in(view, GrantState.PENDING)
+    _require(
+        approval is ApprovalStatus.PENDING,
+        f"{action.action_id}: the approval is {approval}; act on the decision instead",
+    )
     _require(
         vt >= grant.requested_vt + settings.approval_wait_ms,
         f"{action.action_id}: approval_wait_ms has not passed",
@@ -697,6 +731,8 @@ def result_for(view: ActionView) -> ActionResult:
             action.contract,
             reconcile_how(action.contract, escalated=escalated),
             escalation.escalation_id if escalation is not None else None,
+            f"The {action.operation} for {action.intent_id} at {action.target} "
+            "may or may not have taken effect.",
         )
     effect_id = action.effect_id if action.state is _S.CONFIRMED else None
     return ActionResult(
@@ -704,25 +740,47 @@ def result_for(view: ActionView) -> ActionResult:
     )
 
 
+def known_effects(view: ActionView) -> tuple[str, ...]:
+    """Every effect id the gateway learned for the action, in the order it learned them.
+
+    That is the effect id the action records (I1) and every other id a status answer
+    listed. A C1 status answer can list two when the transport delivered the request
+    twice (fault F4), and the evaluator counts both as known (0004, property 5).
+    """
+    found: list[str] = []
+    if view.action.effect_id is not None:
+        found.append(view.action.effect_id)
+    for event in view.events:
+        listed = event.details.get("listed", ())
+        if not isinstance(listed, tuple):
+            continue
+        for effect_id in listed:
+            if isinstance(effect_id, str) and effect_id not in found:
+                found.append(effect_id)
+    return tuple(found)
+
+
 def report_conflicts(
     claims: Sequence[Claim],
     intents: Collection[str],
-    actions_by_intent: Mapping[str, Sequence[Action]],
+    views_by_intent: Mapping[str, Sequence[ActionView]],
 ) -> tuple[ClaimConflict, ...]:
     """Return every claim that contradicts the gateway's records (0003, final report).
 
-    `done` needs a Confirmed action and exactly its effect ids. `not_done` needs every
-    action to be Rejected, Failed or not yet dispatched. `unknown` needs an attempt
-    without a settled answer: an action in Dispatched or OutcomeUnknown.
+    `done` needs a Confirmed action and exactly the effect ids the gateway recorded for
+    the intent, which include every effect a status answer listed (`known_effects`).
+    `not_done` needs every action to be Rejected, Failed or not yet dispatched.
+    `unknown` needs an attempt without a settled answer: an action in Dispatched or
+    OutcomeUnknown.
     """
     claimed = [claim.intent_id for claim in claims]
     if sorted(claimed) != sorted(intents):
         raise ValueError("a report has exactly one claim per task intent")
     conflicts: list[ClaimConflict] = []
     for claim in claims:
-        actions = actions_by_intent.get(claim.intent_id, ())
-        states = {action.state for action in actions}
-        recorded = sorted(a.effect_id for a in actions if a.effect_id is not None)
+        views = views_by_intent.get(claim.intent_id, ())
+        states = {view.action.state for view in views}
+        recorded = sorted({effect for view in views for effect in known_effects(view)})
         if claim.status is ClaimStatus.DONE:
             ok = _S.CONFIRMED in states and sorted(claim.effect_ids) == recorded
         elif claim.status is ClaimStatus.NOT_DONE:
@@ -730,6 +788,9 @@ def report_conflicts(
         else:
             ok = bool(states & UNSETTLED_STATES)
         if not ok:
-            record = tuple(RecordedAction(a.action_id, a.state, a.effect_id) for a in actions)
+            record = tuple(
+                RecordedAction(view.action.action_id, view.action.state, known_effects(view))
+                for view in views
+            )
             conflicts.append(ClaimConflict(claim.intent_id, claim.status, claim.effect_ids, record))
     return tuple(conflicts)

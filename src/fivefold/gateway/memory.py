@@ -10,8 +10,10 @@ the Postgres suite will use it as the oracle: the same operations against both s
 must produce the same records.
 
 It also logs every agent-facing response, as the gateway's `tool_call` table does, so
-I5 can be checked. It does not wait: `get_action_status(wait_ms)` and `tool_wait_ms`
-belong to the tool layer, which calls `status` when its wait ends.
+I5 can be checked. It does not wait: `tool_wait_ms` and `get_action_status(wait_ms)`
+belong to the tool layer, which calls `status` when its wait ends, with the name of the
+tool that answers. A refused proposal is answered at once, so `propose` logs refusals;
+an admitted one is answered later, by that `status` call.
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ from fivefold.domain.contracts import Contract
 from fivefold.gateway import steps
 from fivefold.gateway.invariants import InvariantViolation, check_invariants
 from fivefold.gateway.records import (
-    Action,
     ActionEvent,
     ActionResult,
     Answer,
@@ -112,7 +113,11 @@ class MemoryStore:
     # Tools ------------------------------------------------------------------------------
 
     def propose(self, proposal: Proposal, vt: int) -> ActionResult | Refusal:
-        """A write tool call: admission's intent check, then the matching rule (0001)."""
+        """A write tool call: admission's intent check, then the matching rule (0001).
+
+        Returns the action's result as admission left it, or a refusal. Only a refusal is
+        logged as the tool's response; see the module docstring.
+        """
         self._clock(vt)
         snapshot = self._snapshot
         outcome: ActionResult | Refusal
@@ -160,23 +165,25 @@ class MemoryStore:
                 outcome = Refusal(
                     RefusalReason.INTENT_DONE, action_id, holder.state, holder.effect_id
                 )
-        self._commit(_log(snapshot, proposal.operation, action_id, outcome, vt), vt)
+        if isinstance(outcome, Refusal):
+            snapshot = _log(snapshot, proposal.operation, action_id, outcome, vt)
+        self._commit(snapshot, vt)
         return outcome
 
-    def status(self, action_id: str, vt: int) -> ActionResult:
-        """`get_action_status` once its wait ends: the action's state now (0003)."""
+    def status(self, action_id: str, vt: int, *, tool: str = "get_action_status") -> ActionResult:
+        """The action's result now, as `tool` answers once its wait ends (0003); logged."""
         self._clock(vt)
         result = steps.result_for(self.view(action_id))
-        self._commit(_log(self._snapshot, "get_action_status", action_id, result, vt), vt)
+        self._commit(_log(self._snapshot, tool, action_id, result, vt), vt)
         return result
 
     def submit_report(self, claims: Sequence[Claim], vt: int) -> ReportAccepted | Refusal:
         """Check a final report against the records (0003); refuse any contradiction."""
         self._clock(vt)
         snapshot = self._snapshot
-        by_intent: dict[str, list[Action]] = {}
+        by_intent: dict[str, list[ActionView]] = {}
         for action in snapshot.actions.values():
-            by_intent.setdefault(action.intent_id, []).append(action)
+            by_intent.setdefault(action.intent_id, []).append(_view(snapshot, action.action_id))
         conflicts = steps.report_conflicts(claims, list(snapshot.intents), by_intent)
         outcome: ReportAccepted | Refusal
         if conflicts:
@@ -189,20 +196,46 @@ class MemoryStore:
     # Gateway steps ----------------------------------------------------------------------
 
     def file_approval(
-        self, action_id: str, basis: BasisCheck, approval_id: str | None, vt: int
+        self,
+        action_id: str,
+        basis: BasisCheck,
+        approval_id: str | None,
+        vt: int,
+        *,
+        seen_seq: int,
     ) -> None:
-        """T2 or T3 (0002, 0003)."""
-        self._step(action_id, vt, lambda v: steps.file_approval(v, basis, approval_id, vt))
+        """T2 or T3 (0002, 0003). `seen_seq`: the action's latest event when the check began."""
+        self._step(
+            action_id,
+            vt,
+            lambda v: steps.file_approval(v, basis, approval_id, vt, seen_seq=seen_seq),
+        )
 
     def poll_approval(
-        self, action_id: str, approval: ApprovalStatus, basis: BasisCheck | None, vt: int
+        self,
+        action_id: str,
+        approval: ApprovalStatus,
+        basis: BasisCheck | None,
+        vt: int,
+        *,
+        seen_seq: int,
     ) -> None:
         """T4 or T5, or nothing while the request is pending and the basis holds."""
-        self._step(action_id, vt, lambda v: steps.poll_approval(v, approval, basis, vt))
+        self._step(
+            action_id,
+            vt,
+            lambda v: steps.poll_approval(v, approval, basis, vt, seen_seq=seen_seq),
+        )
 
-    def time_out_approval(self, action_id: str, vt: int) -> None:
-        """T5 with reason approval_timeout."""
-        self._step(action_id, vt, lambda v: steps.time_out_approval(v, vt, self._settings))
+    def time_out_approval(
+        self, action_id: str, approval: ApprovalStatus, vt: int, *, seen_seq: int
+    ) -> None:
+        """T5 with reason approval_timeout, after a final poll that still reads pending."""
+        self._step(
+            action_id,
+            vt,
+            lambda v: steps.time_out_approval(v, approval, vt, self._settings, seen_seq=seen_seq),
+        )
 
     def dispatch(self, action_id: str, check: CheckRecord, vt: int) -> Attempt | None:
         """T6 or T7. Returns the attempt to send, or None if nothing may be sent."""
@@ -301,7 +334,7 @@ def _apply(snapshot: Snapshot, change: Change | None, vt: int) -> Snapshot:
     escalations = dict(snapshot.escalations)
     if change.escalation is not None:
         escalations[change.escalation.escalation_id] = change.escalation
-    seq = len(snapshot.events)
+    seq = _last_seq(snapshot)
     events = list(snapshot.events)
     for new in change.events:
         seq += 1
@@ -341,5 +374,9 @@ def _log(
     result: ActionResult | Refusal | ReportAccepted,
     vt: int,
 ) -> Snapshot:
-    call = ToolCall(len(snapshot.tool_calls) + 1, tool, action_id, result, len(snapshot.events), vt)
+    call = ToolCall(len(snapshot.tool_calls) + 1, tool, action_id, result, _last_seq(snapshot), vt)
     return replace(snapshot, tool_calls=(*snapshot.tool_calls, call))
+
+
+def _last_seq(snapshot: Snapshot) -> int:
+    return snapshot.events[-1].seq if snapshot.events else 0

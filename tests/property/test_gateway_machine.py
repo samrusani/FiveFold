@@ -81,12 +81,13 @@ G = GrantState
 A = ApprovalStatus
 SETTINGS = GatewaySettings(
     approval_wait_ms=3_000,
-    params=ContractParams(max_hop_latency_ms=50, commit_deadline_ms=1_000),
+    params=ContractParams(max_hop_latency_ms=50, commit_deadline_ms=1_000, status_lag_ms=300),
     dispatch_timeout_ms=200,
     max_attempts=3,
     max_probes=3,
 )
 SETTLE = SETTINGS.settle_ms
+LAG = SETTINGS.params.status_lag_ms
 T = SETTINGS.dispatch_timeout_ms
 QUOTE_CHANGED = StaleFact("quote", 1, 2, ("unit_price_minor",))
 BUDGET_SHORT = StaleFact("budget", 1, 2, ("committed_minor",))
@@ -108,6 +109,8 @@ class World:
     exact_ok: bool = True
     sufficient_ok: bool = True
     effect_id: str | None = None
+    effect_vt: int = 0
+    """When the effect committed; a status answer lists it only if accurate to then."""
     may_commit_until: int | None = None
     """A request reached the destination and may still commit until this time (sent + S)."""
 
@@ -164,6 +167,10 @@ class GatewayMachine(RuleBasedStateMachine):
 
     # Queries ------------------------------------------------------------------------------
 
+    def seq(self, action_id: str) -> int:
+        """The seq a check starting now would see."""
+        return self.store.view(action_id).last_seq
+
     def ids(self, *states: ActionState) -> list[str]:
         return sorted(a for a, e in self.expected.items() if e.state in states)
 
@@ -197,9 +204,16 @@ class GatewayMachine(RuleBasedStateMachine):
 
     # The world's bookkeeping ----------------------------------------------------------------
 
-    def new_effect(self) -> str:
-        self.effects += 1
-        return f"PO-{self.effects:04d}"
+    def commit(self, world: World, at: int) -> str:
+        """The destination commits this action's effect at `at`, once (keys or one attempt).
+
+        Callers keep `at` within the commit deadline: a request sent at `s` commits by
+        `s + S` or never (0005).
+        """
+        if world.effect_id is None:
+            self.effects += 1
+            world.effect_id, world.effect_vt = f"PO-{self.effects:04d}", at
+        return world.effect_id
 
     def basis(self, world: World, *, full: bool = True) -> BasisCheck:
         stale: tuple[StaleFact, ...] = () if world.exact_ok else (QUOTE_CHANGED,)
@@ -212,8 +226,8 @@ class GatewayMachine(RuleBasedStateMachine):
         world = self.world[action_id]
         if world.may_commit_until is None:
             return
-        if commit and world.effect_id is None:
-            world.effect_id = self.new_effect()
+        if commit:
+            self.commit(world, min(self.vt, world.may_commit_until))
         world.may_commit_until = None
 
     def settle_if_due(self, action_id: str, commit: bool) -> None:
@@ -228,7 +242,7 @@ class GatewayMachine(RuleBasedStateMachine):
         if world.effect_id is not None or world.may_commit_until is not None:
             return
         if fate == "committed":
-            world.effect_id = self.new_effect()
+            self.commit(world, min(self.vt, self.expected[action_id].attempts[-1] + SETTLE))
         elif fate == "in_progress":
             world.may_commit_until = self.expected[action_id].attempts[-1] + SETTLE
 
@@ -262,12 +276,20 @@ class GatewayMachine(RuleBasedStateMachine):
         expected.events += 1
         if world.fresh:
             world.approval = policy
-            self.store.file_approval(action_id, self.basis(world), f"AP-{action_id}", self.vt)
+            self.store.file_approval(
+                action_id,
+                self.basis(world),
+                f"AP-{action_id}",
+                self.vt,
+                seen_seq=self.seq(action_id),
+            )
             expected.state, expected.grant = S.PENDING_APPROVAL, G.PENDING
             expected.reason = Reason.APPROVAL_REQUESTED
             expected.requested_vt = self.vt
         else:
-            self.store.file_approval(action_id, self.basis(world), None, self.vt)
+            self.store.file_approval(
+                action_id, self.basis(world), None, self.vt, seen_seq=self.seq(action_id)
+            )
             expected.state, expected.reason = S.REJECTED, Reason.STALE_INPUT
             expected.stale = self.basis(world).stale
 
@@ -275,7 +297,7 @@ class GatewayMachine(RuleBasedStateMachine):
         world, expected = self.world[action_id], self.expected[action_id]
         approval = world.approval
         basis = self.basis(world) if check_basis or approval is A.APPROVED else None
-        self.store.poll_approval(action_id, approval, basis, self.vt)
+        self.store.poll_approval(action_id, approval, basis, self.vt, seen_seq=self.seq(action_id))
         if approval is A.DENIED:
             expected.state, expected.grant = S.REJECTED, G.DENIED
             expected.reason = Reason.APPROVAL_DENIED
@@ -291,11 +313,14 @@ class GatewayMachine(RuleBasedStateMachine):
         expected.events += 1
 
     def do_time_out(self, action_id: str) -> None:
-        expected = self.expected[action_id]
-        if self.vt < expected.requested_vt + SETTINGS.approval_wait_ms:
-            self.refused(lambda: self.store.time_out_approval(action_id, self.vt))
+        expected, approval = self.expected[action_id], self.world[action_id].approval
+        seen = self.seq(action_id)
+        if approval is not A.PENDING or self.vt < expected.requested_vt + SETTINGS.approval_wait_ms:
+            self.refused(
+                lambda: self.store.time_out_approval(action_id, approval, self.vt, seen_seq=seen)
+            )
             return
-        self.store.time_out_approval(action_id, self.vt)
+        self.store.time_out_approval(action_id, approval, self.vt, seen_seq=seen)
         expected.state, expected.grant = S.REJECTED, G.TIMED_OUT
         expected.reason = Reason.APPROVAL_TIMEOUT
         expected.events += 1
@@ -312,6 +337,9 @@ class GatewayMachine(RuleBasedStateMachine):
         else:
             kind = CheckKind.EXACT_ONLY
         assert ticket.kind is kind
+        if attempt_no > 1:
+            backoff = min(T * 2 ** (attempt_no - 2), 8 * T)
+            assert ticket.not_before_vt == expected.attempts[-1] + backoff
         if kind is CheckKind.EXEMPT:
             record = ticket.record(approval=None, basis=None, check_vt=self.vt)
         else:
@@ -382,9 +410,8 @@ class GatewayMachine(RuleBasedStateMachine):
                 options.append("precondition_failed")
         choice = data.draw(st.sampled_from(options))
         if choice in ("replay", "committed"):
-            if world.effect_id is None:
-                world.effect_id = self.new_effect()
-            answer = Answer(AnswerClass.COMMITTED, Reason.COMMITTED, world.effect_id)
+            at = min(self.vt, expected.attempts[-1] + SETTLE)
+            answer = Answer(AnswerClass.COMMITTED, Reason.COMMITTED, self.commit(world, at))
             self.store.answer(action_id, attempt_no, answer, self.vt)
             expected.state, expected.effect_id = S.CONFIRMED, world.effect_id
             expected.reason = Reason.COMMITTED
@@ -404,12 +431,15 @@ class GatewayMachine(RuleBasedStateMachine):
             self.store.answer(action_id, attempt_no, answer, self.vt)
             self.enter_unknown(expected, Reason(choice))
 
-    def do_probe(self, action_id: str, answered: bool, finish: bool) -> None:
+    def do_probe(self, action_id: str, answered: bool, finish: bool, lag: int) -> None:
+        """A C1 status query. The answer is accurate to `as_of_vt`, at most L ago (0005)."""
         world, expected = self.world[action_id], self.expected[action_id]
+        as_of_vt = max(0, self.vt - lag)
         if answered:
             self.settle_if_due(action_id, finish)
-            listed = (world.effect_id,) if world.effect_id is not None else ()
-            result = ProbeAnswer(answered=True, effect_ids=listed, as_of_vt=self.vt)
+            visible = world.effect_id is not None and world.effect_vt <= as_of_vt
+            listed = (world.effect_id,) if visible and world.effect_id else ()
+            result = ProbeAnswer(answered=True, effect_ids=listed, as_of_vt=as_of_vt)
         else:
             result = ProbeAnswer(answered=False)
         self.store.probe(action_id, result, self.vt)
@@ -417,7 +447,7 @@ class GatewayMachine(RuleBasedStateMachine):
         if result.effect_ids:
             expected.state, expected.effect_id = S.CONFIRMED, world.effect_id
             expected.reason = Reason.STATUS_FOUND
-        elif answered and self.vt >= expected.attempts[-1] + SETTLE:
+        elif answered and as_of_vt >= expected.attempts[-1] + SETTLE:
             expected.state, expected.reason = S.FAILED, Reason.STATUS_SETTLED_EMPTY
         else:
             expected.probes += 1
@@ -504,6 +534,7 @@ class GatewayMachine(RuleBasedStateMachine):
             assert (result.action_id, result.state) == (action_id, S.PROPOSED)
             self.expected[action_id] = Expected(intent, key, quote_version)
             self.world[action_id] = World()
+            self.check_status(action_id, tool=INTENTS[intent])
             return
         holder = self.expected[holders[0]]
         if key != holder.key:
@@ -517,15 +548,16 @@ class GatewayMachine(RuleBasedStateMachine):
         if holder.state in UNDISPATCHED and quote_version > holder.quote_version:
             holder.quote_version = quote_version
             holder.events += 1
+        self.check_status(holders[0], tool=INTENTS[intent])
 
     @precondition(lambda self: self.expected)
     @rule(data=st.data())
     def status(self, data: st.DataObject) -> None:
         self.check_status(data.draw(st.sampled_from(sorted(self.expected))))
 
-    def check_status(self, action_id: str) -> None:
-        """`get_action_status`: the result must match the model (0003, I5)."""
-        result = self.store.status(action_id, self.vt)
+    def check_status(self, action_id: str, tool: str = "get_action_status") -> None:
+        """A tool's answer once its wait ends: the result must match the model (0003, I5)."""
+        result = self.store.status(action_id, self.vt, tool=tool)
         expected = self.expected[action_id]
         assert (result.state, result.reason) == (expected.state, expected.reason)
         rejected_stale = expected.state is S.REJECTED and expected.reason is Reason.STALE_INPUT
@@ -604,9 +636,14 @@ class GatewayMachine(RuleBasedStateMachine):
         self.do_answer(data.draw(st.sampled_from(self.ids(S.DISPATCHED))), data, finish)
 
     @precondition(lambda self: self.probeable())
-    @rule(data=st.data(), answered=st.booleans(), finish=st.booleans())
-    def probe(self, data: st.DataObject, answered: bool, finish: bool) -> None:
-        self.do_probe(data.draw(st.sampled_from(self.probeable())), answered, finish)
+    @rule(
+        data=st.data(),
+        answered=st.booleans(),
+        finish=st.booleans(),
+        lag=st.sampled_from([0, 1, LAG]),
+    )
+    def probe(self, data: st.DataObject, answered: bool, finish: bool, lag: int) -> None:
+        self.do_probe(data.draw(st.sampled_from(self.probeable())), answered, finish, lag)
 
     @precondition(lambda self: self.escalated())
     @rule(data=st.data(), finish=st.booleans())
@@ -688,7 +725,8 @@ class GatewayMachine(RuleBasedStateMachine):
                 self.do_attest(action_id, finish)
             else:
                 assert self.contract is Contract.C1, "only C1 waits without escalating"
-                self.do_probe(action_id, data.draw(st.booleans()), finish)
+                lag = data.draw(st.sampled_from([0, 1, LAG]))
+                self.do_probe(action_id, data.draw(st.booleans()), finish, lag)
 
     @precondition(lambda self: self.expected)
     @rule(data=st.data())
@@ -699,10 +737,15 @@ class GatewayMachine(RuleBasedStateMachine):
         store, vt = self.store, self.vt
         fresh = BasisCheck(True, True)
         candidates: list[Callable[[], object]] = []
+        seen = self.seq(action_id)
         if state is not S.PROPOSED:
-            candidates.append(lambda: store.file_approval(action_id, fresh, "AP-x", vt))
+            candidates.append(
+                lambda: store.file_approval(action_id, fresh, "AP-x", vt, seen_seq=seen)
+            )
         if state is not S.PENDING_APPROVAL:
-            candidates.append(lambda: store.poll_approval(action_id, A.APPROVED, fresh, vt))
+            candidates.append(
+                lambda: store.poll_approval(action_id, A.APPROVED, fresh, vt, seen_seq=seen)
+            )
         if state is not S.DISPATCHED:
             answer = Answer(AnswerClass.UNKNOWN, Reason.TRANSPORT_ERROR)
             candidates.append(lambda: store.answer(action_id, 1, answer, vt))

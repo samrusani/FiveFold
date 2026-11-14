@@ -79,6 +79,10 @@ class Run:
     def state(self, action_id: str) -> ActionState:
         return self.store.snapshot().actions[action_id].state
 
+    def seq(self, action_id: str) -> int:
+        """The seq a check starting now would see."""
+        return self.store.view(action_id).last_seq
+
     def propose(self, intent: str = "REQ-1", key: str = "k1") -> str:
         result = self.store.propose(proposal(intent, key), self.at(1))
         assert isinstance(result, ActionResult)
@@ -87,12 +91,16 @@ class Run:
     def pending(self, intent: str = "REQ-1", key: str = "k1") -> str:
         action_id = self.propose(intent, key)
         self.approvals += 1
-        self.store.file_approval(action_id, FRESH, f"AP-{self.approvals}", self.at(1))
+        self.store.file_approval(
+            action_id, FRESH, f"AP-{self.approvals}", self.at(1), seen_seq=self.seq(action_id)
+        )
         return action_id
 
     def authorized(self, intent: str = "REQ-1", key: str = "k1") -> str:
         action_id = self.pending(intent, key)
-        self.store.poll_approval(action_id, ApprovalStatus.APPROVED, FRESH, self.at(1))
+        self.store.poll_approval(
+            action_id, ApprovalStatus.APPROVED, FRESH, self.at(1), seen_seq=self.seq(action_id)
+        )
         return action_id
 
     def sent(self, intent: str = "REQ-1", key: str = "k1") -> str:
@@ -124,7 +132,7 @@ def test_a_stale_basis_is_rejected_before_any_approval_is_requested() -> None:
     run = Run(Contract.C2)
     action_id = run.propose()
     stale = BasisCheck(exact_ok=False, sufficient_ok=True, stale=(QUOTE_STALE,))
-    run.store.file_approval(action_id, stale, None, run.at(1))
+    run.store.file_approval(action_id, stale, None, run.at(1), seen_seq=run.seq(action_id))
     snapshot = run.store.snapshot()
     assert snapshot.actions[action_id].state is S.REJECTED
     assert not snapshot.grants
@@ -159,7 +167,7 @@ def test_a_waiting_action_is_rejected(
 ) -> None:
     run = Run(Contract.C2)
     action_id = run.pending()
-    run.store.poll_approval(action_id, approval, basis, run.at(1))
+    run.store.poll_approval(action_id, approval, basis, run.at(1), seen_seq=run.seq(action_id))
     snapshot = run.store.snapshot()
     assert snapshot.actions[action_id].state is S.REJECTED
     assert snapshot.events[-1].reason is reason
@@ -170,17 +178,20 @@ def test_a_pending_poll_with_a_fresh_basis_changes_nothing() -> None:
     run = Run(Contract.C2)
     action_id = run.pending()
     before = run.store.snapshot()
-    run.store.poll_approval(action_id, ApprovalStatus.PENDING, FRESH, run.at(1))
-    run.store.poll_approval(action_id, ApprovalStatus.PENDING, None, run.at(1))
+    seen = run.seq(action_id)
+    run.store.poll_approval(action_id, ApprovalStatus.PENDING, FRESH, run.at(1), seen_seq=seen)
+    run.store.poll_approval(action_id, ApprovalStatus.PENDING, None, run.at(1), seen_seq=seen)
     assert run.store.snapshot() == before
 
 
 def test_the_approval_times_out_only_after_approval_wait_ms() -> None:
     run = Run(Contract.C2)
     action_id = run.pending()
+    seen, pending = run.seq(action_id), ApprovalStatus.PENDING
     with pytest.raises(StepRefused):
-        run.store.time_out_approval(action_id, run.at(SETTINGS.approval_wait_ms - 1))
-    run.store.time_out_approval(action_id, run.at(1))
+        early = run.at(SETTINGS.approval_wait_ms - 1)
+        run.store.time_out_approval(action_id, pending, early, seen_seq=seen)
+    run.store.time_out_approval(action_id, pending, run.at(1), seen_seq=seen)
     snapshot = run.store.snapshot()
     assert snapshot.events[-1].reason is Reason.APPROVAL_TIMEOUT
     assert snapshot.grants["G-0001"].state is GrantState.TIMED_OUT
@@ -194,7 +205,7 @@ def test_an_approval_already_dead_at_the_first_poll_is_unspecified(
     action_id = run.pending()
     before = run.store.snapshot()
     with pytest.raises(UnspecifiedCase, match="0010"):
-        run.store.poll_approval(action_id, approval, FRESH, run.at(1))
+        run.store.poll_approval(action_id, approval, FRESH, run.at(1), seen_seq=run.seq(action_id))
     assert run.store.snapshot() == before
 
 
@@ -391,6 +402,9 @@ def test_c2_escalates_instead_of_retrying_when_the_retry_check_fails(
     assert snapshot.events[-1].reason is Note.ESCALATED
     assert len(snapshot.attempts[action_id]) == 1
     assert snapshot.grants["G-0001"].state is grant_state
+    reconcile = run.store.status(action_id, vt).reconcile
+    assert reconcile is not None
+    assert (reconcile.how, reconcile.escalation_id) == (ReconcileHow.ESCALATED_TO_HUMAN, "ESC-0001")
 
 
 @pytest.mark.parametrize("contract", [Contract.C2, Contract.C3])
@@ -511,6 +525,86 @@ def test_g1_actions_have_no_identity_and_are_exempt_from_i7() -> None:
     assert all(not a.identity and a.state is S.PROPOSED for a in snapshot.actions.values())
 
 
+def test_a_decided_approval_does_not_time_out() -> None:
+    run = Run(Contract.C2)
+    action_id = run.pending()
+    after_wait = run.at(SETTINGS.approval_wait_ms)
+    with pytest.raises(StepRefused, match="act on the decision"):
+        run.store.time_out_approval(
+            action_id, ApprovalStatus.APPROVED, after_wait, seen_seq=run.seq(action_id)
+        )
+    assert run.state(action_id) is S.PENDING_APPROVAL
+
+
+def test_a_basis_check_overtaken_by_a_newer_basis_writes_nothing() -> None:
+    run = Run(Contract.C2)
+    action_id = run.pending()
+    seen = run.seq(action_id)
+    run.store.propose(proposal(quote_version=2), run.at(1))
+    stale = BasisCheck(exact_ok=False, sufficient_ok=True, stale=(QUOTE_STALE,))
+    before = run.store.snapshot()
+    run.store.poll_approval(action_id, ApprovalStatus.APPROVED, stale, run.at(1), seen_seq=seen)
+    assert run.store.snapshot().actions == before.actions
+    assert run.state(action_id) is S.PENDING_APPROVAL
+
+
+def test_c1_waits_for_a_status_answer_accurate_to_the_settle_time() -> None:
+    run = Run(Contract.C1)
+    action_id = run.unknown()
+    sent_vt = run.store.snapshot().attempts[action_id][0].sent_vt
+    lagging = ProbeAnswer(answered=True, as_of_vt=sent_vt + SETTLE - 1)
+    run.store.probe(action_id, lagging, sent_vt + SETTLE + 500)
+    assert run.state(action_id) is S.OUTCOME_UNKNOWN
+    assert run.store.snapshot().events[-1].reason is Note.PROBE
+
+
+def test_the_retry_backoff_doubles_from_the_latest_send() -> None:
+    run = Run(Contract.C2)
+    action_id = run.unknown()
+    assert run.retry(action_id)
+    second_sent = run.store.snapshot().attempts[action_id][1].sent_vt
+    run.store.answer(action_id, 2, TIMEOUT, run.at(SETTINGS.dispatch_timeout_ms))
+    ticket = run.store.begin_check(action_id)
+    assert ticket.not_before_vt == second_sent + 2 * SETTINGS.dispatch_timeout_ms
+
+
+def test_a_report_must_name_every_effect_a_status_answer_listed() -> None:
+    """At C1 a duplicated request (fault F4) can leave two effects for one intent."""
+    run = Run(Contract.C1)
+    action_id = run.unknown("REQ-1")
+    listing = ProbeAnswer(answered=True, effect_ids=("PO-0001", "PO-0002"), as_of_vt=run.at())
+    run.store.probe(action_id, listing, run.at())
+    assert run.store.snapshot().actions[action_id].effect_id == "PO-0001"
+    other = Claim("REQ-2", ClaimStatus.NOT_DONE)
+    one = run.store.submit_report([Claim("REQ-1", ClaimStatus.DONE, ("PO-0001",)), other], run.at())
+    assert isinstance(one, Refusal) and one.reason is RefusalReason.REPORT_INCONSISTENT
+    assert one.conflicts[0].recorded[0].effect_ids == ("PO-0001", "PO-0002")
+    both = Claim("REQ-1", ClaimStatus.DONE, ("PO-0002", "PO-0001"))
+    assert isinstance(run.store.submit_report([both, other], run.at()), ReportAccepted)
+
+
+def test_reconcile_says_in_words_what_may_exist() -> None:
+    run = Run(Contract.C2)
+    action_id = run.unknown()
+    result = run.store.status(action_id, run.at())
+    assert result.reconcile is not None
+    assert result.reconcile.what == (
+        "The submit_purchase_order for REQ-1 at supplier/S-1 may or may not have taken effect."
+    )
+
+
+def test_only_answers_the_agent_receives_are_logged() -> None:
+    run = Run(Contract.C2)
+    action_id = run.propose()
+    run.store.propose(proposal(key="k2"), run.at(1))
+    run.store.status(action_id, run.at(1), tool="submit_purchase_order")
+    logged = [(call.tool, type(call.result).__name__) for call in run.store.snapshot().tool_calls]
+    assert logged == [
+        ("submit_purchase_order", "Refusal"),
+        ("submit_purchase_order", "ActionResult"),
+    ]
+
+
 # Closing and reporting (0003) ---------------------------------------------------------
 
 
@@ -565,9 +659,11 @@ def test_a_refused_step_changes_nothing() -> None:
     proposed = run.propose("REQ-2")
     before = run.store.snapshot()
     with pytest.raises(StepRefused):
-        run.store.file_approval(action_id, FRESH, "AP-9", run.at(1))
+        run.store.file_approval(action_id, FRESH, "AP-9", run.at(1), seen_seq=run.seq(action_id))
     with pytest.raises(ValueError, match="sufficient"):
-        run.store.file_approval(proposed, EXACT_FRESH, "AP-9", run.at(1))
+        run.store.file_approval(
+            proposed, EXACT_FRESH, "AP-9", run.at(1), seen_seq=run.seq(proposed)
+        )
     with pytest.raises(StepRefused):
         run.store.probe(action_id, ProbeAnswer(answered=False), run.at(1))
     with pytest.raises(ValueError, match="backwards"):

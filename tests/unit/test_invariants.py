@@ -20,8 +20,12 @@ from fivefold.gateway.records import (
     ApprovalStatus,
     BasisCheck,
     Claim,
+    ClaimConflict,
     ClaimStatus,
     Proposal,
+    RecordedAction,
+    Refusal,
+    RefusalReason,
     ReportAccepted,
     Snapshot,
     ToolCall,
@@ -31,9 +35,12 @@ from fivefold.gateway.state_machine import (
     ActionState,
     AnswerClass,
     CheckKind,
+    EventKind,
     GatewaySettings,
     GrantState,
+    Note,
     Reason,
+    ReconcileHow,
 )
 
 S = ActionState
@@ -55,8 +62,12 @@ def _send(store: MemoryStore, intent: str, vt: int) -> tuple[str, int]:
     )
     assert isinstance(result, ActionResult)
     action_id = result.action_id
-    store.file_approval(action_id, FRESH, f"AP-{action_id}", vt + 1)
-    store.poll_approval(action_id, ApprovalStatus.APPROVED, FRESH, vt + 2)
+    store.file_approval(
+        action_id, FRESH, f"AP-{action_id}", vt + 1, seen_seq=store.view(action_id).last_seq
+    )
+    store.poll_approval(
+        action_id, ApprovalStatus.APPROVED, FRESH, vt + 2, seen_seq=store.view(action_id).last_seq
+    )
     ticket = store.begin_check(action_id)
     check = ticket.record(approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=vt + 3)
     assert store.dispatch(action_id, check, vt + 3) is not None
@@ -65,7 +76,11 @@ def _send(store: MemoryStore, intent: str, vt: int) -> tuple[str, int]:
 
 @pytest.fixture
 def snapshot() -> Snapshot:
-    """A valid C2 run: REQ-1 confirmed after a retry, REQ-2 unknown, REQ-3 authorized."""
+    """A valid C2 run with every kind of record.
+
+    REQ-1 is confirmed after a retry. REQ-2 is unknown and escalated, because its retry
+    check found the approval revoked. REQ-3 is authorized and took a newer basis (a note).
+    """
     store = MemoryStore(task_id="TASK-1", intents=INTENTS, contract=Contract.C2, settings=SETTINGS)
     first, vt = _send(store, "REQ-1", 0)
     store.answer(first, 1, Answer(AnswerClass.UNKNOWN, Reason.TIMEOUT), vt + 200)
@@ -80,10 +95,21 @@ def snapshot() -> Snapshot:
     store.answer(first, 2, committed, ticket.not_before_vt + 10)
     second, vt = _send(store, "REQ-2", ticket.not_before_vt + 20)
     store.answer(second, 1, Answer(AnswerClass.UNKNOWN, Reason.SERVER_ERROR), vt + 5)
+    ticket = store.begin_check(second)
+    revoked = ticket.record(
+        approval=ApprovalStatus.REVOKED,
+        basis=BasisCheck(exact_ok=True, sufficient_ok=None),
+        check_vt=ticket.not_before_vt,
+    )
+    assert store.retry(second, revoked, ticket.not_before_vt) is None
+    vt = ticket.not_before_vt
     third = store.propose(Proposal("REQ-3", "x", "t", {}, "key-REQ-3", {"f": 1}), vt + 6)
     assert isinstance(third, ActionResult)
-    store.file_approval(third.action_id, FRESH, "AP-REQ-3", vt + 7)
-    store.poll_approval(third.action_id, ApprovalStatus.APPROVED, FRESH, vt + 8)
+    seen = store.view(third.action_id).last_seq
+    store.file_approval(third.action_id, FRESH, "AP-REQ-3", vt + 7, seen_seq=seen)
+    seen = store.view(third.action_id).last_seq
+    store.poll_approval(third.action_id, ApprovalStatus.APPROVED, FRESH, vt + 8, seen_seq=seen)
+    store.propose(Proposal("REQ-3", "x", "t", {}, "key-REQ-3", {"f": 2}), vt + 8)
     store.status(first, vt + 9)
     store.status(second, vt + 9)
     claims = [
@@ -109,6 +135,8 @@ def test_the_fixture_is_valid(snapshot: Snapshot) -> None:
     assert check_invariants(snapshot, SETTINGS) == []
     states = [a.state for a in snapshot.actions.values()]
     assert states == [S.CONFIRMED, S.OUTCOME_UNKNOWN, S.AUTHORIZED]
+    reasons = {str(e.reason) for e in snapshot.events if e.kind is EventKind.NOTE}
+    assert reasons == {"escalated", "basis_updated"}
 
 
 def test_i1_an_effect_id_on_an_unconfirmed_action(snapshot: Snapshot) -> None:
@@ -223,7 +251,7 @@ def test_i6_a_state_the_log_does_not_reproduce(snapshot: Snapshot) -> None:
     assert "I6" in labels(with_action(snapshot, "A-0003", state=S.PENDING_APPROVAL))
 
 
-def test_i6_a_gap_in_the_log(snapshot: Snapshot) -> None:
+def test_i6_a_missing_event_breaks_the_chain(snapshot: Snapshot) -> None:
     events = snapshot.events
     assert "I6" in labels(replace(snapshot, events=events[:3] + events[4:]))
 
@@ -251,3 +279,110 @@ def test_i7_two_live_actions_for_one_intent() -> None:
     assert check_invariants(g1, SETTINGS) == []
     identity_on = {k: replace(a, identity=True) for k, a in g1.actions.items()}
     assert labels(replace(g1, actions=frozen(identity_on))) == {"I7"}
+
+
+def with_attempt(snapshot: Snapshot, action_id: str, index: int, **changes: object) -> Snapshot:
+    attempts = dict(snapshot.attempts)
+    rows = list(attempts[action_id])
+    rows[index] = replace(rows[index], **changes)  # type: ignore[arg-type]
+    attempts[action_id] = tuple(rows)
+    return replace(snapshot, attempts=frozen(attempts))
+
+
+def with_call(snapshot: Snapshot, result: ActionResult | Refusal, as_of_seq: int) -> Snapshot:
+    call = ToolCall(len(snapshot.tool_calls) + 1, "t", None, result, as_of_seq, 10**6)
+    return replace(snapshot, tool_calls=(*snapshot.tool_calls, call))
+
+
+def messages(snapshot: Snapshot, settings: GatewaySettings = SETTINGS) -> list[str]:
+    return [f"{v.invariant}: {v.message}" for v in check_invariants(snapshot, settings)]
+
+
+def test_i1_a_committed_attempt_that_names_another_effect(snapshot: Snapshot) -> None:
+    found = messages(with_attempt(snapshot, "A-0001", 1, answer_ref="PO-0009"))
+    assert found == ["I1: attempt 2 committed another effect"]
+
+
+def test_i2_a_grant_consumed_at_another_time(snapshot: Snapshot) -> None:
+    grants = dict(snapshot.grants)
+    grants["G-0001"] = replace(grants["G-0001"], consumed_vt=1)
+    found = messages(replace(snapshot, grants=frozen(grants)))
+    assert found == ["I2: the grant was not consumed at the first send"]
+
+
+def test_i3_a_check_made_after_the_send(snapshot: Snapshot) -> None:
+    attempt = snapshot.attempts["A-0002"][0]
+    late = replace(attempt.check, check_vt=attempt.sent_vt + 1)
+    assert messages(with_attempt(snapshot, "A-0002", 0, check=late)) == [
+        "I3: attempt 1 was checked after it was sent"
+    ]
+
+
+def test_i4_more_attempts_than_max_attempts(snapshot: Snapshot) -> None:
+    found = messages(snapshot, replace(SETTINGS, max_attempts=1))
+    assert found == ["I4: 2 attempts, above max_attempts"]
+
+
+def test_i5_intent_busy_naming_a_finished_action(snapshot: Snapshot) -> None:
+    busy = Refusal(RefusalReason.INTENT_BUSY, "A-0001", S.CONFIRMED)
+    last = snapshot.events[-1].seq
+    assert messages(with_call(snapshot, busy, last)) == ["I5: intent_busy names a confirmed action"]
+
+
+def test_i5_reconcile_that_hides_the_escalation(snapshot: Snapshot) -> None:
+    calls = list(snapshot.tool_calls)
+    index = next(i for i, c in enumerate(calls) if c.action_id == "A-0002")
+    result = calls[index].result
+    assert isinstance(result, ActionResult) and result.reconcile is not None
+    assert result.reconcile.how is ReconcileHow.ESCALATED_TO_HUMAN
+    hidden = replace(result.reconcile, how=ReconcileHow.RETRYING_WITH_SAME_KEY)
+    calls[index] = replace(calls[index], result=replace(result, reconcile=hidden))
+    found = messages(replace(snapshot, tool_calls=tuple(calls)))
+    assert found == ["I5: reconcile says retrying_with_same_key"]
+
+
+def test_i5_a_response_that_reflects_an_older_log(snapshot: Snapshot) -> None:
+    early = ActionResult("A-0001", "REQ-1", S.AUTHORIZED, None, Reason.APPROVED, (), None)
+    assert messages(with_call(snapshot, early, 3)) == [
+        "I5: reflects an older log than the response before it"
+    ]
+
+
+def test_i5_a_report_refusal_that_misstates_the_records(snapshot: Snapshot) -> None:
+    wrong = RecordedAction("A-0001", S.FAILED, ())
+    conflict = ClaimConflict("REQ-1", ClaimStatus.DONE, ("PO-0001",), (wrong,))
+    refusal = Refusal(RefusalReason.REPORT_INCONSISTENT, conflicts=(conflict,))
+    assert messages(with_call(snapshot, refusal, snapshot.events[-1].seq)) == [
+        "I5: the refusal misstates the record of A-0001"
+    ]
+
+
+def test_i6_a_note_that_changes_the_state(snapshot: Snapshot) -> None:
+    events = list(snapshot.events)
+    index = next(i for i, e in enumerate(events) if e.reason is Note.BASIS_UPDATED)
+    events[index] = replace(events[index], to_state=S.PENDING_APPROVAL)
+    found = messages(replace(snapshot, events=tuple(events)))
+    assert found == [f"I6: note {events[index].seq} changes the state"]
+
+
+def test_i6_timestamps_that_differ_from_the_log(snapshot: Snapshot) -> None:
+    found = messages(with_action(snapshot, "A-0003", created_vt=-1))
+    assert found == ["I6: created_vt or updated_vt differs from the log"]
+
+
+def test_i6_seqs_out_of_order(snapshot: Snapshot) -> None:
+    events = list(snapshot.events)
+    events[0], events[1] = replace(events[0], seq=2), replace(events[1], seq=1)
+    assert "I6: event seqs must increase" in messages(replace(snapshot, events=tuple(events)))
+
+
+def test_records_an_answer_that_differs_from_its_event(snapshot: Snapshot) -> None:
+    found = messages(with_attempt(snapshot, "A-0002", 0, answer_class=AnswerClass.REJECTED))
+    assert found == ["records: attempt 1 answer mismatch"]
+
+
+def test_records_an_open_escalation_on_a_finished_action(snapshot: Snapshot) -> None:
+    escalations = dict(snapshot.escalations)
+    escalations["ESC-0002"] = replace(escalations["ESC-0002"], action_id="A-0001")
+    found = messages(replace(snapshot, escalations=frozen(escalations)))
+    assert "records: open escalation on a confirmed action" in found

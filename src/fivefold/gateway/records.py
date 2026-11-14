@@ -63,6 +63,7 @@ class Action:
     effect_id: str | None
     created_vt: int
     updated_vt: int
+    """The virtual time of the latest state change; notes do not change it."""
 
 
 @dataclass(frozen=True)
@@ -202,7 +203,10 @@ class Escalation:
 
 @dataclass(frozen=True)
 class Proposal:
-    """A write proposal that passed the schema, intent and read checks (0001, item 17)."""
+    """A write proposal that passed the schema and read checks (0001, item 17).
+
+    The store checks the intent and applies the matching rule.
+    """
 
     intent_id: str
     operation: str
@@ -290,11 +294,15 @@ class Claim:
 
 @dataclass(frozen=True)
 class Reconcile:
-    """How an unknown outcome is being resolved (0003). Only with `outcome_unknown`."""
+    """How an unknown outcome is being resolved (0003). Only with `outcome_unknown`.
+
+    `what` says in words which effect may or may not exist.
+    """
 
     contract: Contract
     how: ReconcileHow
     escalation_id: str | None
+    what: str
 
 
 @dataclass(frozen=True)
@@ -326,11 +334,14 @@ class RefusalReason(StrEnum):
 
 @dataclass(frozen=True)
 class RecordedAction:
-    """The gateway's record of one action, as a report refusal names it (0003)."""
+    """The gateway's record of one action, as a report refusal names it (0003).
+
+    `effect_ids` holds every effect id the gateway learned for the action.
+    """
 
     action_id: str
     state: ActionState
-    effect_id: str | None
+    effect_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)

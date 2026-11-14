@@ -24,7 +24,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 
 | # | Decision | Status |
 | --- | --- | --- |
-| [0010](0010-state-machine-corrections.md) | State machine corrections found while implementing 0003: two reason-code fixes and five clarifications | Proposed |
+| [0010](0010-state-machine-corrections.md) | Corrections found while implementing 0003: four changes (T5 reasons, two dead reasons, answers after a crash, predictable expiry), reports and run closing, and eight readings to confirm | Proposed |
 
 ## Suggested reading order
 

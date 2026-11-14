@@ -248,9 +248,6 @@ GRANT_TRANSITIONS: Mapping[GrantState | None, frozenset[GrantState]] = {
 }
 """Legal grant moves (0002, rule 14). States missing as keys have no outgoing move."""
 
-GRANT_CAN_SEND = frozenset({_G.ACTIVE, _G.CONSUMED})
-"""A first send needs an active grant; a retry reuses the consumed one (0002, rules 15, 16)."""
-
 
 def check_grant_transition(source: GrantState | None, target: GrantState) -> None:
     """Raise `IllegalTransition` unless the grant may move from `source` to `target`."""
@@ -259,16 +256,17 @@ def check_grant_transition(source: GrantState | None, target: GrantState) -> Non
 
 
 class AnswerClass(StrEnum):
-    """The four classes of destination answers (0003)."""
+    """The four classes of destination answers (0003).
+
+    Only committed and rejected are definitive, and only a definitive answer ends an
+    attempt. A 503 is unknown: a proxy can return it after the backend committed.
+    """
 
     COMMITTED = "committed"
     REJECTED = "rejected"
     IN_PROGRESS = "in_progress"
     UNKNOWN = "unknown"
 
-
-DEFINITIVE = frozenset({AnswerClass.COMMITTED, AnswerClass.REJECTED})
-"""Only definitive answers end an attempt (0003)."""
 
 ANSWER_REASONS: Mapping[AnswerClass, frozenset[Reason]] = {
     AnswerClass.COMMITTED: frozenset({Reason.COMMITTED}),
