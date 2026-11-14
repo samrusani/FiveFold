@@ -1,10 +1,11 @@
 """Invariants I1 to I7 as checks over a run's gateway records (0003).
 
-`check_invariants` reads only a `Snapshot`. The in-memory store runs it after every
-step, the Hypothesis suites run it after every rule, and the Postgres suites will run it
-on rows loaded from the database. Each check restates its rule from the decision
-records and never calls the step functions, so a wrong step cannot hide its own
-mistake. The table of transitions is the one exception: it is the rule itself.
+`check_invariants` reads only a `Snapshot`. Both stores run it in every writing
+transaction before it commits (`store.py`), and the Hypothesis machines run it after
+every rule, in memory and on rows loaded from PostgreSQL. Each check restates its rule
+from the decision records and never calls the step functions, so a wrong step cannot
+hide its own mistake. The table of transitions is the one exception: it is the rule
+itself.
 
 What each check covers:
 
@@ -24,7 +25,8 @@ What each check covers:
   backwards; every action's transitions form a legal chain from T1 that ends in its
   current state, with matching timestamps; notes keep the state.
 - I7: at most one live or Confirmed action per intent, among actions with identity on.
-- Records: attempts' answers, escalations and notes agree with each other.
+- Records: attempts' answers, escalations and notes agree with each other, and a closed
+  run holds no live action that was never sent (0003, run closing).
 
 Two parts are checked elsewhere. That the log is append-only and that an effect id
 never changes compare two snapshots, so the Hypothesis suites check them between steps.
@@ -578,3 +580,9 @@ def _records(
     for event in snapshot.events:
         if event.reason is Note.ESCALATED and event.action_id not in escalated_actions:
             yield Violation("records", event.action_id, "an escalated note without an escalation")
+    if snapshot.run_closed:
+        for action in snapshot.actions.values():
+            if action.state in (_S.PROPOSED, _S.PENDING_APPROVAL, _S.AUTHORIZED):
+                yield Violation(
+                    "records", action.action_id, f"{action.state} after the run closed (0003)"
+                )

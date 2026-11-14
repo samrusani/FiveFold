@@ -4,8 +4,8 @@ Each step reads an `ActionView` of one action's records plus its own inputs, and
 the `Change` to apply, or None when there is nothing to do. Steps never mutate anything
 and never do I/O, and every state change goes through `check_transition`. A store
 applies a change in one transaction, with its events, while holding the action's row
-lock (I6). The in-memory store calls these functions, and the Postgres store will call
-the same ones, so each rule exists once.
+lock (I6). Both stores, in memory and in PostgreSQL, call these functions through the
+operations in `store.py`, so each rule exists once.
 
 Steps raise `StepRefused` when a step does not apply (wrong state, too early, already
 escalated) and `UnspecifiedCase` when the accepted records define no outcome. Malformed
@@ -55,6 +55,7 @@ from fivefold.gateway.state_machine import (
     ActionState,
     AnswerClass,
     CheckKind,
+    EscalationTrigger,
     EventKind,
     GatewayRuleError,
     GatewaySettings,
@@ -76,15 +77,6 @@ class StepRefused(GatewayRuleError):
 
 class UnspecifiedCase(GatewayRuleError):
     """The accepted decision records define no outcome for this case (see record 0010)."""
-
-
-class EscalationTrigger(StrEnum):
-    """Why an OutcomeUnknown action was escalated (0003, escalation table)."""
-
-    AT_ONCE = "at_once"
-    MAX_PROBES = "max_probes"
-    RETRY_CHECK_FAILED = "retry_check_failed"
-    MAX_ATTEMPTS = "max_attempts"
 
 
 @dataclass(frozen=True)

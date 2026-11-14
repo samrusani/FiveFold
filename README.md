@@ -12,7 +12,7 @@ A task passes only if every real-world action:
 
 ## Status
 
-Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and the scaffold, CI and Docker Compose work. Milestone M1 has started with the gateway's state machine (`src/fivefold/gateway/`): the transition tables, the decision steps, and invariants I1 to I7 as checks, tested by Hypothesis in memory. Nothing here runs a benchmark yet.
+Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and the scaffold, CI and Docker Compose work. Milestone M1 has started with the gateway's state machine (`src/fivefold/gateway/`): the transition tables, the decision steps, invariants I1 to I7 as checks, and a PostgreSQL store for the records, tested by Hypothesis against an in-memory oracle. Nothing here runs a benchmark yet.
 
 ## Documents
 
