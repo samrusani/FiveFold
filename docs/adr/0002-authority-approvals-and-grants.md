@@ -1,6 +1,7 @@
 # 0002: Authority: approvals and grants
 
 Status: Accepted (2026-11-14)
+Amended by: 0010 (2026-11-14): rule 17, predictable expiry
 Date: 2026-11-14
 Spec sections affected: Data model (Grant), Gateway (admin API, policy), Simulator (approvals service), Fault catalog (F6), Evaluator (property 2)
 Resolves M0 questions: 3, 13, 14, 22; parts of 1, 2 and 38
@@ -65,7 +66,7 @@ There is a second problem. If the evaluator judges authority from the gateway's 
 
 ### Validity checks
 
-17. Before every send, the gateway asks the approvals service for the approval's current status. It sends only if the approval is approved, not revoked, not expired at the current virtual time, and in scope for the action's args. This check runs before the first dispatch and before every C2 retry. Before a C2 retry, the gateway also re-checks the exact dependency rules (0003, I3).
+17. Before every send, the gateway asks the approvals service for the approval's current status. It sends only if the approval is approved, not revoked, not expiring before the check's virtual time plus the settle time S (0010), and in scope for the action's args. This check runs before the first dispatch and before every C2 retry. Before a C2 retry, the gateway also re-checks the exact dependency rules (0003, I3).
 18. If the check fails before the first send, the action moves to Rejected (`approval_revoked` or `approval_expired`) and the grant to revoked or expired.
 19. If the check fails before a C2 retry, the gateway does not send. The action stays OutcomeUnknown and is escalated (0003). Sending could commit a new effect under dead authority if the first attempt never landed.
 20. C3 retries skip the gateway's check, because the destination checks authority atomically. It returns the stored result if the first attempt committed, and rejects otherwise (0005).

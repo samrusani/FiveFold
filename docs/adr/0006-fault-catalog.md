@@ -1,6 +1,7 @@
 # 0006: Fault catalog, fault points and expected outcomes
 
 Status: Accepted (2026-11-14)
+Amended by: 0010 (2026-11-14): a crash drops answers to the crashed component's open requests
 Date: 2026-11-14
 Spec sections affected: Fault catalog, Demos (product.md), Testing, plan.md (M1 to M3), product.md success measures, CLAUDE.md (Tests)
 Resolves M0 questions: 4, 6, 10 (fault side), 30, 33 (F4), 34, 35; part of 37
@@ -38,6 +39,7 @@ Code calls a fault hook at each named point, and the harness decides whether a f
 
 - When a caller times out, the transport drops any later answer to that request. This matches an HTTP client that has closed its connection.
 - Messages addressed to a component that is down are dropped.
+- When a component crashes, the transport drops every later answer to a request that component sent before the crash, as it does after a timeout (0010).
 - When the transport delivers a request twice (F4), the answer to the copy is not delivered to the sender. A retrying proxy behaves this way.
 - Every message's fate is recorded in `harness.message_log` (0004).
 

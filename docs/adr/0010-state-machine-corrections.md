@@ -1,6 +1,6 @@
 # 0010: State machine corrections found while implementing 0003
 
-Status: Proposed
+Status: Accepted (2026-11-14), with the recommended option for item 6
 Date: 2026-11-14
 Spec sections affected: Action state machine (T5, T11, T12, escalation, dispatch, final report), Authority (validity checks), Fault catalog (transport rules)
 
@@ -16,7 +16,7 @@ Building the state machine module (`src/fivefold/gateway/state_machine.py` and `
 
 The module implements the accepted records exactly. For case 1 it raises `UnspecifiedCase` and changes nothing; a unit test pins this. The two dead reasons stay legal in the table and are never produced. Cases 3 to 5 are not handled in the module.
 
-Several more rules are implied by the accepted records but not written in them. The module follows readings 7 to 10, 12 and 14 below. Reading 11 belongs to the dispatcher and reading 13 to the transport layer, neither of which is built yet. This record asks the maintainer to confirm them, so the text and the code say the same thing.
+Several more rules are implied by the accepted records but not written in them. This record states them, so the text and the code say the same thing. The module follows readings 7 to 10, 12 and 14. Reading 11 belongs to the dispatcher and reading 13 to the transport layer, neither of which is built yet.
 
 ## Decision
 
@@ -27,15 +27,15 @@ Several more rules are implied by the accepted records but not written in them. 
 3. **A crash drops the answers to the crashed component's open requests** (amends 0006, transport rules). When a component crashes, the transport drops every later answer to a request that component sent before the crash. This matches an HTTP client whose connections closed when it died, and it extends the rule 0006 already has for timeouts. The gateway's recovery is unchanged: it never expects an answer in OutcomeUnknown, and the evaluator does not count an answer that was never delivered.
 4. **An approval that expires before a send could commit counts as expired** (amends 0002, rule 17). The check passes only if `expires_at > vt + S`, where `vt` is the time of the check and `S` the settle time (0005). A request sent at `vt` commits by `vt + S` or never, so an effect sent under a passing check always commits before the approval expires. This applies to every check the gateway makes, before the first send and before a C2 retry. C3 is unchanged, because the destination checks expiry at commit. With the example scenario's values (`approval_ttl_ms` 3,600,000, S 10,050), an approval loses its last 0.3% of life.
 
-### Open problem: reports and run closing
+### Reports and run closing
 
-6. **The final report and the run's close must not be separable** (case 5). Recommended:
+6. **The final report and the run's close must not be separable** (case 5). Decided:
    - The gateway closes the run in the same transaction that accepts the last report it expects. The run config says how many agent workers report (0009).
    - An accepted `not_done` claim from an earlier report closes its intent in the same transaction: the gateway rejects the intent's undispatched actions with reason `run_closed`, and refuses later proposals for that intent with `run_closed`. The claim then stays true whichever report counts.
 
-   Alternatives: accept `not_done` only when every action of the intent is final. This needs no new rule, but an agent waiting for a human approval could then report nothing true until `approval_wait_ms` passed. Or count only the report of the last worker to stop. This conflicts with 0004's "the last valid report before the run stops counts".
+   Alternatives considered: accept `not_done` only when every action of the intent is final. This needs no new rule, but an agent waiting for a human approval could then report nothing true until `approval_wait_ms` passed. Or count only the report of the last worker to stop. This conflicts with 0004's "the last valid report before the run stops counts".
 
-### Readings to confirm
+### Readings confirmed
 
 7. **Escalation ends automatic recovery.** After the `escalated` note, the gateway sends no more status probes (C1) and no more retries (C2, C3). Only an attestation moves the action. This is how the module reads "Exits: ... escalation" in 0005's recovery table.
 8. **"Not committed" can be attested only after the settle time.** The gateway accepts such an attestation only at or after `S` past the action's latest send. Record 0004 counts an attestation as evidence only from that time, and says the gateway applies the same settle rules for T11 and T12. The scripted resolver already attests only after the settle time (0009). An attestation that names an effect is accepted at any time.
