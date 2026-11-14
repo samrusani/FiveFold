@@ -1,4 +1,4 @@
-# Fivefold (working name)
+# Fivefold
 
 An open-source test suite and reference gateway that checks whether AI agents act correctly when things fail.
 
@@ -12,16 +12,14 @@ A task passes only if every real-world action:
 
 ## Status
 
-Design phase, milestone M0 (design freeze). There is no code yet, and nothing here is usable.
-
-Decision records 0001 to 0009 propose the design details. They stay Proposed until the maintainer accepts them. Until then, `docs/spec.md` is the reference, and each record lists how it would change the spec.
+Design phase. Decision records 0001 to 0009 were accepted on 14 Nov 2026, and the spec reflects them. The next step is the repository scaffold. There is no code yet, and nothing here is usable.
 
 ## Documents
 
 - [docs/product.md](docs/product.md): what and why, scope and non-goals
 - [docs/spec.md](docs/spec.md): the contracts to build against
 - [docs/plan.md](docs/plan.md): milestones, workstreams and first tickets
-- [docs/adr/](docs/adr/README.md): decision records, with a suggested review order
+- [docs/adr/](docs/adr/README.md): decision records, with a suggested reading order
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to propose changes
 - [CLAUDE.md](CLAUDE.md): rules for coding agents working in this repository
 
@@ -31,4 +29,4 @@ Decision records 0001 to 0009 propose the design details. They stay Proposed unt
 
 ## License
 
-To be decided: Apache-2.0 or MIT.
+Apache License 2.0. See [LICENSE](LICENSE).

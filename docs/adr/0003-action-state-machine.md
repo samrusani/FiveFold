@@ -1,6 +1,6 @@
 # 0003: Action state machine and invariants
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Action state machine, Gateway (write tools, get_action_status, submit_final_report, startup), Data model (Action, Attempt, ActionEvent)
 Resolves M0 questions: 8, 9, 10, 11, 12 (state side), 15 (state side), 16; part of 38

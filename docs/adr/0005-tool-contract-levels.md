@@ -1,6 +1,6 @@
 # 0005: Tool contract levels
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Tool contracts, Simulator, Gateway (recovery)
 Resolves M0 questions: 5, 15, 36; parts of 14 and 23

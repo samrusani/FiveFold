@@ -1,6 +1,6 @@
 # 0004: The five properties as checks over ground truth
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: The five properties (product.md), Evaluator, Data model (simulator and harness), Gateway (submit_final_report)
 Resolves M0 questions: 2, 7, 19 (evaluator side), 20, 21, 23, 24, 25, 26, 27, 28; part of 38

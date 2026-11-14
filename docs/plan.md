@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: draft, 14 Nov 2026.
+Status: M0 decisions accepted, 14 Nov 2026. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
@@ -10,12 +10,12 @@ Status: draft, 14 Nov 2026.
 | --- | --- | --- | --- |
 | M0 | 1 | Design freeze | Contracts frozen |
 | M1 | 2 | Thin slice | Demo 1 runs from a seed |
-| M2 | 3 | Authority and freshness | I1 to I6 pass |
+| M2 | 3 | Authority and freshness | I1 to I7 pass |
 | M3 | 4 | Full scenarios | All 3 demos run |
 | M4 | 5 | Live study | Report drafted |
 | M5 | 6 | Release v0.1 | Repo public |
 
-After v0.1: Temporal and DBOS baselines, the MCP conformance test, the TLA+ model and run shrinking (v0.2), then receipt export (v0.3).
+After v0.1: Temporal and DBOS baselines, the MCP conformance test, the TLA+ model, run shrinking and the AliceMemory adapter for F8 (v0.2), then receipt export (v0.3).
 
 ## Teams
 
@@ -33,24 +33,24 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 
 ## Exit criteria
 
-1. **M0 Design freeze.** Decision records cover action identity, grant lifecycle, state machine, property definitions, tool contracts and the fault catalog. Repo scaffold, CI and Docker Compose work.
-2. **M1 Thin slice.** One agent, submit_purchase_order, fault F2, gateway states and recovery, evaluator properties 1 and 5. Demo 1 runs from a seed; B0 duplicates the order and G2 does not.
-3. **M2 Authority and freshness.** Grants, approvals, recorded reads, contract levels C0 to C3, faults F6, F7, F9 and F11, properties 2 to 4. Hypothesis tests for I1 to I6 pass.
-4. **M3 Full scenarios.** Demos 2 and 3, the remaining faults, recorded playback, viewer v1 and T6's held-out set. AliceMemory adapter for F8 if chosen for v0.1.
+1. **M0 Design freeze.** Decision records cover action identity, grant lifecycle, state machine, property definitions, tool contracts and the fault catalog (done: 0001 to 0009 accepted on 14 Nov 2026). Repo scaffold, CI and Docker Compose work.
+2. **M1 Thin slice.** One agent with the scripted model, submit_purchase_order at contract level C2, faults F2 and F11, the deterministic scheduler and virtual clock, gateway states and recovery, evaluator properties 1 and 5. Demo 1 runs from a seed; B0 places a second order and G2 does not.
+3. **M2 Authority and freshness.** Approvals and grants, recorded reads, contract levels C0 to C3, faults F1, F6, F7, F9 and F12, properties 2 to 4. Hypothesis tests for I1 to I7 pass.
+4. **M3 Full scenarios.** Demos 2 and 3, faults F3, F4, F5 and F10, recorded playback, viewer v1 (its tooling gets its own decision record) and T6's held-out set.
 5. **M4 Study.** Pilot 10 to 20 live episodes, set the spend cap, run B0, G1 and G2 across contract levels, draft the report.
 6. **M5 Release v0.1.** README with a two-minute and a twenty-minute path, a three-minute video, the report with raw data, a limitations section and full citations.
 
 ## First-week tickets
 
-- [ ] Maintainer: write the action contract: what one logical action is, the action_key fields, what a grant permits (drafted as decision record 0001, Proposed)
-- [ ] Maintainer: define the five properties as checks over ground truth (drafted as decision record 0004, Proposed)
-- [ ] Maintainer: choose the name and license; check GitHub, PyPI and npm
+- [x] Maintainer: write the action contract: what one logical action is, the action_key fields, what a grant permits (decision records 0001 and 0002)
+- [x] Maintainer: define the five properties as checks over ground truth (decision record 0004)
+- [x] Maintainer: choose the name and license (Fivefold, Apache-2.0)
 - [ ] T1: gw schema with migrations; action and grant tables with unique constraints
-- [ ] T1: state machine module with the transition table and I1 to I6 as assertions
-- [ ] T2: purchase-order service with a C0 to C3 contract switch and the effects ledger
+- [ ] T1: state machine module with the transition table and I1 to I7 as assertions
+- [ ] T2: purchase-order service with the C0 to C3 capability flags, the effects ledger and fact history
 - [ ] T2: fault scheduler that fires F2 on an event counter
-- [ ] T3: evaluator that reads the sim ledger and scores properties 1 and 5 to JSON
-- [ ] T4: LangGraph agent for the procurement task over gateway tools, plus the B0 variant
+- [ ] T3: evaluator that reads the sim ledger and the harness message log, and scores properties 1 and 5 to JSON
+- [ ] T4: LangGraph agent for the procurement task over gateway tools, the B0 variant and the scripted model
 - [ ] T5: repo scaffold, CI with pytest and Hypothesis, Docker Compose, a `make demo` stub
 - [ ] T6: 10 held-out scenarios in a location the other teams cannot see
 
@@ -70,6 +70,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 | Scope creep into frameworks, routers or receipts | The non-goals list; any addition needs a decision record |
 | Noisy live results | Five trials per cell; publish denominators and spread |
 | Race windows on C0 to C2 destinations | Document them as limits; C3 closes them in the simulator |
+| The deterministic scheduler around LangGraph and MCP is new work | Build it first in M1, with tests for ordering, timers, crash and restart; keep the split topology for real processes |
 
 ## Launch checklist
 

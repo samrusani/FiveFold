@@ -1,6 +1,6 @@
 # 0007: Tooling
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Stack, Repo layout, plan.md (T5 tickets)
 Resolves M0 questions: 43, 44
@@ -104,5 +104,5 @@ Held-out scenarios never enter the repo. The scenario loader takes a path.
 ## Consequences
 
 - The spec's repo layout becomes `src/fivefold/...`, with two new subpackages: `domain` and `harness`.
-- Name check on 14 Nov 2026: `fivefold` is unclaimed on PyPI and npm. `agentcheck`, this repository's name, is taken on PyPI. The name decision stays open. A rename touches only the package directory and `pyproject.toml`.
+- Name check on 14 Nov 2026: `fivefold` is unclaimed on PyPI and npm. `agentcheck`, this repository's name, is taken on PyPI. On 14 Nov 2026 the maintainer chose the name Fivefold and the Apache-2.0 license.
 - Spec changes on acceptance: the Stack table (uv, Ruff, mypy, psycopg, migrations) and the Repo layout.

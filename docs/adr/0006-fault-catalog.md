@@ -1,6 +1,6 @@
 # 0006: Fault catalog, fault points and expected outcomes
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Fault catalog, Demos (product.md), Testing, plan.md (M1 to M3), product.md success measures, CLAUDE.md (Tests)
 Resolves M0 questions: 4, 6, 10 (fault side), 30, 33 (F4), 34, 35; part of 37

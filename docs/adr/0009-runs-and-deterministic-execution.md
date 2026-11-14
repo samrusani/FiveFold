@@ -1,6 +1,6 @@
 # 0009: Runs, scenarios and deterministic execution
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Simulator (determinism, scenarios), Playback and branching, Stack (packaging, `make demo`), Testing, Data model (Run)
 Resolves M0 questions: 29, 31, 32, 33 (MCP transport), 41, 42 (scenario format); part of 38

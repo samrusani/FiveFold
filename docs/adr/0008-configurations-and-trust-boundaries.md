@@ -1,6 +1,6 @@
 # 0008: Configurations and trust boundaries
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Baselines, Architecture (trust boundaries), Stack (database roles), CLAUDE.md (hard rules)
 Resolves M0 questions: 1, 37, 39, 40; part of 31

@@ -1,8 +1,8 @@
 # Product spec
 
-Fivefold (working name) is an open-source test suite and reference gateway that checks whether AI agents act correctly when things fail. A task passes only if every real-world action happens exactly once, with valid authority, on fresh inputs, is actually committed, and is honestly reported. Version 0.1 ships a procurement simulator, three demos and a published comparison report, with no GPUs and no model training.
+Fivefold is an open-source test suite and reference gateway that checks whether AI agents act correctly when things fail. A task passes only if every real-world action happens exactly once, with valid authority, on fresh inputs, is actually committed, and is honestly reported. Version 0.1 ships a procurement simulator, three demos and a published comparison report, with no GPUs and no model training.
 
-Status: draft, 14 Nov 2026. Companion docs: [spec.md](spec.md) (technical spec) and [plan.md](plan.md) (build plan).
+Status: M0 decisions accepted, 14 Nov 2026. Companion docs: [spec.md](spec.md) (technical spec), [plan.md](plan.md) (build plan) and the [decision records](adr/README.md).
 
 ## Problem
 
@@ -28,13 +28,15 @@ All of this evidence comes from 2026 preprints that have not been peer-reviewed.
 
 | # | Property | Passes when | Typical fault |
 | --- | --- | --- | --- |
-| 1 | Exactly once | Each intended effect commits at most once, and once if the task requires it | Lost reply, redelivery, crash after commit |
-| 2 | Authorized at commit | Each committed effect maps to one grant that was valid and in scope at commit time | Revoked approval, expired grant, replayed approval |
-| 3 | Inputs still fresh | Every fact the decision used is unchanged at commit, or the change is declared harmless | Quote change, memory correction |
-| 4 | Actually committed | Every effect the task requires exists in the destination's ledger | Crash before dispatch, silent failure |
-| 5 | Truthfully reported | The agent's final report matches the ledger, including "outcome unknown" | Success claimed after a lost reply |
+| 1 | Exactly once | Each intent has at most one committed effect, and nothing commits that the task did not intend | Lost reply, redelivery, crash after commit |
+| 2 | Authorized at commit | Each committed effect cites one approval that was valid and in scope when it committed | Revoked approval, expired approval, replayed approval |
+| 3 | Inputs still fresh | Every input the operation depends on was read, and still holds at commit under the dependency rules | Quote change; memory correction in v0.2 |
+| 4 | Actually committed | Every required effect exists in the ledger, unless the authority withdrew it or it became infeasible | Crash before dispatch, request lost |
+| 5 | Truthfully reported | The final report matches the ledger and the evidence the stack had, including "outcome unknown" | Success claimed after a lost reply |
 
-Scoring reads ground truth from the simulator's ledger, never the transcript, and uses no LLM judge.
+Properties 1, 2, 3 and 5 are safety properties: nothing bad happened. Property 4 is a liveness property: the required effect happened. A run passes when all five hold. It passes unresolved when all five hold but some outcome is honestly reported as unknown.
+
+Scoring reads ground truth from the simulator's and the harness's records, never the transcript or the gateway's own tables, and uses no LLM judge. Decision record 0004 defines every check.
 
 ## Scope for v0.1
 
@@ -42,7 +44,7 @@ In scope:
 
 - One domain: procurement, with quotes, suppliers, budgets, approvals, purchase orders and inventory reservations.
 - A reference action gateway and a durable action state machine with an explicit "outcome unknown" state.
-- A fault scheduler with a fixed catalog of fault types.
+- A fault scheduler with a fixed catalog of fault types, and a deterministic runner with a virtual clock, so a seed and recorded model outputs reproduce a run exactly.
 - A deterministic evaluator for the five properties, plus cost and recovery metrics.
 - One agent framework (LangGraph), run with API models and local models.
 - An evidence viewer, three demos and one comparison report.
@@ -51,11 +53,11 @@ Out of scope (non-goals): an agent framework, a durable execution engine, a mode
 
 ## Demos
 
-1. **Order placed, reply lost.** The purchase service commits, the reply is dropped and the agent crashes. On restart the gateway reconciles, and no second order is placed. The viewer shows the agent's view beside the ledger.
-2. **Approval goes stale.** After approval, the quote changes or a permission is revoked. The gateway refuses to dispatch and names which fact invalidated which action.
-3. **Outcome unknown.** The same lost reply hits a tool with no idempotency key and no status query. The system reports "outcome unknown" and what must be reconciled, instead of guessing.
+1. **Order placed, reply lost.** The purchase service commits, the reply is dropped and the agent is killed. While the agent is down, the gateway retries with the same idempotency key and gets the stored result. The resumed agent re-sends its proposal, which attaches to the confirmed action, so no second order is placed. Without the gateway, the resumed agent places a second order. The viewer shows the agent's view beside the ledger.
+2. **Approval goes stale.** After approval, the quote changes or the approval is revoked. The gateway refuses to send and names which fact or approval invalidated which action. Without the gateway, the order goes through anyway.
+3. **Outcome unknown.** The same lost reply hits a destination with no idempotency key and no status query (contract level C0). The system reports "outcome unknown" and what must be reconciled, instead of guessing.
 
-Each demo runs in about three minutes from a recorded mode that needs no API key.
+Each demo runs the baseline and the gateway side by side on the same seed, in about three minutes. Demos use a scripted model, so they need no API key. Decision record 0006 pins each demo's faults and contract level.
 
 ## Success measures
 
@@ -63,7 +65,7 @@ These are proposed targets for the maintainer to confirm, not commitments.
 
 - A stranger reproduces demo 1 from the README in under 15 minutes on a clean machine.
 - The report publishes raw results, denominators, configurations and model versions.
-- Every fault type has a deterministic test that fails on the naive baseline and passes on the gateway.
+- Every fault variant has deterministic tests that match a published expected-results matrix. For every fault except those that test the gateway's own recovery (F1, F10, F12), at least one test shows the naive baseline failing where the gateway passes.
 - At least one issue or contribution from an outside person within a month of launch.
 
 ## Positioning
@@ -82,12 +84,12 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 
 Two openings are untaken: an MCP conformance test for lost replies (requested in MCP issue #3394) and published baselines on Temporal and DBOS.
 
-## Open decisions
+## Decisions and open questions
 
-- **Name:** Fivefold is a placeholder. Check GitHub, PyPI and npm before the first public commit.
-- **License:** Apache-2.0 (includes a patent grant) or MIT.
-- **AliceMemory:** in v0.1 or v0.2. It drives the memory-correction fault (F8).
-- **Live study:** which models, and the spend cap after the pilot.
+- **Name:** Fivefold. The name was unclaimed on PyPI and npm on 14 Nov 2026.
+- **License:** Apache-2.0, which includes a patent grant.
+- **AliceMemory:** v0.2. It drives the memory-correction fault (F8), which decision record 0006 defers.
+- **Open: live study.** Which models, and the spend cap after the pilot.
 
 ## Sources
 

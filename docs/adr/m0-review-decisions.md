@@ -1,10 +1,10 @@
 # M0 review: questions and decisions
 
-During the M0 design review on 14 Nov 2026, a close read of the docs raised 44 questions. The maintainer asked for a recommended answer to each. Each answer below sits inside a Proposed decision record. Nothing here takes effect until the maintainer accepts that record.
+During the M0 design review on 14 Nov 2026, a close read of the docs raised 44 questions. The maintainer asked for a recommended answer to each. Each answer below sits inside a decision record. The maintainer accepted all nine records on 14 Nov 2026, and their changes are applied to the docs.
 
 ## Changes to items the maintainer owns
 
-CLAUDE.md reserves these for the maintainer. The records propose changing them:
+CLAUDE.md reserves these for the maintainer, who accepted these changes on 14 Nov 2026:
 
 - **States:** a new state, PendingApproval (0003).
 - **Invariants:** a new invariant, I7, allowing one live or confirmed action per intent. I5 extends to the final report. I1 to I6 are restated with exact checks, and every "I1 to I6" in the docs becomes "I1 to I7" (0003).
@@ -114,8 +114,11 @@ An independent reviewer read all nine drafts against the original docs and walke
 16. The infeasible excuse ignores the run's own spending (0004).
 17. Style: the excuse rule is split into steps, long sentences are split, and preprints cite arXiv IDs (0001, 0002, 0004, 0006).
 
-## Still open (the maintainer's decisions, not part of the 44)
+## Decided alongside the records
 
-- The name and the license.
-- AliceMemory in v0.1 or v0.2. The records assume v0.2.
-- Live-study models and the spend cap after the pilot.
+- Name: Fivefold. License: Apache-2.0. The maintainer chose both on 14 Nov 2026.
+- AliceMemory: v0.2, as record 0006 sets.
+
+## Still open
+
+- Live-study models and the spend cap, after the pilot.

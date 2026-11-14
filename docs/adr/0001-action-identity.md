@@ -1,6 +1,6 @@
 # 0001: Action identity
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Data model (Action identity, Proposal, Action, Freshness), Gateway (write tools)
 Resolves M0 questions: 12, 17, 18, 19 (gateway side); part of 38

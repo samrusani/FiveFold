@@ -26,3 +26,7 @@ Short sentences, plain words, specific numbers with units. No em dashes. Cite pa
 - Secrets. Keys come from environment variables.
 - Personal names, email addresses, local paths and machine details.
 - Held-out evaluation scenarios. They live outside this repository.
+
+## License
+
+Fivefold is licensed under the Apache License 2.0. By contributing, you agree that your contributions are licensed under the same terms.

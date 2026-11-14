@@ -1,6 +1,6 @@
 # 0002: Authority: approvals and grants
 
-Status: Proposed
+Status: Accepted (2026-11-14)
 Date: 2026-11-14
 Spec sections affected: Data model (Grant), Gateway (admin API, policy), Simulator (approvals service), Fault catalog (F6), Evaluator (property 2)
 Resolves M0 questions: 3, 13, 14, 22; parts of 1, 2 and 38
