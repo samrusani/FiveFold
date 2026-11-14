@@ -23,7 +23,7 @@ from fivefold.gateway.records import (
     Attempt,
     BasisCheck,
     ProbeAnswer,
-    Proposal,
+    WriteCall,
 )
 from fivefold.gateway.state_machine import (
     FINAL_STATES,
@@ -143,10 +143,10 @@ class Run:
         )
 
     def propose(self) -> str:
-        proposal = Proposal(
-            "REQ-1", "submit_purchase_order", "supplier/S-1", {"quantity": 100}, "k", {"q": 1}
+        call = WriteCall(
+            "REQ-1", "submit_purchase_order", "supplier/S-1", {"quantity": 100}, "k", (), ()
         )
-        result = self.store.propose(proposal, self.scheduler.now)
+        result = self.store.propose(call, self.scheduler.now)
         assert isinstance(result, ActionResult)
         self.dispatcher.drive(result.action_id)
         return result.action_id

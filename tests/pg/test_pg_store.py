@@ -33,10 +33,10 @@ from fivefold.gateway.records import (
     BasisCheck,
     Claim,
     ClaimStatus,
-    Proposal,
     Refusal,
     RefusalReason,
     ReportAccepted,
+    WriteCall,
 )
 from fivefold.gateway.state_machine import ActionState, AnswerClass, GatewaySettings, Reason
 from fivefold.gateway.store import UnknownAction
@@ -74,8 +74,9 @@ def _store(
     )
 
 
-def _proposal(intent_id: str = "REQ-1", key: str = "k") -> Proposal:
-    return Proposal(intent_id, "submit_purchase_order", "supplier/S-1", {"q": 1}, key, {"f": 1})
+def _proposal(intent_id: str = "REQ-1", key: str = "k") -> WriteCall:
+    """A write call with no dependencies, so it needs no reads."""
+    return WriteCall(intent_id, "submit_purchase_order", "supplier/S-1", {"q": 1}, key, (), ())
 
 
 def _authorized(store: PgStore, intent_id: str = "REQ-1", key: str = "k", vt: int = 0) -> str:

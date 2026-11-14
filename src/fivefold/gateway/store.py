@@ -16,6 +16,12 @@ belong to the tool layer, which calls `status` when its wait ends, with the name
 tool that answers. A refused proposal is answered at once, so `propose` logs refusals; an
 admitted one is answered later, by that `status` call.
 
+Admission runs in one transaction, in the order of 0001, item 17: the tool layer checks
+the schema, then `propose` checks the intent, resolves the cited reads against the
+store's read records, and applies the matching rule. Every write call leaves a proposal
+record with its outcome, including a call that failed the schema check
+(`refuse_invalid`). Reads are recorded by `record_read`, which numbers them.
+
 Locks, for the Postgres store: a transaction takes intent rows in intent-id order, then
 action rows in action-id order, then the run's state row, which numbers actions, events
 and responses and guards the invariant check's reads. Every transaction takes the locks
@@ -36,10 +42,12 @@ from contextlib import AbstractContextManager
 
 from fivefold.domain.contracts import Contract
 from fivefold.gateway import steps
+from fivefold.gateway.codec import storable
 from fivefold.gateway.invariants import InvariantViolation, check_invariants
 from fivefold.gateway.records import (
     Action,
     ActionResult,
+    Admission,
     Answer,
     ApprovalStatus,
     Attempt,
@@ -48,12 +56,13 @@ from fivefold.gateway.records import (
     CheckTicket,
     Claim,
     ProbeAnswer,
-    Proposal,
+    ReadRecord,
     Refusal,
     RefusalReason,
     ReportAccepted,
     Resolution,
     Snapshot,
+    WriteCall,
     check_text,
 )
 from fivefold.gateway.state_machine import GatewaySettings
@@ -130,6 +139,29 @@ class Transaction(ABC):
     @abstractmethod
     def next_action_number(self) -> int:
         """Reserve the next action's number in the run."""
+
+    @abstractmethod
+    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
+        """Record a read the gateway served, with the next read id."""
+
+    @abstractmethod
+    def reads(self, read_ids: Iterable[str]) -> Mapping[str, ReadRecord]:
+        """The reads among `read_ids` that the gateway issued, by id."""
+
+    @abstractmethod
+    def record_proposal(
+        self,
+        *,
+        operation: str,
+        intent_id: str | None,
+        args: Mapping[str, object],
+        based_on: tuple[str, ...],
+        admission: Admission,
+        reason: RefusalReason | None,
+        action_id: str | None,
+        vt: int,
+    ) -> str:
+        """Record a write call and its outcome, with the next proposal id; return the id."""
 
     @abstractmethod
     def apply(self, change: Change, vt: int) -> None:
@@ -213,34 +245,96 @@ class ActionStore(ABC):
 
     # Tools ------------------------------------------------------------------------------
 
-    def propose(self, proposal: Proposal, vt: int) -> ActionResult | Refusal:
-        """A write tool call: admission's intent check, then the matching rule (0001).
+    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
+        """Record a read the gateway served; proposals cite it by its id (0001, item 13)."""
+        check_text(key, "a fact key")
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ValueError(f"the version of {key} must be an integer")
+        self._clock(vt)
+        with self._transaction() as tx:
+            read = tx.record_read(key, version, vt)
+            self._check(tx)
+        self._vt = vt
+        return read
+
+    def propose(self, call: WriteCall, vt: int) -> ActionResult | Refusal:
+        """A write tool call that passed the schema check: admission and matching (0001).
 
         Returns the action's result as admission left it, or a refusal. Only a refusal is
         logged as the tool's response; see the module docstring.
         """
         self._clock(vt)
         with self._transaction() as tx:
-            outcome, action_id = self._propose(tx, proposal, vt)
+            outcome, action_id, admission = self._propose(tx, call, vt)
+            tx.record_proposal(
+                operation=call.operation,
+                intent_id=call.intent_id,
+                args=call.args,
+                based_on=call.based_on,
+                admission=admission,
+                reason=outcome.reason if isinstance(outcome, Refusal) else None,
+                action_id=action_id,
+                vt=vt,
+            )
             if isinstance(outcome, Refusal):
-                tx.log(proposal.operation, action_id, outcome, vt)
+                tx.log(call.operation, action_id, outcome, vt)
             self._check(tx)
         self._vt = vt
         return outcome
 
+    def refuse_invalid(
+        self, operation: str, args: Mapping[str, object], message: str, vt: int
+    ) -> Refusal:
+        """Record a write call that broke the schema, and refuse it (`invalid_args`).
+
+        `args` are the arguments as the agent sent them, decoded from JSON. Text cannot
+        hold a NUL character in PostgreSQL, so each one is recorded as U+FFFD.
+        """
+        kept = storable(args)
+        if not isinstance(kept, dict):
+            raise ValueError("a write call's arguments are a JSON object")
+        intent_id = kept.get("intent_id")
+        cited = kept.get("based_on")
+        based_on = (
+            tuple(cited)
+            if isinstance(cited, list) and all(isinstance(c, str) for c in cited)
+            else ()
+        )
+        refusal = Refusal(RefusalReason.INVALID_ARGS, message=str(storable(message)))
+        self._clock(vt)
+        with self._transaction() as tx:
+            tx.record_proposal(
+                operation=str(storable(operation)),
+                intent_id=intent_id if isinstance(intent_id, str) else None,
+                args=kept,
+                based_on=based_on,
+                admission=Admission.REFUSED,
+                reason=RefusalReason.INVALID_ARGS,
+                action_id=None,
+                vt=vt,
+            )
+            tx.log(str(storable(operation)), None, refusal, vt)
+            self._check(tx)
+        self._vt = vt
+        return refusal
+
     def _propose(
-        self, tx: Transaction, proposal: Proposal, vt: int
-    ) -> tuple[ActionResult | Refusal, str | None]:
-        operation = tx.intents().get(proposal.intent_id)
+        self, tx: Transaction, call: WriteCall, vt: int
+    ) -> tuple[ActionResult | Refusal, str | None, Admission]:
+        refused = Admission.REFUSED
+        operation = tx.intents().get(call.intent_id)
         if operation is not None:
-            tx.lock_intent(proposal.intent_id)
-        if tx.run_closed() or proposal.intent_id in tx.closed_intents():
-            return Refusal(RefusalReason.RUN_CLOSED), None
+            tx.lock_intent(call.intent_id)
+        if tx.run_closed() or call.intent_id in tx.closed_intents():
+            return Refusal(RefusalReason.RUN_CLOSED), None, refused
         if operation is None:
-            return Refusal(RefusalReason.UNKNOWN_INTENT), None
-        if operation != proposal.operation:
-            return Refusal(RefusalReason.WRONG_OPERATION), None
-        holders = tx.holders(proposal.intent_id) if self._identity else []
+            return Refusal(RefusalReason.UNKNOWN_INTENT), None, refused
+        if operation != call.operation:
+            return Refusal(RefusalReason.WRONG_OPERATION), None, refused
+        proposal = steps.resolve_basis(call, tx.reads(call.based_on))
+        if isinstance(proposal, Refusal):
+            return proposal, None, refused
+        holders = tx.holders(call.intent_id) if self._identity else []
         kind, holder = steps.match_proposal(holders, proposal)
         if holder is None:
             action_id = steps.action_id_for(tx.next_action_number())
@@ -248,18 +342,18 @@ class ActionStore(ABC):
                 action_id, self._task_id, proposal, self._contract, identity=self._identity, vt=vt
             )
             tx.apply(admitted, vt)
-            return steps.result_for(tx.view(action_id)), action_id
+            return steps.result_for(tx.view(action_id)), action_id, Admission.ADMITTED
         action_id = holder.action_id
         if kind is Match.ATTACH:
             change = steps.attach(tx.view(action_id), proposal)
             if change is not None:
                 tx.apply(change, vt)
-            return steps.result_for(tx.view(action_id)), action_id
+            return steps.result_for(tx.view(action_id)), action_id, Admission.ATTACHED
         if kind is Match.BUSY:
             refusal = Refusal(RefusalReason.INTENT_BUSY, action_id, holder.state, args=holder.args)
         else:
             refusal = Refusal(RefusalReason.INTENT_DONE, action_id, holder.state, holder.effect_id)
-        return refusal, action_id
+        return refusal, action_id, refused
 
     def status(self, action_id: str, vt: int, *, tool: str = "get_action_status") -> ActionResult:
         """The action's result now, as `tool` answers once its wait ends (0003); logged."""

@@ -10,6 +10,7 @@ plain strings, except in event details, where the keys that hold enums (`trigger
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import cast
@@ -90,6 +91,34 @@ _DETAIL_ENUMS: Mapping[str, type[StrEnum]] = {
     "approval": ApprovalStatus,
 }
 """Event detail keys whose values are enum members."""
+
+
+def storable(value: object) -> JSON:
+    """Arguments an agent sent, as JSON that every store can hold and give back unchanged.
+
+    PostgreSQL text cannot hold a NUL character and `jsonb` has no NaN or infinity, so a
+    NUL becomes U+FFFD and a number that is not finite becomes its name as text.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd")
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, Mapping):
+        return {str(storable(str(key))): storable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [storable(item) for item in value]
+    return str(storable(repr(value)))
+
+
+def plain_from_json(data: JSON) -> object:
+    """Decoded JSON with arrays as tuples and objects as read-only mappings."""
+    if isinstance(data, Mapping):
+        return frozen({str(key): plain_from_json(item) for key, item in data.items()})
+    if isinstance(data, list | tuple):
+        return tuple(plain_from_json(item) for item in data)
+    return data
 
 
 def mapping_from_json(data: JSON) -> Mapping[str, object]:
@@ -209,6 +238,9 @@ def result_to_json(result: ActionResult | Refusal | ReportAccepted) -> JSON:
                 }
                 for conflict in result.conflicts
             ],
+            "unknown_reads": list(result.unknown_reads),
+            "missing_keys": list(result.missing_keys),
+            "message": result.message,
         }
     return {"result": "accepted", "claims": [_claim_to_json(claim) for claim in result.claims]}
 
@@ -247,6 +279,9 @@ def result_from_json(data: JSON) -> ActionResult | Refusal | ReportAccepted:
             _optional_str(values.get("effect_id")),
             None if args is None else args_from_json(args),
             tuple(_conflict(item) for item in _list(values.get("conflicts", []))),
+            tuple(_str(item) for item in _list(values.get("unknown_reads", []))),
+            tuple(_str(item) for item in _list(values.get("missing_keys", []))),
+            _str(values.get("message", "")),
         )
     if kind == "accepted":
         return ReportAccepted(tuple(_claim(item) for item in _list(values.get("claims", []))))

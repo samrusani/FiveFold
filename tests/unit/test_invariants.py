@@ -22,13 +22,13 @@ from fivefold.gateway.records import (
     Claim,
     ClaimConflict,
     ClaimStatus,
-    Proposal,
     RecordedAction,
     Refusal,
     RefusalReason,
     ReportAccepted,
     Snapshot,
     ToolCall,
+    WriteCall,
     frozen,
 )
 from fivefold.gateway.state_machine import (
@@ -56,11 +56,19 @@ FAR = 10**9
 INTENTS = {"REQ-1": "submit_purchase_order", "REQ-2": "submit_purchase_order", "REQ-3": "x"}
 
 
+def _write(
+    store: MemoryStore, intent: str, key: str, version: int, vt: int
+) -> ActionResult | Refusal:
+    """A write call for `intent` that cites a read of fact `f` at `version`."""
+    read = store.record_read("f", version, vt)
+    return store.propose(
+        WriteCall(intent, INTENTS[intent], "t", {}, key, (read.read_id,), ("f",)), vt
+    )
+
+
 def _send(store: MemoryStore, intent: str, vt: int) -> tuple[str, int]:
     """Propose, approve and send one action for `intent`; return its id and the time."""
-    result = store.propose(
-        Proposal(intent, INTENTS[intent], "t", {}, f"key-{intent}", {"f": 1}), vt
-    )
+    result = _write(store, intent, f"key-{intent}", 1, vt)
     assert isinstance(result, ActionResult)
     action_id = result.action_id
     store.file_approval(
@@ -110,13 +118,13 @@ def snapshot() -> Snapshot:
     )
     assert store.retry(second, revoked, ticket.not_before_vt) is None
     vt = ticket.not_before_vt
-    third = store.propose(Proposal("REQ-3", "x", "t", {}, "key-REQ-3", {"f": 1}), vt + 6)
+    third = _write(store, "REQ-3", "key-REQ-3", 1, vt + 6)
     assert isinstance(third, ActionResult)
     seen = store.view(third.action_id).last_seq
     store.file_approval(third.action_id, FRESH, "AP-REQ-3", vt + 7, seen_seq=seen)
     seen = store.view(third.action_id).last_seq
     store.poll_approval(third.action_id, ApprovalStatus.APPROVED, FRESH, vt + 8, seen_seq=seen)
-    store.propose(Proposal("REQ-3", "x", "t", {}, "key-REQ-3", {"f": 2}), vt + 8)
+    _write(store, "REQ-3", "key-REQ-3", 2, vt + 8)
     store.status(first, vt + 9)
     store.status(second, vt + 9)
     claims = [
@@ -447,7 +455,47 @@ def test_records_every_report_in_but_the_run_open(snapshot: Snapshot) -> None:
 
 def test_records_an_unsent_action_in_a_closed_intent() -> None:
     store = MemoryStore(task_id="TASK-1", intents=INTENTS, contract=Contract.C2, settings=SETTINGS)
-    result = store.propose(Proposal("REQ-1", INTENTS["REQ-1"], "t", {}, "k", {"f": 1}), 0)
+    result = _write(store, "REQ-1", "k", 1, 0)
     assert isinstance(result, ActionResult)
     closed = replace(store.snapshot(), closed_intents=frozenset({"REQ-1"}))
     assert messages(closed) == ["records: proposed after its intent closed (0010)"]
+
+
+def test_the_fixture_records_every_read_and_write_call(snapshot: Snapshot) -> None:
+    assert list(snapshot.reads) == ["R-0001", "R-0002", "R-0003", "R-0004"]
+    admissions = [(c.proposal_id, str(c.admission), c.action_id) for c in snapshot.proposals]
+    assert admissions == [
+        ("P-0001", "admitted", "A-0001"),
+        ("P-0002", "admitted", "A-0002"),
+        ("P-0003", "admitted", "A-0003"),
+        ("P-0004", "attached", "A-0003"),
+    ]
+
+
+def test_admission_an_action_no_write_call_created(snapshot: Snapshot) -> None:
+    found = messages(replace(snapshot, proposals=snapshot.proposals[1:]))
+    assert found == [
+        "records: write call 1 has the wrong id",
+        "records: write call 2 has the wrong id",
+        "records: write call 3 has the wrong id",
+        "records: no admitted write call created it",
+    ]
+
+
+def test_admission_a_citation_of_a_later_read(snapshot: Snapshot) -> None:
+    first = snapshot.proposals[0]
+    late = replace(first, based_on=("R-0004",))
+    found = messages(replace(snapshot, proposals=(late, *snapshot.proposals[1:])))
+    assert found == ["records: cites R-0004, which it could not"]
+
+
+def test_admission_an_attached_call_naming_another_intent(snapshot: Snapshot) -> None:
+    attached = replace(snapshot.proposals[3], action_id="A-0001")
+    found = messages(replace(snapshot, proposals=(*snapshot.proposals[:3], attached)))
+    assert found == ["records: names A-0001 of another intent"]
+
+
+def test_admission_reads_numbered_with_a_gap(snapshot: Snapshot) -> None:
+    reads = {k: v for k, v in snapshot.reads.items() if k != "R-0002"}
+    found = messages(replace(snapshot, reads=frozen(reads)))
+    assert "records: read ids are not numbered 1 to n" in found

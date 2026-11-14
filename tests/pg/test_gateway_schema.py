@@ -20,7 +20,7 @@ pytestmark = pytest.mark.pg
 
 Connection = psycopg.Connection[TupleRow]
 TABLES = ["run_state", "intent", "action", "grant", "attempt", "action_event", "escalation"]
-TABLES += ["tool_call", "report"]
+TABLES += ["tool_call", "report", "read", "proposal"]
 LIVE = ["proposed", "pending_approval", "authorized", "dispatched", "outcome_unknown"]
 
 
@@ -314,6 +314,8 @@ def test_a_closed_run_stays_closed_and_its_counters_move_forward(migrated_databa
             "UPDATE gw.run_state SET last_seq = 4",
             "UPDATE gw.run_state SET last_action_no = -1",
             "UPDATE gw.run_state SET last_call_no = -1",
+            "UPDATE gw.run_state SET last_read_no = -1",
+            "UPDATE gw.run_state SET last_proposal_no = -1",
             "DELETE FROM gw.run_state",
         ):
             _refused(conn, psycopg.errors.RaiseException, change)
@@ -332,6 +334,52 @@ def test_reports_are_history_for_every_role(migrated_database: str) -> None:
         conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
         _refused(conn, psycopg.errors.RaiseException, "UPDATE gw.report SET worker = 'W2'")
         _refused(conn, psycopg.errors.RaiseException, "DELETE FROM gw.report")
+
+
+def _proposal(
+    conn: Connection,
+    proposal_id: str,
+    admission: str,
+    reason: str | None,
+    action_id: str | None,
+) -> None:
+    conn.execute(
+        "INSERT INTO gw.proposal (proposal_id, operation, intent_id, args, based_on,"
+        " admission, reason, action_id, vt)"
+        " VALUES (%s, 'submit_purchase_order', 'REQ-1', '{}', '[]', %s, %s, %s, 0)",
+        (proposal_id, admission, reason, action_id),
+    )
+
+
+def test_reads_and_write_calls_are_history_for_every_role(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        conn.execute("INSERT INTO gw.read (read_id, key, version, vt) VALUES ('R-0001', 'f', 1, 0)")
+        _proposal(conn, "P-0001", "refused", "unknown_intent", None)
+        for change in (
+            "UPDATE gw.read SET version = 2",
+            "DELETE FROM gw.read",
+            "UPDATE gw.proposal SET reason = 'run_closed'",
+            "DELETE FROM gw.proposal",
+        ):
+            _refused(conn, psycopg.errors.RaiseException, change)
+
+
+def test_a_write_call_states_its_outcome_consistently(migrated_database: str) -> None:
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _action(conn, "A-0001")
+        _proposal(conn, "P-0001", "admitted", None, "A-0001")
+        _proposal(conn, "P-0002", "refused", "intent_busy", "A-0001")
+        for proposal_id, admission, reason, action_id in (
+            ("P-0003", "admitted", "run_closed", "A-0001"),
+            ("P-0004", "refused", None, None),
+            ("P-0005", "attached", None, None),
+            ("P-0006", "refused", "report_inconsistent", None),
+            ("X-0007", "refused", "run_closed", None),
+        ):
+            with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+                _proposal(conn, proposal_id, admission, reason, action_id)
+        with pytest.raises(psycopg.errors.ForeignKeyViolation), conn.transaction():
+            _proposal(conn, "P-0008", "attached", None, "A-0009")
 
 
 def test_the_run_has_one_state_row(migrated_database: str) -> None:
@@ -370,7 +418,7 @@ def test_action_event_is_append_only_for_every_role(migrated_database: str) -> N
 EXPECTED: dict[str, dict[str, set[str]]] = {
     "ff_gw": {
         table: {"SELECT", "INSERT", "UPDATE", "DELETE"}
-        if table not in ("action_event", "report")
+        if table not in ("action_event", "report", "read", "proposal")
         else {"SELECT", "INSERT"}
         for table in TABLES
     },
@@ -380,8 +428,8 @@ EXPECTED: dict[str, dict[str, set[str]]] = {
     "ff_harness": {table: set() for table in TABLES},
     "ff_agent": {table: set() for table in TABLES},
 }
-"""Privileges on every gw table: 0008's table, plus record 0010's `report`, which ff_gw
-only adds to."""
+"""Privileges on every gw table: 0008's table, plus record 0010's `report` and 0001's
+reads and write calls, which ff_gw only adds to."""
 
 
 @pytest.mark.parametrize("role", sorted(EXPECTED))

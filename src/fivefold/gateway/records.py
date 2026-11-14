@@ -262,6 +262,83 @@ class Proposal:
 
 
 @dataclass(frozen=True)
+class WriteCall:
+    """A write tool call that passed the schema check, as the store admits it (0001).
+
+    `based_on` holds the read ids the agent cited. `dependencies` holds the fact keys the
+    operation depends on (0004, dependency rules), which the citations must cover. The
+    store resolves the citations against its read records in the transaction that checks
+    the intent and applies the matching rule, so every check runs in the order of 0001,
+    item 17. The action's basis is the cited version of each dependency; a dependency
+    cited more than once takes its newest cited version. Extra citations are recorded on
+    the proposal but are not part of the basis (item 15).
+    """
+
+    intent_id: str
+    operation: str
+    target: str
+    args: Mapping[str, str | int]
+    action_key: str
+    based_on: tuple[str, ...]
+    dependencies: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for what in ("intent_id", "operation", "target", "action_key"):
+            check_text(getattr(self, what), what)
+        for text in (*self.based_on, *self.dependencies):
+            check_text(text, "a citation or a dependency")
+        for key, value in self.args.items():
+            check_text(key, "an argument name")
+            if isinstance(value, bool) or not isinstance(value, str | int):
+                raise ValueError(f"argument {key} must be text or an integer")
+            if isinstance(value, str):
+                check_text(value, f"argument {key}")
+
+
+@dataclass(frozen=True)
+class ReadRecord:
+    """A read the gateway served, which a proposal can cite by its id (0001, item 13)."""
+
+    read_id: str
+    key: str
+    version: int
+    vt: int
+
+
+class Admission(StrEnum):
+    """What admission did with a write call (0001, items 10 and 17)."""
+
+    ADMITTED = "admitted"
+    """It created a new action."""
+
+    ATTACHED = "attached"
+    """It returned an existing action with the same key."""
+
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class ProposalRecord:
+    """One write call and its outcome; every call has one, admitted or refused (0001).
+
+    `args` holds the business arguments in normal form, or, for a call refused with
+    `invalid_args`, the arguments as the agent sent them. `intent_id` is None only when
+    such a call named no intent as text. `action_id` names the action the call created
+    or attached to, or the one an `intent_busy` or `intent_done` refusal names.
+    """
+
+    proposal_id: str
+    operation: str
+    intent_id: str | None
+    args: Mapping[str, object]
+    based_on: tuple[str, ...]
+    admission: Admission
+    reason: RefusalReason | None
+    action_id: str | None
+    vt: int
+
+
+@dataclass(frozen=True)
 class CheckTicket:
     """What a dispatcher needs to check an action before a send (0003, dispatch)."""
 
@@ -407,7 +484,12 @@ class ClaimConflict:
 
 @dataclass(frozen=True)
 class Refusal:
-    """The `{"result": "refused", ...}` shape of 0003, with its details."""
+    """The `{"result": "refused", ...}` shape of 0003, with its details.
+
+    `unknown_reads` lists the cited read ids the gateway never issued (`unknown_read`),
+    `missing_keys` the dependencies no citation covers (`missing_basis`), and `message`
+    says what broke the schema (`invalid_args`).
+    """
 
     reason: RefusalReason
     action_id: str | None = None
@@ -415,6 +497,9 @@ class Refusal:
     effect_id: str | None = None
     args: Mapping[str, str | int] | None = None
     conflicts: tuple[ClaimConflict, ...] = ()
+    unknown_reads: tuple[str, ...] = ()
+    missing_keys: tuple[str, ...] = ()
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -446,7 +531,9 @@ class Snapshot:
     `attempts` maps each action id to its attempts in attempt order. `events` and
     `tool_calls` are in seq and call order. `closed_intents` are the intents an accepted
     `not_done` claim closed, and `reports` maps each agent worker whose report was
-    accepted to the call number of its first accepted report (0010, item 6).
+    accepted to the call number of its first accepted report (0010, item 6). `reads`
+    maps each read id to the read it names, and `proposals` lists every write call in
+    the order the calls came (0001, items 13 and 17).
     """
 
     intents: Mapping[str, str]
@@ -459,3 +546,5 @@ class Snapshot:
     run_closed: bool
     closed_intents: frozenset[str] = frozenset()
     reports: Mapping[str, int] = field(default_factory=lambda: frozen({}))
+    reads: Mapping[str, ReadRecord] = field(default_factory=lambda: frozen({}))
+    proposals: tuple[ProposalRecord, ...] = ()

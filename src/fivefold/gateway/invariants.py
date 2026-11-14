@@ -30,6 +30,10 @@ What each check covers:
   every intent an accepted report claims `not_done` is closed, every recorded report
   is an accepted final report, and the run is closed once every expected worker's
   report was accepted (0010).
+- Admission: reads and write calls are numbered from 1 with no gaps; every action was
+  created by exactly one admitted write call for its intent and operation; an attached
+  or refused call names an action of its intent where it names one; a call that got
+  past the read check cites only reads issued before it (0001, items 13 to 17).
 
 Two parts are checked elsewhere. That the log is append-only and that an effect id
 never changes compare two snapshots, so the Hypothesis suites check them between steps.
@@ -47,6 +51,7 @@ from fivefold.gateway.records import (
     Action,
     ActionEvent,
     ActionResult,
+    Admission,
     Attempt,
     Claim,
     ClaimStatus,
@@ -589,6 +594,62 @@ def _records(
         if event.reason is Note.ESCALATED and event.action_id not in escalated_actions:
             yield Violation("records", event.action_id, "an escalated note without an escalation")
     yield from _closing(snapshot, settings)
+    yield from _admission(snapshot, events_by_action)
+
+
+def _admission(
+    snapshot: Snapshot, events_by_action: Mapping[str, list[ActionEvent]]
+) -> Iterator[Violation]:
+    """Reads and write calls (0001, items 13 to 17)."""
+    expected_reads = {f"R-{n:04d}" for n in range(1, len(snapshot.reads) + 1)}
+    if set(snapshot.reads) != expected_reads:
+        yield Violation("records", "reads", "read ids are not numbered 1 to n")
+    for read_id, read in snapshot.reads.items():
+        if read.read_id != read_id:
+            yield Violation("records", read_id, f"filed under the id of {read.read_id}")
+    created: dict[str, str] = {}
+    last_vt = 0
+    for number, call in enumerate(snapshot.proposals, start=1):
+        subject = call.proposal_id
+        if call.proposal_id != f"P-{number:04d}":
+            yield Violation("records", subject, f"write call {number} has the wrong id")
+        if call.vt < last_vt:
+            yield Violation("records", subject, "write calls are out of time order")
+        last_vt = max(last_vt, call.vt)
+        if (call.admission is Admission.REFUSED) != (call.reason is not None):
+            yield Violation("records", subject, "a refusal reason without a refusal, or not")
+        action = snapshot.actions.get(call.action_id) if call.action_id is not None else None
+        if call.admission is not Admission.REFUSED or call.action_id is not None:
+            if action is None:
+                yield Violation("records", subject, f"names no recorded action {call.action_id}")
+                continue
+            if (action.intent_id, action.operation) != (call.intent_id, call.operation):
+                yield Violation("records", subject, f"names {action.action_id} of another intent")
+        if call.admission is Admission.ADMITTED and action is not None:
+            if action.action_id in created:
+                yield Violation(
+                    "records",
+                    subject,
+                    f"{action.action_id} was already created by {created[action.action_id]}",
+                )
+            created[action.action_id] = subject
+            events = events_by_action.get(action.action_id, [])
+            if not events or events[0].vt != call.vt:
+                yield Violation(
+                    "records", subject, f"{action.action_id} was admitted at another vt"
+                )
+        past_reads = call.admission is not Admission.REFUSED or call.reason in (
+            RefusalReason.MISSING_BASIS,
+            RefusalReason.INTENT_BUSY,
+            RefusalReason.INTENT_DONE,
+        )
+        if past_reads:
+            for read_id in call.based_on:
+                cited = snapshot.reads.get(read_id)
+                if cited is None or cited.vt > call.vt:
+                    yield Violation("records", subject, f"cites {read_id}, which it could not")
+    for action_id in sorted(snapshot.actions.keys() - created.keys()):
+        yield Violation("records", action_id, "no admitted write call created it")
 
 
 def _closing(snapshot: Snapshot, settings: GatewaySettings) -> Iterator[Violation]:

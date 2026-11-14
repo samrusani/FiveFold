@@ -21,7 +21,7 @@ with a bug cannot write some broken records.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from types import TracebackType
 from typing import Any, LiteralString
@@ -36,6 +36,7 @@ from fivefold.gateway.codec import (
     basis_to_json,
     check_from_columns,
     mapping_from_json,
+    plain_from_json,
     result_from_json,
     result_to_json,
     to_json,
@@ -45,10 +46,14 @@ from fivefold.gateway.records import (
     Action,
     ActionEvent,
     ActionResult,
+    Admission,
     Attempt,
     Escalation,
     Grant,
+    ProposalRecord,
+    ReadRecord,
     Refusal,
+    RefusalReason,
     ReportAccepted,
     Resolution,
     Snapshot,
@@ -65,7 +70,7 @@ from fivefold.gateway.state_machine import (
     Note,
     Reason,
 )
-from fivefold.gateway.steps import ActionView, Change
+from fivefold.gateway.steps import ActionView, Change, proposal_id_for, read_id_for
 from fivefold.gateway.store import ActionStore, Transaction, UnknownAction
 
 Connection = psycopg.Connection[TupleRow]
@@ -93,6 +98,11 @@ _ESCALATION: LiteralString = (
 )
 _TOOL_CALL: LiteralString = (
     "SELECT call_no, tool, action_id, result, as_of_seq, vt FROM gw.tool_call"
+)
+_READ: LiteralString = "SELECT read_id, key, version, vt FROM gw.read"
+_PROPOSAL: LiteralString = (
+    "SELECT proposal_id, operation, intent_id, args, based_on, admission, reason, action_id, vt"
+    " FROM gw.proposal ORDER BY substring(proposal_id FROM 3)::bigint"
 )
 _IN_ACTION_ORDER: LiteralString = " ORDER BY substring(action_id FROM 3)::bigint"
 
@@ -161,7 +171,8 @@ class PgStore(ActionStore):
                 raise IntentMismatch(f"the run's intents are {stored}, not {dict(intents)}")
             row = self._conn.execute(
                 "SELECT greatest((SELECT max(vt) FROM gw.action_event),"
-                " (SELECT max(vt) FROM gw.tool_call))"
+                " (SELECT max(vt) FROM gw.tool_call), (SELECT max(vt) FROM gw.read),"
+                " (SELECT max(vt) FROM gw.proposal))"
             ).fetchone()
         self._vt = 0 if row is None or row[0] is None else int(row[0])
 
@@ -179,14 +190,16 @@ class PgStore(ActionStore):
                 self._conn.execute("SELECT pg_advisory_unlock(%s)", (GATEWAY_LOCK_KEY,))
         self._conn.close()
 
-    def counters(self) -> tuple[int, int, int]:
-        """The run's counters: the last action number, event seq and response number."""
+    def counters(self) -> tuple[int, int, int, int, int]:
+        """The run's counters: the last action number, event seq, response number, read
+        number and proposal number."""
         row = self._conn.execute(
-            "SELECT last_action_no, last_seq, last_call_no FROM gw.run_state"
+            "SELECT last_action_no, last_seq, last_call_no, last_read_no, last_proposal_no"
+            " FROM gw.run_state"
         ).fetchone()
         if row is None:
             raise LookupError("gw.run_state has no row; is the gateway migration applied?")
-        return int(row[0]), int(row[1]), int(row[2])
+        return int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4])
 
     def __enter__(self) -> PgStore:
         return self
@@ -414,6 +427,60 @@ class _PgTransaction(Transaction):
                 ),
             )
 
+    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
+        row = self._one(
+            "UPDATE gw.run_state SET last_read_no = last_read_no + 1 RETURNING last_read_no",
+            (),
+        )
+        read = ReadRecord(read_id_for(int(row[0])), key, version, vt)
+        self._conn.execute(
+            "INSERT INTO gw.read (read_id, key, version, vt) VALUES (%s, %s, %s, %s)",
+            (read.read_id, key, version, vt),
+        )
+        return read
+
+    def reads(self, read_ids: Iterable[str]) -> Mapping[str, ReadRecord]:
+        wanted = sorted(set(read_ids))
+        if not wanted:
+            return frozen({})
+        rows = self._conn.execute(_READ + " WHERE read_id = ANY(%s)", (wanted,)).fetchall()
+        return frozen({str(r[0]): _read(r) for r in rows})
+
+    def record_proposal(
+        self,
+        *,
+        operation: str,
+        intent_id: str | None,
+        args: Mapping[str, object],
+        based_on: tuple[str, ...],
+        admission: Admission,
+        reason: RefusalReason | None,
+        action_id: str | None,
+        vt: int,
+    ) -> str:
+        row = self._one(
+            "UPDATE gw.run_state SET last_proposal_no = last_proposal_no + 1"
+            " RETURNING last_proposal_no",
+            (),
+        )
+        proposal_id = proposal_id_for(int(row[0]))
+        self._conn.execute(
+            "INSERT INTO gw.proposal (proposal_id, operation, intent_id, args, based_on,"
+            " admission, reason, action_id, vt) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                proposal_id,
+                operation,
+                intent_id,
+                Jsonb(dict(args)),
+                Jsonb(list(based_on)),
+                str(admission),
+                None if reason is None else str(reason),
+                action_id,
+                vt,
+            ),
+        )
+        return proposal_id
+
     def log(
         self,
         tool: str,
@@ -462,6 +529,8 @@ class _PgTransaction(Transaction):
             run_closed=self.run_closed(),
             closed_intents=self.closed_intents(),
             reports=self.reports(),
+            reads=frozen({str(r[0]): _read(r) for r in self._conn.execute(_READ).fetchall()}),
+            proposals=tuple(_proposal(r) for r in self._conn.execute(_PROPOSAL).fetchall()),
         )
 
     def _one(self, query: LiteralString, params: tuple[object, ...]) -> Row:
@@ -536,3 +605,24 @@ def _escalation(row: Row) -> Escalation:
 
 def _tool_call(row: Row) -> ToolCall:
     return ToolCall(row[0], row[1], row[2], result_from_json(row[3]), row[4], row[5])
+
+
+def _read(row: Row) -> ReadRecord:
+    return ReadRecord(row[0], row[1], row[2], row[3])
+
+
+def _proposal(row: Row) -> ProposalRecord:
+    args = plain_from_json(row[3])
+    if not isinstance(args, Mapping):
+        raise ValueError(f"proposal {row[0]} has arguments that are not an object")
+    return ProposalRecord(
+        proposal_id=row[0],
+        operation=row[1],
+        intent_id=row[2],
+        args=args,
+        based_on=tuple(str(item) for item in row[4]),
+        admission=Admission(row[5]),
+        reason=None if row[6] is None else RefusalReason(row[6]),
+        action_id=row[7],
+        vt=row[8],
+    )

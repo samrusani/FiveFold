@@ -41,10 +41,14 @@ from fivefold.gateway.records import (
     Grant,
     ProbeAnswer,
     Proposal,
+    ReadRecord,
     Reconcile,
     RecordedAction,
+    Refusal,
+    RefusalReason,
     Resolution,
     StaleFact,
+    WriteCall,
     frozen,
 )
 from fivefold.gateway.state_machine import (
@@ -258,6 +262,37 @@ def _retry_allowed(view: ActionView, settings: GatewaySettings) -> int:
 
 
 # Admission and matching (0001) -------------------------------------------------------
+
+
+def read_id_for(number: int) -> str:
+    """Return the id of the run's `number`-th read."""
+    return f"R-{number:04d}"
+
+
+def proposal_id_for(number: int) -> str:
+    """Return the id of the run's `number`-th write call."""
+    return f"P-{number:04d}"
+
+
+def resolve_basis(call: WriteCall, reads: Mapping[str, ReadRecord]) -> Proposal | Refusal:
+    """Resolve a write call's citations to its basis, or refuse it (0001, items 13 to 15).
+
+    `reads` holds the cited reads the gateway issued. A cited id it lacks is refused
+    with `unknown_read`; a dependency no citation covers, with `missing_basis`. The basis
+    holds each dependency at its newest cited version and nothing else.
+    """
+    unknown = tuple(dict.fromkeys(r for r in call.based_on if r not in reads))
+    if unknown:
+        return Refusal(RefusalReason.UNKNOWN_READ, unknown_reads=unknown)
+    newest: dict[str, int] = {}
+    for read_id in call.based_on:
+        read = reads[read_id]
+        newest[read.key] = max(read.version, newest.get(read.key, read.version))
+    missing = tuple(dict.fromkeys(k for k in call.dependencies if k not in newest))
+    if missing:
+        return Refusal(RefusalReason.MISSING_BASIS, missing_keys=missing)
+    basis = {key: newest[key] for key in call.dependencies}
+    return Proposal(call.intent_id, call.operation, call.target, call.args, call.action_key, basis)
 
 
 def match_proposal(holders: Sequence[Action], proposal: Proposal) -> tuple[Match, Action | None]:
