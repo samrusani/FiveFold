@@ -23,6 +23,20 @@ Design phase. Decision records 0001 to 0009 were accepted on 14 Nov 2026, and th
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to propose changes
 - [CLAUDE.md](CLAUDE.md): rules for coding agents working in this repository
 
+## Development
+
+You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Docker Compose can run the database for you.
+
+```
+make setup      # install the locked dependencies into .venv
+make db-up      # start PostgreSQL 16 on 127.0.0.1:5432
+make check      # lint, type check and every test
+make test-fast  # only the tests that need no database
+make help       # every target
+```
+
+Database tests connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose database. Any PostgreSQL 16 server works, as long as the connection is a superuser.
+
 ## Maintainer
 
 [samrusani](https://github.com/samrusani)

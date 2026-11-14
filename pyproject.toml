@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fivefold"
+version = "0.0.0"
+description = "A test suite and reference gateway that checks whether AI agents act correctly when things fail."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "psycopg[binary]>=3.3.9,<3.4",
+    "pydantic>=2.14.3,<3",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.15",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "ruff==0.17.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fivefold"]
+
+# Lint and format (0007). Ruff's version is pinned so lint results do not drift.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "DTZ", "TID"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fivefold"]
+
+# Determinism guard (0007, 0009): only harness/clock.py and harness/rng.py may touch
+# wall-clock time or system randomness. Everything else uses the run's virtual clock
+# and seeded generators.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"time".msg = "Use the run's virtual clock in fivefold.harness.clock."
+"asyncio.sleep".msg = "Use the scheduler's timers; wall-clock waits break determinism."
+"datetime.datetime.now".msg = "Use the run's virtual clock in fivefold.harness.clock."
+"datetime.datetime.utcnow".msg = "Use the run's virtual clock in fivefold.harness.clock."
+"datetime.datetime.today".msg = "Use the run's virtual clock in fivefold.harness.clock."
+"datetime.date.today".msg = "Use the run's virtual clock in fivefold.harness.clock."
+"random".msg = "Use the run's seeded generators in fivefold.harness.rng."
+"secrets".msg = "Use the run's seeded generators in fivefold.harness.rng."
+"uuid.uuid1".msg = "Use per-run counters for ids (0009)."
+"uuid.uuid4".msg = "Use per-run counters for ids (0009)."
+"os.urandom".msg = "Use the run's seeded generators in fivefold.harness.rng."
+
+[tool.ruff.lint.per-file-ignores]
+"src/fivefold/harness/clock.py" = ["TID251"]
+"src/fivefold/harness/rng.py" = ["TID251"]
+"tests/**" = ["TID251"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+mypy_path = "src"
+explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
+markers = [
+    "pg: needs a PostgreSQL 16 server; set FIVEFOLD_ADMIN_DSN (default: the local Docker Compose database)",
+]

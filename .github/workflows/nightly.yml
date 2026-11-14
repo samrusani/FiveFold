@@ -1,0 +1,49 @@
+# Nightly property tests with far more examples than CI (0007). Hypothesis prints a
+# reproduction blob for every failure, and the job uploads its example database.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  properties:
+    name: Property tests (nightly profile)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      FIVEFOLD_ADMIN_DSN: postgresql://postgres@127.0.0.1:5432/postgres
+      HYPOTHESIS_PROFILE: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv==0.13.8
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Test
+        run: make test
+      - name: Upload failing examples
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypothesis-examples
+          path: .hypothesis/
+          if-no-files-found: ignore
