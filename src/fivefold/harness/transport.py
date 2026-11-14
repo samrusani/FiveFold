@@ -8,6 +8,8 @@ and then its fate: delivered, with the number of the delivery, or dropped, with 
 
 Transport rules (0006, as amended by 0010):
 
+- A component that is down sends nothing: what its cancelled tasks try to send while
+  they unwind is discarded, and never logged.
 - A message addressed to a component that is down is dropped.
 - When a caller times out, every later answer to that request is dropped, as when an
   HTTP client closes its connection.
@@ -124,14 +126,17 @@ class Transport:
         idempotency_key: str | None = None,
         answer_class: str | None = None,
         wanted: Callable[[], DropReason | None] | None = None,
-    ) -> Envelope:
+    ) -> Envelope | None:
         """Send one message; `on_arrival` runs when it is delivered.
 
         `wanted`, checked on arrival, names a reason to drop the message instead, for
-        example that the caller has timed out.
+        example that the caller has timed out. Returns None, sending nothing, when the
+        sender is down.
         """
         if hop not in HOPS:
             raise ValueError(f"unknown hop {hop!r}")
+        if not self._scheduler.is_up(sender):
+            return None
         envelope = Envelope(
             seq=self._log.next_seq(),
             hop=hop,

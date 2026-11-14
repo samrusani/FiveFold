@@ -9,9 +9,13 @@ wall-clock time, and a run full of long timeouts takes milliseconds.
 
 Components (the agent workers, the gateway, the simulator and the harness's scripted
 humans) run their asynchronous work as tasks spawned through the scheduler, under the
-component's name. Crashing a component cancels its tasks and discards their memory; it
-stays down until its restart event fires (0006). Each crash starts a new incarnation, so
-the transport can drop answers to requests sent before the crash (0010, change 3).
+component's name. Libraries that hand synchronous work to the event loop's default
+executor, as LangChain and LangGraph do for synchronous callables, run it at once in the
+loop's thread instead (`InlineExecutor`), so a run never has a second thread.
+
+Crashing a component cancels its tasks and discards their memory; it stays down until
+its restart event fires (0006). Each crash starts a new incarnation, so the transport can
+drop answers to requests sent before the crash (0010, change 3).
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import heapq
 from collections.abc import Awaitable, Callable, Coroutine
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar
@@ -77,6 +82,25 @@ class Timer:
     def cancel(self) -> None:
         """Keep the event from firing. Cancelling twice, or after it fired, does nothing."""
         self._event.cancelled = True
+
+
+class InlineExecutor(ThreadPoolExecutor):
+    """Runs submitted work at once, in the calling thread, and never starts a thread.
+
+    asyncio's `loop.run_in_executor(None, ...)` uses the loop's default executor, which
+    must be a `ThreadPoolExecutor` (CPython 3.12, `set_default_executor`). LangGraph runs
+    synchronous callables through it in asynchronous runs (langchain-core 1.8.0,
+    `run_in_executor`; langgraph 1.2.22, `pregel/_call.py`). A thread would finish at a
+    wall-clock moment the scheduler cannot see, so this runs the work inline instead.
+    """
+
+    def submit(self, fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> Future[T]:
+        future: Future[T] = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as error:  # handed to the awaiting task, as a thread would
+            future.set_exception(error)
+        return future
 
 
 def _resolve(future: asyncio.Future[None]) -> None:
@@ -235,6 +259,9 @@ class Scheduler:
         Raises `ComponentFailed` if a component task raised an exception that nothing
         handled. At the deadline, the clock moves to it and later events stay queued.
         """
+        loop = asyncio.get_running_loop()
+        if not isinstance(getattr(loop, "_default_executor", None), InlineExecutor):
+            loop.set_default_executor(InlineExecutor())
         while True:
             await settle()
             self._raise_failures()

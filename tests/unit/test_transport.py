@@ -141,6 +141,27 @@ def test_a_late_answer_is_dropped_after_the_caller_times_out() -> None:
     ]
 
 
+def test_a_component_that_is_down_sends_nothing() -> None:
+    rig = Rig()
+    sent: list[object] = []
+
+    def start() -> None:
+        rig.scheduler.crash("agent-1")
+        sent.append(
+            rig.transport.post(
+                hop="agent_gw",
+                kind="notification",
+                sender="agent-1",
+                receiver="gateway",
+                body={},
+                on_arrival=lambda e: None,
+            )
+        )
+
+    rig.go(start)
+    assert sent == [None] and rig.log.messages == []
+
+
 def test_messages_to_a_component_that_is_down_are_dropped() -> None:
     rig = Rig()
     outcome: list[str] = []

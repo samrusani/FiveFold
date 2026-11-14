@@ -297,3 +297,35 @@ def test_a_crash_cancels_tasks_in_the_order_they_were_spawned() -> None:
 
     run(main)
     assert order == list(range(6))
+
+
+# No threads -------------------------------------------------------------------------------------
+
+
+def test_work_handed_to_the_default_executor_runs_inline_in_the_loops_thread() -> None:
+    """LangGraph runs synchronous callables through `run_in_executor(None, ...)`."""
+    import threading
+
+    scheduler = Scheduler()
+    seen: list[object] = []
+
+    def sync_work(x: int) -> int:
+        seen.append(threading.get_ident())
+        return x * 2
+
+    def fails() -> None:
+        raise RuntimeError("inside")
+
+    async def worker() -> None:
+        loop = asyncio.get_running_loop()
+        seen.append(await loop.run_in_executor(None, sync_work, 21))
+        with pytest.raises(RuntimeError, match="inside"):
+            await loop.run_in_executor(None, fails)
+
+    async def main() -> None:
+        scheduler.spawn("agent-1", worker(), name="worker")
+        await scheduler.run()
+
+    run(main)
+    assert seen == [threading.get_ident(), 42]
+    assert threading.active_count() == 1
