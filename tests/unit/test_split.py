@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import ActionState, CheckKind, Reason
 from fivefold.harness.clock import HostClock
 from fivefold.harness.log import MemoryHarnessLog
+from fivefold.harness.migrations import check_database_name
 from fivefold.harness.scheduler import HostScheduler, Scheduler
 from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
@@ -111,6 +113,20 @@ def test_default_database_names_are_safe_and_short() -> None:
     name = default_database("dev-001-single-po.G2.C2.7")
     assert name == "fivefold_split_dev_001_single_po_g2_c2_7"
     assert len(default_database("x" * 200)) == 63
+
+
+def test_a_long_default_database_name_keeps_its_start_and_a_hash_of_the_run_id() -> None:
+    """PostgreSQL keeps 63 bytes of a name. Cut short there, the names of seeds 7 and 8 of
+    a scenario with a 42-character id were one, and `start` with replace for one dropped
+    the other's database."""
+    scenario = "s" * 42
+    seven, eight = (default_database(f"{scenario}.G2.C2.{seed}") for seed in (7, 8))
+    assert seven != eight
+    for name in (seven, eight):
+        assert len(name.encode()) == 63
+        assert re.fullmatch(rf"fivefold_split_{'s' * 39}_[0-9a-f]{{8}}", name), name
+        check_database_name(name)
+    assert default_database(f"{scenario}.G2.C2.7") == seven
 
 
 # Faults the split topology runs -----------------------------------------------------------------
