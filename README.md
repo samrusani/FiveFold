@@ -1,24 +1,28 @@
 # FiveFold
 
-An open-source test suite and reference gateway that checks whether AI agents act correctly when things fail.
+**Your agent's transcript looks fine. Check the ledger.**
 
-## In two minutes
+An agent sends a purchase order and crashes. The order commits anyway, but its reply is lost. The agent resumes from its last checkpoint and sends the order again. This time the reply arrives. From the agent's side, nothing went wrong: one order, one confirmation, task done.
 
-### What it checks
+The ledger shows two orders on one approval, and a budget 280.00 USD overdrawn.
 
-FiveFold runs an agent on a task in a simulated procurement system, injects a failure such as a lost reply or a crash, and checks five properties of every real-world action (record 0004):
+FiveFold is an open-source test suite for that gap. It runs AI agents through a simulated procurement system, injects the failures real systems have (lost replies, crashes, duplicate deliveries, revoked approvals, prices that change after sign-off) and scores what actually happened from the ledger. Then it checks whether the agent's report matches. No model grades the runs, and a seed with its recorded model replies reproduces a run exactly.
 
-1. **Exactly once:** each intent has at most one committed effect, and nothing commits that the task did not intend.
-2. **Authorized at commit:** each committed effect cites one approval that was valid and in scope when it committed.
-3. **Inputs still fresh:** every input the operation depends on was read, and still held when it committed.
-4. **Actually committed:** every required effect exists, unless the authority withdrew it or it became infeasible.
-5. **Truthfully reported:** the final report matches the ledger and the evidence the stack had, including "outcome unknown".
+FiveFold also ships a reference gateway that sits between the agent and its tools. Behind it, the same agent, with the same seed and the same failures, places one order and reports it truthfully.
 
-The evaluator decides every verdict from the simulator's and the harness's records. It calls no model and never reads the transcript.
+A run passes only if every real-world action:
 
-### Run demo 1
+1. **happens exactly once**, even after a lost reply, a crash or a duplicate delivery;
+2. **is authorized when it commits**, by an approval that is still valid and in scope;
+3. **rests on inputs that still hold**, such as a quote that has not changed since the approval;
+4. **actually commits**, instead of quietly going missing;
+5. **is reported truthfully**, including "outcome unknown" when nobody can know.
 
-You need git, make, Docker with Compose, and [uv](https://docs.astral.sh/uv/) 0.13.8 or later, which downloads Python 3.12 if you do not have it. You need no API key.
+[Decision record 0004](docs/adr/0004-five-properties.md) defines each check.
+
+## Two minutes: run demo 1
+
+No API key, no GPU. You need git, make, Docker with Compose, and [uv](https://docs.astral.sh/uv/) 0.13.8 or later, which downloads Python 3.12 if you do not have it.
 
 ```
 git clone https://github.com/samrusani/FiveFold.git
@@ -55,16 +59,78 @@ G2:
   message log: 52 messages, sha256 d3a3ecbe40bf2f0a
 ```
 
-### Read the output
+### What you just saw
 
-- **The task.** Requisition REQ-1 asks for 100 units of W-100 at no more than 6.00 USD each. The budget has 800.00 USD left: enough for one order at 540.00 USD, not two. At contract level C2, the purchase-order service honours idempotency keys.
-- **The faults.** F2 drops the order's reply after the order commits. F11 kills the agent right after it sends the order, and resumes it from its checkpoint 10,000 ms later. Times are virtual: `vt` is the run's virtual clock in milliseconds, which every component reads, so a seed gives the same run on any machine.
-- **B0** is the agent writing to the simulator directly. Once resumed, it orders again: two orders on one approval, and the budget is 280.00 USD overdrawn.
-- **G2** is the same agent behind the gateway. While the agent is down, the gateway retries with the same idempotency key and gets the stored result. The resumed agent's repeated order attaches to that action, so there is one order.
+- **The task.** Requisition REQ-1 asks for 100 units of W-100 at no more than 6.00 USD each. The budget has 800.00 USD left: enough for one order at 540.00 USD, not two. The purchase-order service honours idempotency keys (contract level C2).
+- **The failures.** F11 kills the agent right after it sends the order, and resumes it from its checkpoint 10,000 ms later. F2 drops the order's reply after the order commits. `vt` is the run's virtual clock in milliseconds. Every component reads it, so a seed gives the same run on any machine.
+- **B0 is the agent calling the procurement API directly.** Once resumed, it orders again: two orders on one approval, and the budget is 280.00 USD overdrawn.
+- **G2 is the same agent behind the gateway.** While the agent is down, the gateway retries with the same idempotency key and gets the stored result. The resumed agent's repeated order attaches to that action, so there is one order.
 - **The lines.** `orders in the ledger` is the simulator's ledger, the ground truth. `report` is the agent's final report. `gateway` says what the gateway did with each action. `message log` counts the messages between components and gives their digest, which is the same on every run of this seed.
 - **The verdict.** It is `pass`, `pass_unresolved` (all five properties hold, and some outcome is honestly reported as unknown) or `fail`, with each failing property and its reason codes. B0 fails property 1 (a duplicate order), property 2 (the second order reuses the first order's approval) and property 3 (the budget no longer covered it). B0's report names only PO-0002, the one order it heard about, so property 5 holds: a report is judged against what the stack could know. G2 passes all five.
 
-## In twenty minutes
+## What FiveFold breaks
+
+Eleven faults from the catalog in [record 0006](docs/adr/0006-fault-catalog.md). Each one fires at a named point when an event counter reaches its value, never on a timer, so every rerun fires it at the same moment.
+
+| Fault | What goes wrong |
+| --- | --- |
+| F1 | A crash just before the request goes out |
+| F2 | The reply is lost after the action commits |
+| F3 | A crash after the reply arrives, before it is recorded |
+| F4 | The same request is delivered twice |
+| F5 | The action commits late, after the caller has timed out |
+| F6 | The approval is revoked before the action commits |
+| F7 | The quote changes after the approval |
+| F9 | Two workers pick up the same task |
+| F10 | Status lookups answer late, or with stale data |
+| F11 | The agent is killed and resumed from its checkpoint |
+| F12 | The request is lost before it reaches the destination |
+
+F8, a memory correction after a proposal, comes in v0.2.
+
+Each fault runs against four kinds of destination ([record 0005](docs/adr/0005-tool-contract-levels.md)) and in three configurations ([record 0008](docs/adr/0008-configurations-and-trust-boundaries.md)):
+
+| Contract level | What the destination offers |
+| --- | --- |
+| C0 | Nothing: no idempotency key, no status lookup |
+| C1 | A status lookup |
+| C2 | Idempotency keys |
+| C3 | Idempotency keys, and a conditional write: the destination checks the approval and the facts when it commits |
+
+| Configuration | Between the agent and the destination |
+| --- | --- |
+| B0 | Nothing: the agent calls the API directly |
+| G1 | An approval gate: one approval request per write call, checked before each send |
+| G2 | The reference gateway |
+
+That gives 235 expected outcomes in [faults/expected.yaml](faults/expected.yaml), and CI checks every one. With the scripted agent, B0 fails 45 of its 72 cells. G2 passes 71 of its 83, and the other 12 are documented limits, such as an approval revoked after the gateway's last check, while the order is already on its way. [docs/limitations.md](docs/limitations.md) says what each guarantee depends on.
+
+## Four things the runs show
+
+1. **The retry is the duplicate.** In demo 1, the agent that calls the API directly orders twice after one lost reply. Behind the gateway, the retry carries the first request's idempotency key, the destination returns the order it already placed, and the agent's second attempt attaches to that order.
+2. **An approval gate is not enough.** G1 checks an approval before every send. It still orders twice in demo 1, because each call is a new action with its own approval, and it misses the changed quote in demo 2a, because it checks no facts.
+3. **Sometimes the honest answer is "unknown".** In demo 3 the reply is lost at a destination with no idempotency key and no status lookup. G2 does not guess. It escalates to a human, tells the agent what to reconcile, and the report says `unknown`. Without the gateway, the agent orders twice.
+4. **The destination's contract sets the ceiling.** If the approval is revoked, or the price goes up, while the order is on its way, every configuration fails at C0 to C2, G2 included: its checks came first. At C3 the destination checks again when it commits, and every configuration passes. Step 2 of the tour below runs the revoked approval.
+
+## What you get
+
+- **A procurement simulator** with quotes, suppliers, budgets, approvals, purchase orders and inventory reservations, at contract levels C0 to C3. Its effects ledger is the ground truth.
+- **A deterministic harness:** one virtual clock, seeded randomness, faults at named points, and a log of every message. CI runs each demo twice and compares every record by digest.
+- **An evaluator** that scores the five properties from the ledger and the harness's logs, never the transcript, and writes CSV and Markdown reports with denominators, cost per passing run and recovery latency.
+- **A reference gateway (G2):** one identity per intended action, single-use grants, freshness checks before each send, retries with idempotency keys, status lookups, an explicit "outcome unknown" state with escalation to a human, and a check of the agent's final report. It is a research design, not hardened for production ([SECURITY.md](SECURITY.md)).
+- **A LangGraph agent** on a scripted model, which needs no key, or on a live one: Ollama, Anthropic, OpenAI or Google, behind an explicit flag, a spend cap and a price file.
+- **Recorded playback.** Every model call goes into a cassette. Replay a live run with no key and no network, or branch it at any model call and let another model answer from there.
+- **A viewer** with each run's timeline and scorecard, and B0 beside G2 on the same seed.
+- **Bring your own agent.** Run the gateway and the simulator as services, and point your agent at the gateway's MCP tools to work the same procurement task. Or point it straight at the simulator, to measure it without a gateway.
+
+## Who it is for
+
+- **Teams about to give an agent write access.** Find out what a lost reply or a restart does to your agent before a customer does. Bring your own agent over MCP, or start with the included LangGraph agent and your model.
+- **People who build tools and APIs for agents.** The contract levels show what an idempotency key, a status lookup or a check at commit is worth when replies go missing.
+- **Gateway and platform builders.** Read, run and measure a reference design: action identity, single-use grants, freshness checks and an honest "outcome unknown".
+- **Researchers.** Every run reproduces from its seed and its recorded model replies, every failure comes with reason codes, and the raw results export to CSV.
+
+## Twenty minutes: the full tour
 
 Run these in the same clone, with the same database. The commands take about a minute in all; the rest is reading.
 
@@ -219,17 +285,6 @@ In demo 1, K = 4 replays the calls up to the order, so the new model takes over 
 - [docs/spec.md](docs/spec.md): the contracts: configurations, trust boundaries, states, tools, contract levels, faults and the evaluator
 - [docs/adr/README.md](docs/adr/README.md): the decision records, with a reading order that starts at record 0004, the five properties
 - [faults/expected.yaml](faults/expected.yaml): the expected verdict of every cell, with a note on each fault
-
-## Status
-
-- **M0, the design freeze, is done.** Decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine.
-- **M1, the thin slice, and M2, authority and freshness, are done.** The simulator runs purchase orders and reservations at contract levels C0 to C3, with the effects ledger, fact history and the approvals service (`src/fivefold/sim/`). The deterministic harness has the scheduler, the virtual clock, transports with a message log, and fault plans, fixed or drawn at random from the run's seed (`src/fivefold/harness/`, `src/fivefold/faults/`). The gateway has the state machine with invariants I1 to I7, the PostgreSQL store, the dispatcher and the agent-facing tools over MCP, as G2 and as G1 (`src/fivefold/gateway/`). A LangGraph agent with a scripted model runs in G1, G2 and B0 (`src/fivefold/agents/`). The evaluator scores every run on all five properties and writes a CSV and a Markdown report across runs (`src/fivefold/evaluator/`).
-- **M3, full scenarios, is nearly done.** Faults F3, F4, F5 and F10, demos 2 and 3, the scripted resolver, recorded playback and viewer v1 (record 0012; see Viewer below) are in. The held-out scenarios are kept outside this repository.
-- **M4, the live study, has started.** G1, the report's token counts, cost and recovery latency, the live model adapter with Ollama, Anthropic, OpenAI and Google, and the study runner are in. The study waits for the maintainer's choice of models, API keys and a spend cap.
-- **M5, the release, has started.** The two paths above, [docs/limitations.md](docs/limitations.md) and [SECURITY.md](SECURITY.md) are in.
-- **The spec's other parts are in:** the admin API over HTTP (see Admin API), experimental branching (step 4 of the twenty-minute path) and the split topology for bringing your own agent (see Bring your own agent).
-
-The development scenario has 235 expected-outcome cells: faults F1 to F7 and F9 to F12, at each contract level and configuration they apply to. F10 needs a status probe, so it applies at C1 in G2 only. Each cell runs from the committed seed and gets the verdict `faults/expected.yaml` expects. Every G2 cell passes except the limits record 0006 documents. Record 0006 fixes no G1 outcome, so G1's cells come from its first runs. Record 0013 settles two of F10's cells. The delayed cell delays 5 status answers, fewer than G2's 20 probes, so G2 hears the sixth and confirms the order. The stale-beyond-L cell freezes the status from just before the order reached the simulator, so G2 marks the order failed and the report says "not done" while the order exists: a documented G2 limit. CI runs each demo twice from its seed, in B0, G1 and G2, and compares every record by digest. Hypothesis also runs dev-001 with random fault plans, `{random: {from: [...], max: N}}` in record 0006, in every configuration and contract level, and checks invariants I1 to I7 on each run's records: 20 runs in CI and 100 nightly.
 
 ## Viewer
 
@@ -389,7 +444,19 @@ When the gateway escalates an action whose outcome is unknown, you resolve it th
 
 Limits: a split run has one agent worker, `agent-1`. Start each service once per run: a service keeps its fault counters, whether the agents' phase is over, and the scripted approver's timers in its memory, so one started again mid-run would fire a fault again from its first occurrence, serve your agent after the agents' phase, and never decide an approval it had scheduled. `serve` refuses a run that has ended. Every service must run on one host, since they share its monotonic clock, and each hop is assumed to take at most `max_hop_latency_ms` (50 ms by default). The harness logs your agent's messages when they reach a service, and an answer to your agent as delivered when the service hands it to its HTTP server: it cannot see whether your agent read it. The simulator logs an answer as dropped if your agent's connection has closed; the gateway's MCP library writes its answers itself, so the gateway logs each one as delivered even after your agent has gone. It counts no tokens and no cost, since it runs no model.
 
+## Status
+
+FiveFold is working toward its first release, v0.1. Everything above runs today.
+
+- **Built:** the simulator at contract levels C0 to C3; the deterministic harness with eleven faults, fixed or random fault plans, recorded playback and branching; the reference gateway (G2) and the approval gate (G1); the LangGraph agent with scripted and live models; the evaluator with its reports, cost and recovery latency; the viewer; the admin API; and the split topology for bringing your own agent.
+- **Left for v0.1:** the live-model study and its report with raw data, and a short video. The study waits for the maintainer's choice of models, API keys and a spend cap. The held-out scenarios are kept outside this repository.
+- **Planned for v0.2:** baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the state machine, and F8.
+
+Every expected cell is a test, run from its committed seed. Record 0006 fixes no G1 outcome, so G1's cells come from its first runs, and record 0013 settles two of F10's. Hypothesis checks invariants I1 to I7 on the gateway's state machine, and on full runs of dev-001 with random fault plans (`{random: {from: [...], max: N}}`, record 0006) in every configuration and contract level: 20 runs in CI and 100 nightly.
+
 ## Documents
+
+Questions, bug reports and failure modes FiveFold does not cover yet are welcome as issues. [CONTRIBUTING.md](CONTRIBUTING.md) says how to propose a change.
 
 - [docs/product.md](docs/product.md): what and why, scope and non-goals
 - [docs/spec.md](docs/spec.md): the contracts to build against
