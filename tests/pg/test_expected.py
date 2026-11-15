@@ -3,7 +3,9 @@
 Each cell runs dev-001 from the committed seed with the cell's fault plan, in a fresh run
 database, and the evaluator scores it. The test asserts the verdict and the failing
 properties, over all five properties. Record 0006 fixes some outcomes before any run, and
-the committed cells must agree with them.
+the committed cells must agree with them. It fixes no G1 outcome: G1's cells come from
+G1's first run, and G1, which fires each fault where G2 does, has a cell for each of G2's
+but F10's, which never fires in G1.
 """
 
 from __future__ import annotations
@@ -49,6 +51,14 @@ because it checks nothing before writing."""
 B0_PASSES = frozenset({"F1", "F10", "F12"})
 """0006: B0 should pass F1, F7 `harmless`, F10 and F12."""
 
+NOT_IN_G1: dict[str, str] = {
+    "F10": (
+        "F10 fires at a status answer, and G1 never asks for one: its gateway never probes,"
+        " and its agent has no status tool (0008), as in B0"
+    ),
+}
+"""Faults with G2 cells that cannot fire in G1, and why."""
+
 HOP_VARIANTS = frozenset({"F4", "F12"})
 """Faults whose cells name a hop. B0's hop, `agent_sim`, is the B0 equivalent of either
 G-mode hop (0006), so their B0 and G2 cells compare by contract level alone."""
@@ -73,6 +83,23 @@ def test_each_fault_but_f1_f10_and_f12_has_a_cell_where_b0_fails_and_g2_passes()
         b0_fails = {where(c) for c in cells if c.config == "B0" and c.verdict == "fail"}
         g2_passes = {where(c) for c in cells if c.config == "G2" and c.verdict == "pass"}
         assert b0_fails & g2_passes, fault
+
+
+def test_g1_has_a_cell_for_every_cell_of_g2() -> None:
+    """G1 and G2 have the same fault points (0006, 0008), so every fault variant and
+    contract level that G2 is tested at, G1 is tested at too (CLAUDE.md, Tests), except
+    the faults that cannot fire in G1."""
+
+    def cells_of(config: str) -> list[tuple[str, str | None, str]]:
+        found = [
+            (c.fault, c.variant, str(c.contract))
+            for c in EXPECTED.cells
+            if c.config == config and c.fault not in NOT_IN_G1
+        ]
+        return sorted(found, key=str)
+
+    assert cells_of("G1") == cells_of("G2")
+    assert not [c.name for c in EXPECTED.cells if c.config == "G1" and c.fault in NOT_IN_G1]
 
 
 def test_the_cells_agree_with_the_outcomes_record_0006_fixes() -> None:

@@ -15,6 +15,11 @@ reads the action again. No network call happens inside a store transaction.
 Drivers run as tasks of the gateway component, so a gateway crash stops them all. After
 the restart, `start` runs startup recovery (0003) and starts a driver for every live
 action again.
+
+A G1 action (identity off) takes the same path with fewer steps (0008). It reads no fact:
+it files its approval request at once, an approval authorizes it, and its one check
+before the send asks only for the approval. Once its outcome is unknown, its driver
+stops: G1 has no status probes, no retries and no escalation.
 """
 
 from __future__ import annotations
@@ -188,10 +193,15 @@ class Dispatcher:
     # Proposed: check the basis, file the approval request (T2, T3) -------------------------
 
     async def _proposed(self, action: Action) -> None:
+        """Check the basis, then file the approval request if it is fresh. G1 checks no
+        basis and files its request at once (0008)."""
         seen = self._store.view(action.action_id).last_seq
+        basis: BasisCheck | None = None
         try:
-            basis = self._freshness.check(action, await self._facts(action), full=True)
-            filed = await self._destination.request_approval(action) if basis.fresh else None
+            if not action.authorization_only:
+                basis = self._freshness.check(action, await self._facts(action), full=True)
+            fresh = basis is None or basis.fresh
+            filed = await self._destination.request_approval(action) if fresh else None
         except Unreachable:
             await self._retry_later()
             return
@@ -211,7 +221,7 @@ class Dispatcher:
     async def _pending(self, action: Action) -> None:
         """One poll. A decision that needs no basis is recorded before any fact is read,
         so an unreachable fact cannot hold back a denial, a revocation, an expiry or the
-        approval timeout."""
+        approval timeout. G1 reads no fact at all (0008)."""
         view = self._store.view(action.action_id)
         grant = view.grant
         if grant is None:
@@ -230,11 +240,13 @@ class Dispatcher:
         if status in _DEAD_AUTHORITY:
             self._store.poll_approval(action.action_id, status, None, self._now(), seen_seq=seen)
             return
-        try:
-            basis = self._freshness.check(action, await self._facts(action), full=True)
-        except Unreachable:
-            await self._retry_later()
-            return
+        basis: BasisCheck | None = None
+        if not action.authorization_only:
+            try:
+                basis = self._freshness.check(action, await self._facts(action), full=True)
+            except Unreachable:
+                await self._retry_later()
+                return
         self._store.poll_approval(action.action_id, status, basis, self._now(), seen_seq=seen)
         if self._store.view(action.action_id).action.state is _S.PENDING_APPROVAL:
             await self._scheduler.sleep(
@@ -262,16 +274,20 @@ class Dispatcher:
         kind: CheckKind,
         record: Callable[..., CheckRecord],
     ) -> CheckRecord:
-        """Run the I3 check the ticket asks for, without any lock (0003, dispatch)."""
+        """Run the I3 check the ticket asks for, without any lock (0003, dispatch).
+
+        G1's check, `authority_only`, asks for the approval and reads no fact (0008).
+        """
         if kind is CheckKind.EXEMPT:
             return record(approval=None, basis=None, check_vt=self._now())
         view = self._store.view(action.action_id)
         if view.grant is None:
             raise RuntimeError(f"{action.action_id} has no grant to check")
         approval = await self._destination.approval(view.grant.approval_id)
-        basis = self._freshness.check(
-            action, await self._facts(action), full=kind is CheckKind.FULL
-        )
+        basis: BasisCheck | None = None
+        if kind is not CheckKind.AUTHORITY_ONLY:
+            facts = await self._facts(action)
+            basis = self._freshness.check(action, facts, full=kind is CheckKind.FULL)
         expires_at = approval.expires_at if approval.status is ApprovalStatus.APPROVED else None
         return record(
             approval=approval.status, basis=basis, check_vt=self._now(), expires_at=expires_at
@@ -292,9 +308,10 @@ class Dispatcher:
     # OutcomeUnknown: recover by the contract (T11 to T13, escalation) ----------------------
 
     async def _unknown(self, action: Action) -> bool:
-        """One recovery step. Returns False when only an attestation can move the action."""
+        """One recovery step. Returns False when only an attestation can move the action,
+        or, in G1, which has no recovery, when nothing can (0008)."""
         view = self._store.view(action.action_id)
-        if view.escalation is not None:
+        if view.escalation is not None or action.authorization_only:
             return False
         contract = action.contract
         if contract.has(Capability.STATUS):
@@ -332,7 +349,8 @@ class Dispatcher:
         """A fault point (0006): faults that fire here take effect before the step goes on.
 
         What a fault acts on is the action: its intent, its business arguments, its
-        operation and idempotency key, and the approval its grant names. A fault that
+        operation, the idempotency key its request carries (none below C2, and none in
+        G1, 0005 and 0008), and the approval its grant names. A fault that
         crashes the gateway (F1) stops the step at the point: nothing after it runs, so
         a crash after the check records no attempt, and one after the record sends
         nothing.
@@ -347,7 +365,7 @@ class Dispatcher:
             **dict(action.args),
             "intent_id": action.intent_id,
             "api": action.operation,
-            "idempotency_key": action.idempotency_key,
+            "idempotency_key": action.request_key,
         }
         if grant is not None:
             context["approval_id"] = grant.approval_id

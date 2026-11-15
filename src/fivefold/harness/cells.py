@@ -3,7 +3,8 @@
 `faults/expected.yaml` lists every cell built so far: a fault variant, a contract level and
 a configuration, with the verdict the run must get. `cell_plan` turns a cell into the plan
 the run uses. A fault that acts on a message targets the purchase order's call, on the hop
-the configuration uses: `gw_sim` in G modes, `agent_sim` in B0.
+the configuration uses: `gw_sim` in G modes, `agent_sim` in B0. G1 and G2 have the same
+gateway points, so a G1 cell fires its fault where the G2 cell does (0006, 0008).
 
 The variants of a cell:
 
@@ -33,7 +34,8 @@ The variants of a cell:
   probe, so its cells pair it with F2 on the order's committed answer (0006, notes), and
   it fires at the first status answer. The `stale_within_lag` cells set `status_lag_ms` to
   3,000 (`cell_scenario`). B0 has no F10 cells: its scripted agent never calls the status
-  tool (0008), so F10's B0 equivalent never fires.
+  tool (0008), so F10's B0 equivalent never fires. G1 has none either: its gateway never
+  probes, and its agent has no status tool (0008), so nothing asks for a status answer.
 """
 
 from __future__ import annotations
@@ -55,10 +57,12 @@ APPROVAL = "request_approval"
 
 TIMINGS: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
     "early": {
+        "G1": ("gw.dispatch.before_check", {}),
         "G2": ("gw.dispatch.before_check", {}),
         "B0": ("net.agent_sim.answer", {"api": APPROVAL}),
     },
     "late": {
+        "G1": ("net.gw_sim.request", {"api": ORDER}),
         "G2": ("net.gw_sim.request", {"api": ORDER}),
         "B0": ("net.agent_sim.request", {"api": ORDER}),
     },
@@ -72,6 +76,7 @@ F1_POINTS: dict[str, str] = {"a": "gw.dispatch.after_check", "b": "gw.dispatch.a
 """Where F1 crashes the gateway, by variant (0006, catalog)."""
 
 F12_HOPS: dict[str, frozenset[str]] = {
+    "G1": frozenset({"gw_sim", "agent_gw"}),
     "G2": frozenset({"gw_sim", "agent_gw"}),
     "B0": frozenset({"agent_sim"}),
 }
@@ -244,6 +249,10 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             raise ValueError(f"F10 has no variant {cell.variant!r}")
         if cell.config == "B0":
             raise ValueError("B0's scripted agent never calls the status tool, so F10 never fires")
+        if cell.config == "G1":
+            raise ValueError(
+                "G1 never asks for the destination's status (0008), so F10 never fires"
+            )
         lost_reply = cell_plan(cell.model_copy(update={"fault": "F2", "variant": None}))
         return [
             *lost_reply,

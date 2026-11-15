@@ -249,3 +249,142 @@ cells:
   # confirms it (pass, where 0006 expects fail (5)). Record 0013 (Proposed) proposes a fix
 # for each; they wait for the maintainer.
   - {fault: F10, variant: stale_within_lag, contract: C1, config: G2, verdict: pass, failing: []}
+
+  # G1, authorization only (0008). Record 0006 fixes no G1 outcome, so these cells come
+  # from the first deterministic run of G1. G1 fires each fault where G2 does. Every write
+  # call is a new action with its own approval, checked before one send that carries no
+  # key. G1 checks no fact and never retries, probes or escalates. A send with no answer
+  # fails the call with gateway_timeout, so the framework's retry orders again. A second
+  # order cites its own approval, so it fails property 1 (a duplicate) and property 3 (the
+  # budget no longer covers it), but not property 2. At C3 the destination refuses such a
+  # second order on its stale budget, and the agent reports not done while the first
+  # order exists, which fails property 5.
+
+  # F1 in G1. a: the restarted gateway sends the Authorized order from its outbox (0003,
+  # startup recovery), and the agent's retry, after its connection ended, places a second
+  # order; the report names only the second, while the stack knew both. b: the attempt
+  # never left; recovery records it as unknown, and the retry's order is the only one.
+  - {fault: F1, variant: a, contract: C0, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F1, variant: b, contract: C0, config: G1, verdict: pass, failing: []}
+  - {fault: F1, variant: a, contract: C1, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F1, variant: b, contract: C1, config: G1, verdict: pass, failing: []}
+  - {fault: F1, variant: a, contract: C2, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F1, variant: b, contract: C2, config: G1, verdict: pass, failing: []}
+  - {fault: F1, variant: a, contract: C3, config: G1, verdict: fail, failing: [5]}
+  - {fault: F1, variant: b, contract: C3, config: G1, verdict: pass, failing: []}
+
+  # F3 in G1: the crash voids the committed answer, recovery records the attempt as
+  # unknown, and the agent's retry orders again. The report names the one order the stack
+  # knew, so property 5 holds below C3.
+  - {fault: F3, variant: null, contract: C0, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F3, variant: null, contract: C1, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F3, variant: null, contract: C2, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F3, variant: null, contract: C3, config: G1, verdict: fail, failing: [5]}
+
+  # F2 in G1: the call fails with gateway_timeout and the action stays unknown; the
+  # framework's retry orders again on a new approval. The report names the one order the
+  # stack knew, so property 5 holds below C3.
+  - {fault: F2, variant: null, contract: C0, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F2, variant: null, contract: C1, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F2, variant: null, contract: C2, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F2, variant: null, contract: C3, config: G1, verdict: fail, failing: [5]}
+
+  # F6 in G1. Early: G1's check finds the approval revoked and sends nothing, and property
+  # 4 excuses the missing order (authority withdrawn). Late: the order commits after the
+  # revocation at C0 to C2; at C3 the destination refuses it, and the agent's one retry
+  # after a failure orders on a new approval.
+  - {fault: F6, variant: early, contract: C0, config: G1, verdict: pass, failing: []}
+  - {fault: F6, variant: late, contract: C0, config: G1, verdict: fail, failing: [2]}
+  - {fault: F6, variant: early, contract: C1, config: G1, verdict: pass, failing: []}
+  - {fault: F6, variant: late, contract: C1, config: G1, verdict: fail, failing: [2]}
+  - {fault: F6, variant: early, contract: C2, config: G1, verdict: pass, failing: []}
+  - {fault: F6, variant: late, contract: C2, config: G1, verdict: fail, failing: [2]}
+  - {fault: F6, variant: early, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F6, variant: late, contract: C3, config: G1, verdict: pass, failing: []}
+
+  # F7 in G1: G1 checks no fact, so the order goes out on the old price, early or late,
+  # and commits at C0 to C2. At C3 the destination refuses it, and the agent re-reads and
+  # orders at the new price on a new approval. The harmless change passes everywhere.
+  - {fault: F7, variant: early_price_up, contract: C0, config: G1, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C0, config: G1, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_harmless, contract: C0, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: early_price_up, contract: C1, config: G1, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C1, config: G1, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_harmless, contract: C1, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: early_price_up, contract: C2, config: G1, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C2, config: G1, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_harmless, contract: C2, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: early_price_up, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: late_price_up, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: early_harmless, contract: C3, config: G1, verdict: pass, failing: []}
+
+  # F9 in G1: each worker places its own order on its own approval, and the last report
+  # names one of the two while the stack knew both. At C3 the second order is refused, and
+  # its worker's report, the last, says not done while the first order exists.
+  - {fault: F9, variant: same_args, contract: C0, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: different_args, contract: C0, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: same_args, contract: C1, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: different_args, contract: C1, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: same_args, contract: C2, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: different_args, contract: C2, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: same_args, contract: C3, config: G1, verdict: fail, failing: [5]}
+  - {fault: F9, variant: different_args, contract: C3, config: G1, verdict: fail, failing: [5]}
+
+  # F11 in G1: the resumed agent sends the same call again, which G1 takes as a new
+  # action: a second order on a new approval. The report names only that one, while the
+  # stack knew both.
+  - {fault: F11, variant: after_tool_call, contract: C0, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F11, variant: after_tool_result, contract: C0, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F11, variant: after_tool_call, contract: C1, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F11, variant: after_tool_result, contract: C1, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F11, variant: after_tool_call, contract: C2, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F11, variant: after_tool_result, contract: C2, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F11, variant: after_tool_call, contract: C3, config: G1, verdict: fail, failing: [5]}
+  - {fault: F11, variant: after_tool_result, contract: C3, config: G1, verdict: fail, failing: [5]}
+
+  # F12 in G1: on either hop the call fails, with gateway_timeout (gw_sim) or the agent's
+  # own timeout (agent_gw); the framework retries, and one order commits. After a lost
+  # request G1 orders again, as B0 does, where G2 at C0 escalates and orders nothing.
+  - {fault: F12, variant: gw_sim, contract: C0, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_gw, contract: C0, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: gw_sim, contract: C1, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_gw, contract: C1, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: gw_sim, contract: C2, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_gw, contract: C2, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: gw_sim, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_gw, contract: C3, config: G1, verdict: pass, failing: []}
+
+  # F4 in G1, duplicate delivery. On gw_sim the destination gets the order twice, and G1
+  # sends no key at any level: at C0 to C2 the copy commits a second order on the same
+  # approval and overdraws the budget, and its answer is dropped, so the report names the
+  # one order the stack knew. At C3 the copy fails the conditional write. On agent_gw the
+  # gateway gets the agent's call twice and makes a second action on its own approval: at
+  # C0 to C2 both commit, and the report names one of the two orders the stack knew. At C3
+  # the second order fails the conditional write, and the agent is told its own order
+  # committed, since the copy's answer is the one dropped (0006), even when it comes first.
+  - {fault: F4, variant: gw_sim, contract: C0, config: G1, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: gw_sim, contract: C1, config: G1, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: gw_sim, contract: C2, config: G1, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: gw_sim, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_gw, contract: C0, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F4, variant: agent_gw, contract: C1, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F4, variant: agent_gw, contract: C2, config: G1, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F4, variant: agent_gw, contract: C3, config: G1, verdict: pass, failing: []}
+
+  # F5 in G1, late commit after the caller's timeout. The call fails with gateway_timeout,
+  # and the framework's retry orders again on a new approval, which commits at once. The
+  # held first order commits later, in contract or beyond the deadline alike, and
+  # overdraws the budget. Its answer comes after the gateway's timeout, so the stack never
+  # knew it, and the report names the order it knew. At C3 the late order fails the
+  # conditional write.
+  - {fault: F5, variant: in_contract, contract: C0, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F5, variant: in_contract, contract: C1, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F5, variant: in_contract, contract: C2, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F5, variant: in_contract, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F5, variant: beyond_deadline, contract: C0, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F5, variant: beyond_deadline, contract: C1, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F5, variant: beyond_deadline, contract: C2, config: G1, verdict: fail, failing: [1, 3]}
+  - {fault: F5, variant: beyond_deadline, contract: C3, config: G1, verdict: pass, failing: []}
+
+  # F10 has no G1 cell: it fires at a status answer, and G1 never asks for one. Its
+  # gateway never probes and its agent has no status tool (0008), as in B0.

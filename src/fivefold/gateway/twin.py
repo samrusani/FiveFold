@@ -134,7 +134,13 @@ class TwinStore:
         return cast(ReportAccepted | Refusal, outcome)
 
     def file_approval(
-        self, action_id: str, basis: BasisCheck, approval_id: str | None, vt: int, *, seen_seq: int
+        self,
+        action_id: str,
+        basis: BasisCheck | None,
+        approval_id: str | None,
+        vt: int,
+        *,
+        seen_seq: int,
     ) -> None:
         self._both("file_approval", action_id, basis, approval_id, vt, seen_seq=seen_seq)
 

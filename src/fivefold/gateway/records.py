@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
-from fivefold.domain.contracts import Contract
+from fivefold.domain.contracts import Capability, Contract
 from fivefold.gateway.state_machine import (
     ANSWER_REASONS,
     ActionState,
@@ -45,7 +45,11 @@ NO_DETAILS: Mapping[str, object] = MappingProxyType({})
 
 @dataclass(frozen=True)
 class Action:
-    """One logical effect (0001, 0003). `identity` is on in G2 and off in G1 (0008)."""
+    """One logical effect (0001, 0003). `identity` is on in G2 and off in G1 (0008).
+
+    `idempotency_key` is the action's own key, its id, in both configurations. A request
+    carries it only where a contract takes keys (C2, C3) and only in G2 (0005, 0008).
+    """
 
     action_id: str
     task_id: str
@@ -64,6 +68,23 @@ class Action:
     created_vt: int
     updated_vt: int
     """The virtual time of the latest state change; notes do not change it."""
+
+    @property
+    def authorization_only(self) -> bool:
+        """Whether this is a G1 action: one with identity off (0003, 0008).
+
+        G1 is authorization only. It files one approval request per write call, checks the
+        approval and no fact before its one send, and has no idempotency keys, status
+        probes, retries, escalation, report checks or run closing.
+        """
+        return not self.identity
+
+    @property
+    def request_key(self) -> str | None:
+        """The idempotency key a request for this action carries, if any (0005, 0008)."""
+        if self.authorization_only or not self.contract.has(Capability.IDEMPOTENCY_KEY):
+            return None
+        return self.idempotency_key
 
 
 @dataclass(frozen=True)
@@ -123,6 +144,9 @@ class CheckRecord:
     `approval_expires_at` is the approval's expiry as the approvals service reported it,
     recorded exactly when the approval is approved: an approval that expires before a
     send could commit counts as expired (0010, change 4).
+
+    An `authority_only` check, G1's (0008), records the approval and no basis, because G1
+    reads no fact before it sends.
     """
 
     kind: CheckKind
@@ -139,9 +163,12 @@ class CheckRecord:
             if self.approval_expires_at is not None:
                 raise ValueError("an exempt check records no approval expiry")
             return
-        if self.approval is None or self.basis is None:
+        if self.kind is CheckKind.AUTHORITY_ONLY:
+            if self.approval is None or self.basis is not None:
+                raise ValueError("an authority_only check records the approval and no basis")
+        elif self.approval is None or self.basis is None:
             raise ValueError(f"a {self.kind} check records the approval and the basis")
-        if (self.kind is CheckKind.FULL) != (self.basis.sufficient_ok is not None):
+        elif (self.kind is CheckKind.FULL) != (self.basis.sufficient_ok is not None):
             raise ValueError(
                 "a full check covers the sufficient rules; an exact_only check does not"
             )
@@ -166,6 +193,8 @@ class CheckRecord:
         if self.kind is CheckKind.EXEMPT:
             return True
         approved = self.approval_at_send(sent_vt, settle_ms) is ApprovalStatus.APPROVED
+        if self.kind is CheckKind.AUTHORITY_ONLY:
+            return approved
         if not approved or self.basis is None:
             return False
         return self.basis.exact_ok and self.basis.sufficient_ok is not False

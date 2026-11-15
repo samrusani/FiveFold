@@ -51,7 +51,6 @@ from fivefold.domain.api import (
     WriteRejectReason,
     WriteReply,
 )
-from fivefold.domain.contracts import Capability
 from fivefold.domain.rules import FactKind, Operation, fact_kind
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
 from fivefold.gateway.records import Action, Answer, ApprovalStatus, Attempt, ProbeAnswer
@@ -176,9 +175,14 @@ class SimClient:
     # Writes ---------------------------------------------------------------------------------
 
     async def send(self, action: Action, attempt: Attempt, approval_id: str) -> Answer:
-        """Send one attempt and classify the answer (0003)."""
+        """Send one attempt and classify the answer (0003).
+
+        The request carries the action's idempotency key only where the contract takes
+        keys (0005), and never in G1, which has none (0008). It carries the basis in
+        every configuration: G1 forwards the cited reads without checking them.
+        """
         operation = Operation(action.operation)
-        keyed = action.contract.has(Capability.IDEMPOTENCY_KEY)
+        keyed = action.request_key is not None
         common = {
             "intent_id": action.intent_id,
             "approval_id": approval_id,

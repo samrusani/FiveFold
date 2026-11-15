@@ -276,6 +276,28 @@ def test_an_approved_check_keeps_the_approvals_expiry(migrated_database: str) ->
         conn.execute(insert, ("full", "approved", basis, 3_600_000))
 
 
+def test_g1s_check_records_the_approval_and_no_fact(migrated_database: str) -> None:
+    """G1's `authority_only` check reads no fact before its one send (0008)."""
+    insert = (
+        "INSERT INTO gw.attempt (attempt_id, action_id, attempt_no, idempotency_key, grant_id,"
+        " check_kind, check_approval, check_basis, check_seen_seq, check_vt,"
+        " check_approval_expires_at, sent_vt) VALUES ('A-0001/1', 'A-0001', 1, 'A-0001',"
+        " 'G-0001', %s, %s, %s, 1, 0, %s, 0)"
+    )
+    basis = Jsonb({"exact_ok": True, "sufficient_ok": True})
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _action(conn, "A-0001", state="dispatched", identity=False)
+        _with_grant(conn, "A-0001", "G-0001")
+        for kind, approval, checked, expires_at in [
+            ("authority_only", "approved", basis, 5),
+            ("authority_only", None, None, None),
+            ("some_check", "approved", None, 5),
+        ]:
+            with pytest.raises(psycopg.errors.CheckViolation):
+                conn.execute(insert, (kind, approval, checked, expires_at))
+        conn.execute(insert, ("authority_only", "approved", None, 3_600_000))
+
+
 def test_an_intent_never_changes_and_never_reopens(migrated_database: str) -> None:
     with psycopg.connect(migrated_database, autocommit=True) as conn:
         _intent(conn)

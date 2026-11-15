@@ -1,14 +1,15 @@
 """One run in the inproc topology: every component on one scheduler (0009).
 
 A run is a scenario, a configuration, a contract level, a seed and a model (0009). This
-build runs B0 and G2 with the scripted model, recorded into a cassette or not, or with a
-cassette's replay (`fivefold.harness.models`). `InprocRun.execute`:
+build runs B0, G1 and G2 with the scripted model, recorded into a cassette or not, or with
+a cassette's replay (`fivefold.harness.models`). `InprocRun.execute`:
 
 1. records the run, sets up the simulator for the contract with the configuration's
-   credentials (only the gateway in G2, the agent workers in B0; 0008), and serves the
+   credentials (only the gateway in G1 and G2, the agent workers in B0; 0008), and serves the
    simulator's API and, in B0, the report sink on the transport;
-2. in G2, starts the gateway: its store, its dispatcher after startup recovery, and its
-   tools, one MCP server per agent connection;
+2. in G1 and G2, starts the gateway: its store, its dispatcher after startup recovery, and
+   its tools, one MCP server per agent connection. G1's store has action identity off,
+   which makes the gateway authorization only (0008);
 3. starts each agent worker with its own checkpoint thread, and the scripted approver,
    which decides queued approval requests by the scenario's rules (0002, rule 7). F9
    starts one more worker on the same task when it fires; the gateway expects a report
@@ -93,7 +94,13 @@ from fivefold.harness.transport import Envelope, Outgoing, Stage, Transport
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
-Config = Literal["B0", "G2"]
+Config = Literal["B0", "G1", "G2"]
+
+GATEWAY_CONFIGS = ("G1", "G2")
+"""The configurations that write through the gateway (0008). G1 is authorization only."""
+
+CONFIGS: tuple[Config, ...] = ("B0", "G1", "G2")
+"""Every configuration a run can have (0008)."""
 
 GATEWAY = "gateway"
 SIMULATOR = "simulator"
@@ -175,8 +182,8 @@ class InprocRun:
 
     def __init__(self, spec: RunSpec, dsn: str) -> None:
         """`dsn` names the run database; each component connects with its own role."""
-        if spec.config not in ("B0", "G2"):
-            raise ValueError(f"this build runs B0 and G2, not {spec.config}")
+        if spec.config not in ("B0", *GATEWAY_CONFIGS):
+            raise ValueError(f"this build runs B0, G1 and G2, not {spec.config}")
         self.spec = spec
         self._plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(spec.scenario))
         check_configuration(self._plan, gateway=spec.config != "B0")
@@ -190,7 +197,8 @@ class InprocRun:
         self._agent_workers = spec.workers + sum(
             1 for entry in self._plan if entry.kind.action is Action.START_WORKER
         )
-        self._tool_names = GATEWAY_TOOL_NAMES if spec.config == "G2" else BASELINE_TOOL_NAMES
+        gateway = spec.config in GATEWAY_CONFIGS
+        self._tool_names = GATEWAY_TOOL_NAMES if gateway else BASELINE_TOOL_NAMES
         self._closing: list[Any] = []
         self._last_write_answers: dict[tuple[str, str], int] = {}
         self.models = RunModels(spec.model)
@@ -237,7 +245,8 @@ class InprocRun:
         self.transport.observe(self._agent_points)
         self.transport.observe(self._gateway_answers)
         self.transport.before_send(self._before_tool_call)
-        credentials = (GATEWAY,) if spec.config == "G2" else _worker_names(self._agent_workers)
+        gateway = spec.config in GATEWAY_CONFIGS
+        credentials = (GATEWAY,) if gateway else _worker_names(self._agent_workers)
         config = SimConfig.preset(
             spec.contract, credentials=credentials, params=params.contract_params()
         )
@@ -271,7 +280,7 @@ class InprocRun:
         self.checkpointer = InlinePostgresSaver(checkpoint_conn)
         self.checkpointer.setup()
         self.timeouts = Timeouts(t_ms=params.dispatch_timeout_ms, tool_wait_ms=params.tool_wait_ms)
-        if spec.config == "G2":
+        if gateway:
             self._start_gateway()
         for worker in self._workers:
             self._start_worker(worker, resume=False)
@@ -328,6 +337,7 @@ class InprocRun:
             intents=intents,
             contract=self.spec.contract,
             settings=settings,
+            identity=self.spec.config == "G2",
         )
         self._closing.append(self.store)
         client = SimClient(self.transport, timeout_ms=params.dispatch_timeout_ms)
@@ -638,7 +648,7 @@ class InprocRun:
         """The chat model of `worker`, built each time it starts or resumes, by the run's
         model adapter (`fivefold.harness.models`)."""
         scenario = self.spec.scenario
-        mode = Mode.GATEWAY if self.spec.config == "G2" else Mode.BASELINE
+        mode = Mode.GATEWAY if self.spec.config in GATEWAY_CONFIGS else Mode.BASELINE
         rank = self._ranks.get(worker, 0)
 
         def think() -> Awaitable[None]:
