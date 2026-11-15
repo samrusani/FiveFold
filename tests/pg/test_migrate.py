@@ -6,7 +6,7 @@ import hashlib
 import shutil
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import psycopg
@@ -17,10 +17,14 @@ from psycopg.rows import TupleRow
 
 from fivefold.harness.migrations import (
     ADVISORY_LOCK_KEY,
+    DatabaseExists,
     MigrationError,
     bootstrap,
+    create_database,
+    database_lock,
     discover,
     drop_database,
+    drop_database_locked,
     migrate,
     recreate_database,
 )
@@ -266,3 +270,104 @@ def test_a_name_postgres_would_truncate_never_reaches_the_server(
         assert row == (1,)
     finally:
         drop_database(admin_dsn, victim)
+
+
+def database_count(admin_dsn: str, name: str) -> int:
+    with psycopg.connect(admin_dsn) as conn:
+        row = conn.execute(
+            "SELECT count(*) FROM pg_catalog.pg_database WHERE datname = %s", (name,)
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_create_database_never_drops_a_database_that_has_the_name(
+    admin_dsn: str, db_prefix: str
+) -> None:
+    name = f"{db_prefix}_taken"
+    drop_database(admin_dsn, name)
+    created = create_database(admin_dsn, name)
+    try:
+        with psycopg.connect(created.dsn, autocommit=True) as conn:
+            conn.execute("CREATE TABLE kept (n integer)")
+        with pytest.raises(DatabaseExists, match=f"^the database {name} already exists$"):
+            create_database(admin_dsn, name)
+        with psycopg.connect(created.dsn) as conn:
+            assert conn.execute("SELECT count(*) FROM kept").fetchone() == (0,)
+    finally:
+        drop_database(admin_dsn, name)
+
+
+def test_a_drop_by_oid_leaves_a_database_made_under_the_same_name_since(
+    admin_dsn: str, db_prefix: str
+) -> None:
+    """Cleanup that names the OID drops only the database it created, never one that
+    someone made under the same name after dropping it."""
+    name = f"{db_prefix}_owned"
+    drop_database(admin_dsn, name)
+    first = create_database(admin_dsn, name)
+    try:
+        drop_database(admin_dsn, name)
+        second = create_database(admin_dsn, name)
+        assert second.oid != first.oid
+        drop_database(admin_dsn, name, oid=first.oid)
+        assert database_count(admin_dsn, name) == 1, "the newer database stays"
+        drop_database(admin_dsn, name, oid=second.oid)
+        assert database_count(admin_dsn, name) == 0
+        drop_database(admin_dsn, name, oid=second.oid)
+    finally:
+        drop_database(admin_dsn, name)
+
+
+def database_oid(admin_dsn: str, name: str) -> int | None:
+    with psycopg.connect(admin_dsn) as conn:
+        row = conn.execute(
+            "SELECT oid FROM pg_catalog.pg_database WHERE datname = %s", (name,)
+        ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def test_a_drop_by_oid_leaves_a_database_replaced_while_it_waited_for_the_lock(
+    admin_dsn: str, db_prefix: str, await_database_lock: Callable[[str], None]
+) -> None:
+    """`DROP DATABASE` cannot run in a transaction, so the OID check and the drop are two
+    statements. A drop takes the database lock first and checks the OID only once it
+    holds it, so no process that goes through the module can replace the database in
+    between. Here another process holds the lock, and replaces the database while the
+    drop waits: the drop then finds another OID and leaves the new database."""
+    name = f"{db_prefix}_drop_waits"
+    waiter = f"{db_prefix}_drop_waiter"
+    drop_database(admin_dsn, name)
+    first = create_database(admin_dsn, name)
+    dropped: list[bool] = []
+    drop = threading.Thread(
+        target=lambda: dropped.append(
+            drop_database(make_conninfo(admin_dsn, application_name=waiter), name, oid=first.oid)
+        )
+    )
+    try:
+        with database_lock(admin_dsn) as conn:
+            drop.start()
+            await_database_lock(waiter)
+            assert drop_database_locked(conn, name)
+            conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        drop.join(timeout=BARRIER_TIMEOUT_S)
+        assert dropped == [False], "the waiting drop left the replacement"
+        replacement = database_oid(admin_dsn, name)
+        assert replacement is not None and replacement != first.oid
+    finally:
+        drop.join(timeout=BARRIER_TIMEOUT_S)
+        drop_database(admin_dsn, name)
+
+
+def test_a_run_database_as_long_as_the_longest_prefix_and_suffix_make_is_created(
+    run_database: Callable[[str], str], db_prefix: str
+) -> None:
+    """FIVEFOLD_TEST_DB_PREFIX may have 40 characters, and the suite's longest suffix has
+    31, so a run database's name could have 79 bytes. This run's prefix is shorter, so
+    the suffix is padded by the difference to make a name just as long."""
+    suffix = "f10_stale_within_lag_c1_g2_play" + "x" * (40 - len(db_prefix))
+    dsn = run_database(suffix)
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute("SELECT current_database()").fetchone()
+    assert row is not None and len(row[0]) <= 63 and row[0].startswith(f"{db_prefix}_simtpl_")

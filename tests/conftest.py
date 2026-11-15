@@ -8,17 +8,21 @@ PostgreSQL 16 server, connecting as a superuser. The default is the local Docker
 database (`make db-up`).
 
 Every database the tests create starts with FIVEFOLD_TEST_DB_PREFIX (default
-`fivefold_test`). Test runs that share one server at the same time need different
-prefixes, or they drop each other's databases. That includes the run registry (0012):
-the tests' runs register in `PREFIX_registry`, never in the registry a person's runs are
-in.
+`fivefold_test`), at most 40 characters. Test runs that share one server at the same time
+need different prefixes, or they drop each other's databases. That includes the run
+registry (0012): the tests' runs register in `PREFIX_registry`, never in the registry a
+person's runs are in. A run database's name, the prefix, `_simtpl_` and the test's
+suffix, can pass the 63 bytes PostgreSQL keeps; then the suffix is shortened
+(`database_name`), so every prefix the check accepts works.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import re
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +40,7 @@ from fivefold.gateway.pg_store import PgStore
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.twin import TwinStore
 from fivefold.harness.migrations import (
+    DATABASE_LOCK_KEY,
     DEFAULT_ADMIN_DSN,
     REGISTRY_ENV,
     bootstrap,
@@ -58,6 +63,31 @@ if not re.fullmatch(r"[a-z_][a-z0-9_]{0,39}", DB_PREFIX):
 REGISTRY = f"{DB_PREFIX}_registry"
 """The run registry the tests' runs register in (0012)."""
 
+MAX_NAME_BYTES = 63
+"""PostgreSQL keeps the first 63 bytes of a name (NAMEDATALEN - 1)."""
+
+
+def database_name(base: str, suffix: str) -> str:
+    """The name of a test's database: `base`, such as the template's name, an underscore
+    and the test's `suffix`.
+
+    A name longer than 63 bytes keeps as much of `suffix` as fits, then an underscore and
+    the first 8 hex digits of the suffix's SHA-256. The same suffix always gets the same
+    name, and two suffixes share a name only if their hashes do.
+    """
+    name = f"{base}_{suffix}"
+    if len(name.encode()) <= MAX_NAME_BYTES:
+        return name
+    digest = hashlib.sha256(suffix.encode()).hexdigest()[:8]
+    head = max(MAX_NAME_BYTES - len(base.encode()) - len(digest) - 2, 0)
+    return f"{base}_{suffix[:head]}_{digest}"
+
+
+@pytest.fixture(scope="session")
+def run_database_name() -> Callable[[str, str], str]:
+    """How `run_database` names a test's database (`database_name`)."""
+    return database_name
+
 
 @pytest.fixture(scope="session")
 def db_prefix() -> str:
@@ -78,6 +108,40 @@ def admin_dsn() -> Iterator[str]:
         patch.setenv(REGISTRY_ENV, REGISTRY)
         yield dsn
     drop_database(dsn, REGISTRY)
+
+
+LOCK_WAIT_TIMEOUT_S = 30.0
+"""How long `await_database_lock` waits for a session to wait for the database lock."""
+
+
+@pytest.fixture(scope="session")
+def await_database_lock(admin_dsn: str) -> Callable[[str], None]:
+    """Wait until the session with the given `application_name` waits for the database
+    lock (`fivefold.harness.migrations.database_lock`).
+
+    Other test runs on the server take the same lock, so only the named session counts.
+    PostgreSQL shows a bigint advisory key with its high half in `classid`, its low half in
+    `objid`, and `objsubid` 1 (`pg_locks`).
+    """
+
+    def wait(application_name: str) -> None:
+        deadline = time.monotonic() + LOCK_WAIT_TIMEOUT_S
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            while time.monotonic() < deadline:
+                row = conn.execute(
+                    "SELECT count(*) FROM pg_catalog.pg_locks AS l"
+                    " JOIN pg_catalog.pg_stat_activity AS a ON a.pid = l.pid"
+                    " WHERE l.locktype = 'advisory' AND NOT l.granted"
+                    " AND l.classid = %s AND l.objid = %s AND l.objsubid = 1"
+                    " AND a.application_name = %s",
+                    (DATABASE_LOCK_KEY >> 32, DATABASE_LOCK_KEY & 0xFFFFFFFF, application_name),
+                ).fetchone()
+                if row is not None and row[0] > 0:
+                    return
+                time.sleep(0.01)
+        raise AssertionError(f"{application_name} never waited for the database lock")
+
+    return wait
 
 
 @pytest.fixture
@@ -329,7 +393,7 @@ def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], 
     made: list[str] = []
 
     def make(suffix: str) -> str:
-        name = f"{sim_template}_{suffix}"
+        name = database_name(sim_template, suffix)
         drop_database(admin_dsn, name)
         with psycopg.connect(admin_dsn, autocommit=True) as conn:
             conn.execute(
