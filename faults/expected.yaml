@@ -10,7 +10,8 @@
 #
 # How each cell's plan is built is in src/fivefold/harness/cells.py: F2 drops the
 # purchase order's committed answer on the stack's hop to the simulator; F11 kills the
-# agent at the named point of its purchase order call and resumes it 1,000 ms later.
+# agent at the named point of its purchase order call and resumes it 1,000 ms later; F9
+# starts a second worker at the first worker's first step.
 
 scenario: dev-001-single-po
 seed: 7
@@ -26,3 +27,12 @@ cells:
   - {fault: F11, variant: after_tool_call, contract: C2, config: B0, verdict: fail, failing: [1]}
   - {fault: F11, variant: after_tool_result, contract: C2, config: G2, verdict: pass, failing: []}
   - {fault: F11, variant: after_tool_result, contract: C2, config: B0, verdict: fail, failing: [1]}
+
+  # F9, a second worker on the same task, started at the first worker's first step
+  # (properties 1 and 2). G2 places one order: the second worker's proposal matches the
+  # first action or is refused as done. In B0 each worker orders on its own approval, and
+  # the last report names only the second order.
+  - {fault: F9, variant: same_args, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F9, variant: same_args, contract: C2, config: B0, verdict: fail, failing: [1, 5]}
+  - {fault: F9, variant: different_args, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F9, variant: different_args, contract: C2, config: B0, verdict: fail, failing: [1, 5]}

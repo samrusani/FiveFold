@@ -3,7 +3,8 @@
 `faults/expected.yaml` lists every cell built so far: a fault variant, a contract level and
 a configuration, with the verdict the run must get. `cell_plan` turns a cell into the plan
 the run uses. A fault that acts on a message targets the purchase order's call, on the hop
-the configuration uses: `gw_sim` in G modes, `agent_sim` in B0.
+the configuration uses: `gw_sim` in G modes, `agent_sim` in B0. F9's variant is
+`same_args` or `different_args`; its second worker starts at the first worker's first step.
 """
 
 from __future__ import annotations
@@ -81,6 +82,16 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                     "match": {"tool": ORDER},
                     "occurrence": 1,
                 },
+            }
+        ]
+    if cell.fault == "F9":
+        if cell.variant not in ("same_args", "different_args"):
+            raise ValueError(f"F9 has no variant {cell.variant!r}")
+        return [
+            {
+                "fault": "F9",
+                "variant": cell.variant,
+                "at": {"point": "agent.step", "match": {"worker": "agent-1"}, "occurrence": 1},
             }
         ]
     raise ValueError(f"no plan for {cell.fault} yet")
