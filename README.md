@@ -12,7 +12,7 @@ A task passes only if every real-world action:
 
 ## Status
 
-Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine. Milestone M1, the thin slice, is done:
+Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine. Milestones M1, the thin slice, and M2, authority and freshness, are done:
 
 - the simulator: purchase orders and reservations at contract levels C0 to C3, the effects ledger, fact history and the approvals service (`src/fivefold/sim/`);
 - the deterministic harness: the scheduler, the virtual clock, transports with a message log, fault plans and the faults built so far (`src/fivefold/harness/`, `src/fivefold/faults/`);
@@ -20,7 +20,7 @@ Milestone M0, the design freeze, is done: decision records 0001 to 0009 were acc
 - the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`);
 - the evaluator, which scores every run from ground truth on all five properties (`src/fivefold/evaluator/`).
 
-Demo 1 runs from a seed, and every built fault cell of the development scenario gets the verdict `faults/expected.yaml` expects. Milestone M2 has started: the scripted approver and faults F1, F6, F7, F9 and F12 are in, and B0 and G2 run at contract levels C0 to C3. In F1 the gateway crashes before it sends; it restarts through startup recovery, and the agent reconnects to it. In F9 a second agent worker joins the same task.
+Demo 1 runs from a seed. The development scenario has 108 expected-outcome cells: faults F1, F2, F6, F7, F9, F11 and F12, at contract levels C0 to C3, for the baseline B0 and the gateway G2. Each cell runs from the committed seed and gets the verdict `faults/expected.yaml` expects, and every G2 cell passes except the limits record 0006 documents. The scripted approver decides approvals, and approvals can be revoked (F6) or expire. Milestone M3 is next: faults F3, F4, F5 and F10, and demos 2 and 3.
 
 ## Demo
 

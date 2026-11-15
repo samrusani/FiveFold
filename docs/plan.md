@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 in progress. Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 in progress. Milestone contents follow decision record 0006.
 
 ## Roadmap
 

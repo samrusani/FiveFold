@@ -77,6 +77,7 @@ def test_a_cell_fires_its_fault_where_record_0006_says(
         ("F7", "price_up", "B0"),
         ("F12", "agent_sim", "G2"),
         ("F12", "gw_sim", "B0"),
+        ("F1", "c", "G2"),
         ("F9", "other_args", "B0"),
         ("F8", None, "G2"),
     ],

@@ -24,11 +24,17 @@ pytestmark = pytest.mark.pg
 
 EXPECTED = load_expected()
 
-G2_LIMITS_AT_C2: dict[tuple[str, str | None], tuple[str, tuple[int, ...]]] = {
-    ("F6", "late"): ("fail", (2,)),
-    ("F7", "late_price_up"): ("fail", (3,)),
+BELOW_C3 = (Contract.C0, Contract.C1, Contract.C2)
+
+G2_LIMITS: dict[tuple[str, str | None, Contract], tuple[str, tuple[int, ...]]] = {
+    ("F1", "b", Contract.C0): ("fail", (4,)),
+    ("F12", "gw_sim", Contract.C0): ("fail", (4,)),
+    **{("F6", "late", level): ("fail", (2,)) for level in BELOW_C3},
+    **{("F7", "late_price_up", level): ("fail", (3,)) for level in BELOW_C3},
+    ("F2", None, Contract.C0): ("pass_unresolved", ()),
 }
-"""0006's documented G2 limits at C2. Every other G2 cell is expected to pass."""
+"""0006's documented G2 limits, by fault, variant and contract level: the cells that fail or
+stay unresolved by design. Every other G2 cell is expected to pass."""
 
 B0_FAILS = frozenset({"F2", "F3", "F4", "F5", "F6", "F9", "F11"})
 """0006: at C0 to C2, B0 fails the faults that make it resend, and F6 and F7 `price_up`,
@@ -66,8 +72,8 @@ def test_the_cells_agree_with_the_outcomes_record_0006_fixes() -> None:
     decision record; nobody edits the expectation to match."""
     for cell in EXPECTED.cells:
         outcome = (cell.verdict, cell.failing)
-        if cell.config == "G2" and cell.contract is Contract.C2:
-            expected = G2_LIMITS_AT_C2.get((cell.fault, cell.variant), ("pass", ()))
+        if cell.config == "G2":
+            expected = G2_LIMITS.get((cell.fault, cell.variant, cell.contract), ("pass", ()))
             assert outcome == expected, cell.name
         if cell.config == "B0" and cell.contract is not Contract.C3:
             price_up = cell.fault == "F7" and (cell.variant or "").endswith("price_up")
