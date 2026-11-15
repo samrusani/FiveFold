@@ -225,7 +225,7 @@ In demo 1, K = 4 replays the calls up to the order, so the new model takes over 
 - **M0, the design freeze, is done.** Decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine.
 - **M1, the thin slice, and M2, authority and freshness, are done.** The simulator runs purchase orders and reservations at contract levels C0 to C3, with the effects ledger, fact history and the approvals service (`src/fivefold/sim/`). The deterministic harness has the scheduler, the virtual clock, transports with a message log, and fault plans (`src/fivefold/harness/`, `src/fivefold/faults/`). The gateway has the state machine with invariants I1 to I7, the PostgreSQL store, the dispatcher and the agent-facing tools over MCP, as G2 and as G1 (`src/fivefold/gateway/`). A LangGraph agent with a scripted model runs in G1, G2 and B0 (`src/fivefold/agents/`). The evaluator scores every run on all five properties and writes a CSV and a Markdown report across runs (`src/fivefold/evaluator/`).
 - **M3, full scenarios, is nearly done.** Faults F3, F4, F5 and F10, demos 2 and 3, the scripted resolver, recorded playback and viewer v1 (record 0012; see Viewer below) are in. The held-out scenarios are kept outside this repository.
-- **M4, the live study, has started.** G1, the report's token counts and cost, the live model adapter and the study runner are in. The study waits for the maintainer's choice of models, API keys and a spend cap.
+- **M4, the live study, has started.** G1, the report's token counts and cost, the live model adapter with Ollama, Anthropic and OpenAI, and the study runner are in. The study waits for the maintainer's choice of models, API keys and a spend cap.
 - **M5, the release, has started.** The two paths above, [docs/limitations.md](docs/limitations.md) and [SECURITY.md](SECURITY.md) are in.
 
 The development scenario has 223 expected-outcome cells: faults F1 to F7 and F9 to F12, at each contract level and configuration they apply to. F10 needs a status probe, so it applies at C1 in G2 only. Each cell runs from the committed seed and gets the verdict `faults/expected.yaml` expects. Every G2 cell passes except the limits record 0006 documents. Record 0006 fixes no G1 outcome, so G1's cells come from its first runs. Record 0013 settles two of F10's cells. The delayed cell delays 5 status answers, fewer than G2's 20 probes, so G2 hears the sixth and confirms the order. The stale-beyond-L cell freezes the status from just before the order reached the simulator, so G2 marks the order failed and the report says "not done" while the order exists: a documented G2 limit. CI runs each demo twice from its seed, in B0, G1 and G2, and compares every record by digest.
@@ -266,7 +266,17 @@ Add `--prices prices.yaml`, a price file in the format of `prices/example.yaml`,
 
 ## Live runs
 
-Live runs are manual and never run in CI. A live run is refused unless the environment sets `FIVEFOLD_LIVE=1` and the command gets a spend cap in USD and a price file that prices the model (records 0004 and 0009). Ollama is the one provider so far. To run demo 1 in G2 with a local model:
+Live runs are manual and never run in CI. A live run is refused unless the environment sets `FIVEFOLD_LIVE=1` and the command gets a spend cap in USD and a price file that prices the model (records 0004 and 0009). `--live PROVIDER:MODEL` names the model. The providers:
+
+- `ollama:MODEL`, a model on an Ollama server: no key. The server is your own at `http://127.0.0.1:11434` unless `OLLAMA_HOST` names another.
+- `anthropic:MODEL`, Anthropic's API: your key in `ANTHROPIC_API_KEY`.
+- `openai:MODEL`, OpenAI's API: your key in `OPENAI_API_KEY`.
+
+A live run with an API provider is refused unless its key variable is set. The key stays in that variable: `--param` takes generation parameters only, so a key, a base URL or a header can never reach a cassette or the run's records.
+
+The price file must price the model under its provider, in USD per million input tokens and per million output tokens. Use prices you have checked on the provider's price list, and set `price_date` to the day you read them: the spend cap and the report's cost are only as right as those prices. `prices/example.yaml` prices local Ollama models at 0 USD and no API model.
+
+To run demo 1 in G2 with a local model:
 
 1. Install [Ollama](https://ollama.com) and pull a model that can call tools: `ollama pull MODEL`.
 2. Copy `prices/example.yaml` to `prices.yaml`, and add `MODEL` under `ollama:` at 0 USD, quoted, as the examples are.
