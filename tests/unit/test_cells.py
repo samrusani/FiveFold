@@ -1,5 +1,6 @@
 """The fault plan of each expected-outcome cell (0006): where each fault fires, by
-configuration, and that the catalog accepts every plan."""
+configuration, that the catalog accepts every plan, and that every variant the catalog
+builds has a cell wherever it applies."""
 
 from __future__ import annotations
 
@@ -7,10 +8,11 @@ import pytest
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
-from fivefold.faults.catalog import BUILT, FaultId
+from fivefold.faults.catalog import BUILT, FaultId, point_exists, point_hop
 from fivefold.faults.plan import check_configuration, check_run, parse_plan
 from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
+from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS
 
 
 def cell(fault: str, variant: str | None, config: str, contract: Contract = Contract.C2) -> Cell:
@@ -100,6 +102,94 @@ def test_a_cell_fires_its_fault_where_record_0006_says(
 def test_a_cell_with_no_plan_is_refused(fault: str, variant: str, config: str) -> None:
     with pytest.raises(ValueError):
         cell_plan(cell(fault, variant, config))
+
+
+# Every applicable cell ---------------------------------------------------------------------
+
+HOP_FAULTS = frozenset({FaultId.F4, FaultId.F12})
+"""The faults whose cells name the hop they act on: 0006 gives F4 and F12 the hop as their
+variant, and the catalog gives them a point on each hop (`net.{hop}.request`)."""
+
+NO_CELLS: dict[tuple[FaultId, str], str] = {
+    (FaultId.F10, "B0"): "B0's scripted agent never calls the status tool (0008)",
+    (FaultId.F10, "G1"): "G1 never asks for the destination's status (0008)",
+}
+"""Where a fault's points exist but it has nothing to act on, so it has no cells: F10
+changes status answers, and only G2 asks for one. `cell_plan` refuses these cells."""
+
+
+def cell_variants(fault: FaultId, config: str) -> list[str | None]:
+    """The variants a cell of `fault` can name in `config`, from the catalog (0006), spelled
+    as `fivefold.harness.cells` spells them. F4 and F12 name a hop; F7 fires at F6's points,
+    so it names one of F6's timings, then one of its own changes; any other fault names one
+    of its variants, or none. Each counts only where one of its points exists."""
+    kind = BUILT[fault]
+    gateway = config in GATEWAY_CONFIGS
+    present = {point for point in kind.points if point_exists(kind, point, gateway=gateway)}
+    variants: list[str | None] = []
+    if fault in HOP_FAULTS:
+        hops = [point_hop(point) for point in sorted(present)]
+        variants.extend(hop for hop in hops if hop is not None)
+    elif fault is FaultId.F7:
+        timings = BUILT[FaultId.F6].variants
+        variants.extend(
+            f"{timing}_{change}"
+            for timing, points in timings.items()
+            if points is None or points & present
+            for change in kind.variants
+        )
+    elif kind.variants:
+        variants.extend(
+            variant
+            for variant, points in kind.variants.items()
+            if present & (points or kind.points)
+        )
+    elif present:
+        variants.append(None)
+    return variants
+
+
+def has_plan(candidate: Cell) -> bool:
+    """Whether `cell_plan` gives `candidate` a plan, rather than refusing it."""
+    try:
+        cell_plan(candidate)
+    except ValueError:
+        return False
+    return True
+
+
+def test_every_built_fault_variant_has_a_cell_wherever_it_applies() -> None:
+    """CLAUDE.md, Tests: every fault variant has a cell for every applicable contract level
+    and configuration. The variants are the catalog's (`cell_variants`). A cell applies
+    where `cell_plan` gives it a plan that the catalog and the configuration accept, at
+    each contract level `check_run` accepts, such as C1 alone for F10, unless `NO_CELLS`
+    says the fault has nothing to act on there. The committed cells must be exactly
+    these, so a variant without its cells cannot go unnoticed, as F7's late harmless
+    change once did."""
+    scenario = load_scenario_file(DEV_001)
+    applicable: set[str] = set()
+    for fault in BUILT:
+        for config in CONFIGS:
+            for variant in cell_variants(fault, config):
+                for contract in Contract:
+                    candidate = cell(str(fault), variant, config, contract)
+                    if (fault, config) in NO_CELLS:
+                        why = NO_CELLS[fault, config]
+                        assert not has_plan(candidate), f"{candidate.name} has a plan, but {why}"
+                        continue
+                    planned = parse_plan(cell_plan(candidate))
+                    check_configuration(planned, gateway=config in GATEWAY_CONFIGS)
+                    params = cell_scenario(candidate, scenario).params
+                    try:
+                        check_run(planned, params=params, contract=contract)
+                    except ValueError:
+                        continue
+                    applicable.add(candidate.name)
+    committed = {expected.name for expected in load_expected().cells}
+    missing = sorted(applicable - committed)
+    assert not missing, f"faults/expected.yaml has no cell for {', '.join(missing)}"
+    stray = sorted(committed - applicable)
+    assert not stray, f"no built fault variant applies to {', '.join(stray)}"
 
 
 # F4 ----------------------------------------------------------------------------------------
