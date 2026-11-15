@@ -10,9 +10,12 @@ fake provider that answers as a real model does, it records a cassette of its ow
 `harness.run` names its parent and its branch point, its run id is the parent's with
 `.branch-K` added, and a branch of a branch works the same way. The command refuses, in
 one line and before it touches any database, a K beyond the cassette, a scenario other
-than the parent's, and a live model without its flag, spend cap and price file. The
-evaluator scores a branch like any run, and its report shows a branch apart from the
-parent's cell. No test reaches a model provider.
+than the parent's, a live model without its flag, with a cap of 0 or with no price, and
+outputs that would replace the parent's cassette or each other; `--live` without a spend
+cap or a price file is a usage error, as for `record`. A branch that asks another request
+than its parent within its first K calls fails as a replay does. The evaluator scores a
+branch like any run, and its report shows a branch apart from the parent's cell. No test
+reaches a model provider.
 """
 
 from __future__ import annotations
@@ -515,6 +518,34 @@ def test_the_command_branches_to_a_live_model(
     )
     assert Cassette.load(cassette).model.name == "fake:m"
     assert load_result(result).run.model_adapter == "live"
+
+
+def test_a_branch_that_asks_another_request_before_its_branch_point_fails(
+    parents: dict[Config, Recorded],
+    admin_dsn: str,
+    cli: tuple[str, str],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The parent's second reply, edited, asks for S-1's quote again: the third request
+    then carries another result than the parent's did. Within the first K calls, that
+    fails the branch as it fails a replay, and the command writes nothing."""
+    branched, _ = cli
+    data = json.loads(parents["G2"].path.read_text(encoding="utf-8"))
+    data["calls"][1]["response"]["tool_calls"][0]["args"]["supplier_id"] = "S-1"
+    edited = tmp_path / "edited.json"
+    edited.write_text(
+        json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    cassette, result = tmp_path / "branch.json", tmp_path / "branch-result.json"
+    args = ["--dsn", admin_dsn, "branch", str(edited), "--scenario", str(DEV_001), "--at", "5"]
+    args += ["--cassette", str(cassette), "--result", str(result), "--database", branched]
+    assert main(args) == 1
+    error = capsys.readouterr().err
+    recorded = parents["G2"].cassette.calls[2].request
+    assert error.startswith("branch failed: model call 3: agent-1 asked a request with hash")
+    assert error.endswith(f"but the cassette recorded agent-1 asking one with hash {recorded}\n")
+    assert not cassette.exists() and not result.exists()
 
 
 def test_the_command_refuses_in_one_line_before_it_touches_a_database(
