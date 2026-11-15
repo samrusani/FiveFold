@@ -23,7 +23,6 @@ Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -335,9 +334,11 @@ class InprocRun:
                     params=dict(fired.planned.params),
                 )
             )
-            self.scheduler.call_later(
-                0, functools.partial(self._kill, worker, delay), label=f"kill {worker}"
-            )
+            # The kill is immediate. After a tool call, the request is already on the
+            # wire; after a result, the worker must not see it: the transport hands a
+            # delivery to its receiver only after the observers ran, and only if the
+            # receiver is still up (0006, voided results).
+            self._kill(worker, delay)
 
     def _kill(self, worker: str, restart_after_ms: int) -> None:
         self.scheduler.crash(

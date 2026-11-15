@@ -124,7 +124,9 @@ class Transport:
 
         The harness uses it for fault points that belong to a component rather than a
         hop, such as F11's `agent.after_tool_call` (0006). It runs inside the step that
-        sent or delivered the message, after the message's fate so far is logged.
+        sent or delivered the message, after the message's fate so far is logged. For a
+        delivery it runs before the receiver gets the message, and a receiver that an
+        observer crashed never gets it: the delivery happened, and the crash voided it.
         """
         self._observers.append(observer)
 
@@ -227,9 +229,10 @@ class Transport:
         self._log.message_fate(
             envelope.seq, "delivered", vt=now, delivered_seq=self._log.next_seq()
         )
-        on_arrival(envelope)
         for observer in self._observers:
             observer(envelope, "delivered")
+        if self._scheduler.is_up(envelope.receiver):
+            on_arrival(envelope)
 
     def _record(self, fired: Fired, point: str, envelope: Envelope) -> None:
         self._log.fault_fired(

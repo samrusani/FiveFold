@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from typing import Any
 
 import psycopg
@@ -133,3 +134,39 @@ def test_another_seed_changes_the_timing_but_not_the_outcome(
     dsn = run_database("seed_8")
     run(dsn, "G2", seed=8)
     assert effects(dsn) == [("PO-0001", "REQ-1", "APR-0001", "A-0001")]
+
+
+def after_result_plan() -> list[dict[str, object]]:
+    """F11 alone, killing the worker as the order's result reaches it (0006)."""
+    return [
+        {
+            "fault": "F11",
+            "at": {
+                "point": "agent.after_tool_result",
+                "match": {"tool": "submit_purchase_order"},
+                "occurrence": 1,
+            },
+            "params": {"restart_delay_ms": 1_000},
+        }
+    ]
+
+
+@pytest.mark.parametrize(("config", "orders"), [("G2", 1), ("B0", 2)])
+def test_a_result_voided_by_a_crash_is_never_seen_and_the_call_is_repeated(
+    run_database: Callable[[str], str], config: Config, orders: int
+) -> None:
+    dsn = run_database(f"after_result_{config.lower()}")
+    spec = replace(demo_1_spec(config, 7), plan=after_result_plan())
+    inproc = InprocRun(spec, dsn)
+    asyncio.run(inproc.execute())
+    assert inproc.result.ends == {"agent-1": (WorkerEnd.FINISHED, "Done.")}
+    log = message_log(dsn)
+    calls = [row for row in log if row[2] == "request" and row[5] == "submit_purchase_order"]
+    calls = [row for row in calls if row[3] == "agent-1"]
+    assert len(calls) == 2, "the resumed worker repeats the call whose result it lost"
+    with psycopg.connect(dsn) as conn:
+        ((voided,),) = conn.execute("SELECT voided FROM harness.fault_log").fetchall()
+    first_answer = next(row for row in log if row[2] == "answer" and row[6] == calls[0][0])
+    assert voided == [first_answer[0]], "the fault voids the result just delivered"
+    assert first_answer[12] == "delivered"
+    assert len(effects(dsn)) == orders
