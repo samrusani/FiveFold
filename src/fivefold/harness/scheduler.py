@@ -16,6 +16,11 @@ loop's thread instead (`InlineExecutor`), so a run never has a second thread.
 Crashing a component cancels its tasks and discards their memory; it stays down until
 its restart event fires (0006). Each crash starts a new incarnation, so the transport can
 drop answers to requests sent before the crash (0010, change 3).
+
+A component that waits on the real world, as the live model adapter waits on its
+provider, awaits it through `hold`. Until the wait ends, the scheduler fires no event: it
+waits in wall time, with virtual time held still. So every timer fires at the virtual time
+it would have without the wait, and a model call takes exactly its `think_ms` (0009).
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar
 
-from fivefold.harness.clock import VirtualClock, settle
+from fivefold.harness.clock import RealWaits, VirtualClock, settle
 
 T = TypeVar("T")
 
@@ -121,6 +126,7 @@ class Scheduler:
         self._down: set[str] = set()
         self._failures: list[tuple[str, BaseException]] = []
         self._crash_listeners: list[Callable[[str], None]] = []
+        self._real = RealWaits()
 
     @property
     def now(self) -> int:
@@ -180,6 +186,16 @@ class Scheduler:
             raise
         finally:
             timer.cancel()
+
+    async def hold(self, awaitable: Awaitable[T]) -> T:
+        """Await `awaitable`, a wait on the real world such as a live model call, with
+        virtual time held still.
+
+        Until it ends, `run` fires no event and waits for it in wall time, so the wait
+        takes no virtual time. `awaitable` must not wait on the scheduler: nothing the
+        scheduler controls can happen until it ends.
+        """
+        return await self._real.hold(awaitable)
 
     # Components ----------------------------------------------------------------------------
 
@@ -263,7 +279,7 @@ class Scheduler:
         if not isinstance(getattr(loop, "_default_executor", None), InlineExecutor):
             loop.set_default_executor(InlineExecutor())
         while True:
-            await settle()
+            await settle(self._real)
             self._raise_failures()
             if until is not None and until():
                 return RunEnd.UNTIL

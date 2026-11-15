@@ -1,20 +1,23 @@
 """The deterministic scheduler, the virtual clock and the seeded generators (0009).
 
 The plan asks for tests of ordering, timers, crash and restart before anything is built
-on the scheduler (plan.md, Risks).
+on the scheduler (plan.md, Risks). A real wait, as a live model call makes, must hold
+virtual time still: every timer fires at the virtual time it does without the wait.
 """
 
 from __future__ import annotations
 
 import asyncio
+import socket
+import threading
 from collections import deque
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 import pytest
 
 from fivefold.harness import clock
-from fivefold.harness.clock import VirtualClock, settle
+from fivefold.harness.clock import RealWaits, VirtualClock, settle
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import ComponentFailed, RunEnd, Scheduler, SchedulerTimeout
 
@@ -329,3 +332,145 @@ def test_work_handed_to_the_default_executor_runs_inline_in_the_loops_thread() -
     run(main)
     assert seen == [threading.get_ident(), 42]
     assert threading.active_count() == 1
+
+
+# Real waits ----------------------------------------------------------------------------------
+
+TIMERS = (500, 999, 1_000, 1_001, 1_010, 1_500)
+"""Other components' timers, some due while the model call is in flight."""
+
+SCRIPTED = [
+    (0, "asked"),
+    (500, "timer 500"),
+    (999, "timer 999"),
+    (1_000, "timer 1000"),
+    (1_000, "answered"),
+    (1_001, "timer 1001"),
+    (1_010, "timer 1010"),
+    (1_010, "tool result"),
+    (1_500, "timer 1500"),
+]
+"""What a scripted model call sees: it thinks 1,000 virtual ms, answers at once, and its
+reply leads to a message 10 virtual ms later."""
+
+
+async def network_reply(delay_s: float) -> None:
+    """Await an answer from the network: a socket another thread writes to after
+    `delay_s` seconds of wall time. The event loop sees no timer and nothing ready."""
+    loop = asyncio.get_running_loop()
+    ours, theirs = socket.socketpair()
+    ours.setblocking(False)
+    sender = threading.Timer(delay_s, theirs.send, args=(b"x",))
+    sender.start()
+    try:
+        assert await loop.sock_recv(ours, 1) == b"x"
+    finally:
+        sender.join()
+        ours.close()
+        theirs.close()
+
+
+def model_call(
+    real: Callable[[], Awaitable[None]] | None, *, hold: bool = True
+) -> list[tuple[int, str]]:
+    """A model call that thinks 1,000 virtual ms, then awaits `real`, if given, inside the
+    scheduler's hold (or outside it, without `hold`), while other components' timers come
+    due; return what fired, at which virtual time."""
+    scheduler = Scheduler()
+    fired: list[tuple[int, str]] = []
+
+    async def model() -> None:
+        fired.append((scheduler.now, "asked"))
+        await scheduler.sleep(1_000)
+        if real is not None:
+            await (scheduler.hold(real()) if hold else real())
+        fired.append((scheduler.now, "answered"))
+        scheduler.call_later(10, lambda: fired.append((scheduler.now, "tool result")))
+
+    async def main() -> None:
+        task = scheduler.spawn("agent-1", model(), name="model")
+        for at in TIMERS:
+            scheduler.call_at(at, recorder(fired, scheduler, f"timer {at}"))
+        await scheduler.run()
+        await task
+
+    run(main)
+    return fired
+
+
+def test_a_real_wait_holds_virtual_time_still_as_a_scripted_call_does() -> None:
+    """A fake model that awaits a real `asyncio.sleep` in wall time: other components'
+    timers fire at the same virtual times as with the scripted model, and the call takes
+    exactly its 1,000 virtual ms of thinking (0009)."""
+    assert model_call(None) == SCRIPTED
+    assert model_call(lambda: asyncio.sleep(0.05)) == SCRIPTED
+
+
+def test_a_real_wait_on_io_the_loop_cannot_see_holds_virtual_time_still() -> None:
+    """Network I/O registers no timer, so without the hold the scheduler would think the
+    run idle and fire later timers while the call is in flight."""
+    assert model_call(lambda: network_reply(0.05)) == SCRIPTED
+    unheld = model_call(lambda: network_reply(0.05), hold=False)
+    assert unheld != SCRIPTED
+    assert unheld.index((1_500, "timer 1500")) < next(
+        number for number, (_, what) in enumerate(unheld) if what == "answered"
+    ), "without the hold, virtual time ran on while the call was in flight"
+
+
+def test_a_timer_the_real_wait_sets_does_not_keep_the_run_asleep() -> None:
+    """An HTTP client's timeout is a wall-clock timer inside the real wait. Once the answer
+    arrives, the run goes on at once instead of sleeping until the timeout."""
+    started = clock.wall_ms()
+    fired = model_call(lambda: asyncio.wait_for(network_reply(0.02), timeout=30))
+    assert fired == SCRIPTED
+    assert clock.wall_ms() - started < 10_000
+
+
+def test_a_real_wait_that_raises_lets_virtual_time_move_on() -> None:
+    scheduler = Scheduler()
+    fired: list[tuple[int, str]] = []
+
+    async def refused() -> None:
+        await asyncio.sleep(0.01)
+        raise ConnectionError("the provider is down")
+
+    async def model() -> None:
+        await scheduler.sleep(1_000)
+        try:
+            await scheduler.hold(refused())
+        except ConnectionError as error:
+            fired.append((scheduler.now, str(error)))
+
+    async def main() -> None:
+        scheduler.spawn("agent-1", model(), name="model")
+        scheduler.call_at(1_000, recorder(fired, scheduler, "timer 1000"))
+        scheduler.call_at(2_000, recorder(fired, scheduler, "timer 2000"))
+        await scheduler.run()
+
+    run(main)
+    assert fired == [(1_000, "timer 1000"), (1_000, "the provider is down"), (2_000, "timer 2000")]
+
+
+def test_settle_returns_only_once_every_real_wait_ended() -> None:
+    real = RealWaits()
+    order: list[str] = []
+
+    async def wait(name: str, seconds: float) -> None:
+        await real.hold(asyncio.sleep(seconds))
+        order.append(name)
+
+    active: list[bool] = []
+
+    async def main() -> None:
+        active.append(real.active)
+        await real.ended()
+        tasks = [asyncio.create_task(wait(n, s)) for n, s in (("short", 0.01), ("long", 0.04))]
+        await asyncio.sleep(0)
+        active.append(real.active)
+        await settle(real)
+        active.append(real.active)
+        await asyncio.gather(*tasks)
+
+    run(main)
+    assert order == ["short", "long"]
+    assert active == [False, True, False]
