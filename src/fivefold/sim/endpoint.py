@@ -20,6 +20,8 @@ Two fault points of record 0006 are reached here, and `points` decides what fire
 - `sim.write.received`, as each write request reaches the destination. A `WriteDelay`
   (F5) holds the write in flight, through the simulator's two-phase write: it is
   received now, committed `delay_ms` later, and answered then, committed or aborted.
+- `sim.status.answer`, as each status answer is produced. A `StatusShape` (F10) makes
+  the answer stale, or holds it before it is sent.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ from fivefold.domain.api import (
     ApiName,
     ApprovalAnswer,
     GetApprovalStatus,
+    GetOrderStatus,
+    GetReservationStatus,
     ReserveInventory,
     SubmitPurchaseOrder,
     Write,
@@ -64,11 +68,30 @@ class WriteDelay:
     waive_deadline: bool = False
 
 
+@dataclass(frozen=True)
+class StatusShape:
+    """How to produce and send one status answer (F10).
+
+    `as_of_vt`, `reflect_vt` and `contract_violation` go to the simulator's status call
+    (`Simulator.get_order_status`), which refuses a broken promise unless a fault asks
+    for it. `hold_ms` delays the answer's sending after it is produced.
+    """
+
+    hold_ms: int = 0
+    as_of_vt: int | None = None
+    reflect_vt: int | None = None
+    contract_violation: bool = False
+
+
 class FaultPoints(Protocol):
     """Decides what fires at the simulator's fault points (0006)."""
 
     def write_received(self, request: Envelope) -> WriteDelay | None:
         """`sim.write.received`: a write request reached the destination."""
+        ...
+
+    def status_answer(self, request: Envelope) -> StatusShape | None:
+        """`sim.status.answer`: a status answer is being produced."""
         ...
 
 
@@ -105,6 +128,20 @@ def endpoint(
             delay = points.write_received(request)
             if delay is not None:
                 return await commit_late(parsed, caller, delay)
+        if points is not None and isinstance(parsed, GetOrderStatus | GetReservationStatus):
+            shape = points.status_answer(request)
+            if shape is not None:
+                shaped: BaseModel = method(
+                    parsed,
+                    caller=caller,
+                    vt=scheduler.now,
+                    as_of_vt=shape.as_of_vt,
+                    reflect_vt=shape.reflect_vt,
+                    contract_violation=shape.contract_violation,
+                )
+                if shape.hold_ms > 0:
+                    await scheduler.sleep(shape.hold_ms)
+                return shaped
         answer: BaseModel = method(parsed, caller=caller, vt=scheduler.now)
         if isinstance(parsed, GetApprovalStatus) and parsed.wait_ms > 0:
             deadline = scheduler.now + parsed.wait_ms

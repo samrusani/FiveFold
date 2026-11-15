@@ -29,6 +29,11 @@ The variants of a cell:
 - F5 is `in_contract` (the order commits 5,000 ms after it arrives: T < delay < D) or
   `beyond_deadline` (20,000 ms: twice dev-001's D, a contract violation that still lands
   inside the drain window, so the late commit happens before the run ends).
+- F10 is `delayed`, `stale_within_lag` or `stale_beyond_lag`, at C1. It needs a status
+  probe, so its cells pair it with F2 on the order's committed answer (0006, notes), and
+  it fires at the first status answer. The `stale_within_lag` cells set `status_lag_ms` to
+  3,000 (`cell_scenario`). B0 has no F10 cells: its scripted agent never calls the status
+  tool (0008), so F10's B0 equivalent never fires.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from fivefold.domain.contracts import Contract
+from fivefold.domain.scenario import Scenario
 
 ROOT = Path(__file__).resolve().parents[3]
 EXPECTED = ROOT / "faults" / "expected.yaml"
@@ -71,9 +77,16 @@ F12_HOPS: dict[str, frozenset[str]] = {
 }
 """The hops F12 can drop the order on, by configuration. F4 delivers it twice on the same."""
 
+ORDER_STATUS = "get_order_status"
+
 F5_DELAYS: dict[str, dict[str, int]] = {"in_contract": {}, "beyond_deadline": {"delay_ms": 20_000}}
 """F5's parameters by variant: the catalog's 5,000 ms in contract; twice dev-001's commit
 deadline D beyond it, since 0006 gives that variant no default."""
+
+F10_VARIANTS = frozenset({"delayed", "stale_within_lag", "stale_beyond_lag"})
+
+STALE_WITHIN_LAG_MS = 3_000
+"""The status lag L of the `stale_within_lag` cells (0006, notes): dev-001's L is 0."""
 
 
 class Cell(BaseModel):
@@ -226,7 +239,36 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                 "params": dict(params),
             }
         ]
+    if cell.fault == "F10":
+        if cell.variant not in F10_VARIANTS:
+            raise ValueError(f"F10 has no variant {cell.variant!r}")
+        if cell.config == "B0":
+            raise ValueError("B0's scripted agent never calls the status tool, so F10 never fires")
+        lost_reply = cell_plan(cell.model_copy(update={"fault": "F2", "variant": None}))
+        return [
+            *lost_reply,
+            {
+                "fault": "F10",
+                "variant": cell.variant,
+                "at": {
+                    "point": "sim.status.answer",
+                    "match": {"api": ORDER_STATUS},
+                    "occurrence": 1,
+                },
+            },
+        ]
     raise ValueError(f"no plan for {cell.fault} yet")
+
+
+def cell_scenario(cell: Cell, scenario: Scenario) -> Scenario:
+    """The scenario a cell runs: `scenario` itself, except where 0006 sets a parameter.
+
+    The `stale_within_lag` cells of F10 set `status_lag_ms` to 3,000 (0006, notes).
+    """
+    if cell.fault == "F10" and cell.variant == "stale_within_lag":
+        params = scenario.params.model_copy(update={"status_lag_ms": STALE_WITHIN_LAG_MS})
+        return scenario.model_copy(update={"params": params})
+    return scenario
 
 
 def _timing(cell: Cell, timing: str) -> tuple[str, dict[str, str]]:

@@ -16,8 +16,8 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    at its points (F1, F6 and F7 early), and this module those at the agent's points (F1's
    B0 equivalent, F11). A crashed gateway restarts through startup recovery (0003), and
    each agent worker then opens a new MCP connection to it; a crashed worker restarts
-   from its last checkpoint. The simulator's endpoint fires F5 at the simulator's
-   points (`fivefold.harness.sim_points`);
+   from its last checkpoint. The simulator's endpoint fires F5 and F10 at the
+   simulator's points (`fivefold.harness.sim_points`);
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
@@ -269,8 +269,15 @@ class InprocRun:
         return len(self.result.ends) == len(self._workers)
 
     def _simulator_points(self) -> SimulatorPoints:
-        """F5, at the simulator's fault points (0006)."""
-        return SimulatorPoints(self.scheduler, self.faults, self.log)
+        """F5 and F10, at the simulator's fault points (0006)."""
+        params = self.spec.scenario.params
+        return SimulatorPoints(
+            self.scheduler,
+            self.faults,
+            self.log,
+            dispatch_timeout_ms=params.dispatch_timeout_ms,
+            status_lag_ms=params.status_lag_ms,
+        )
 
     # The gateway --------------------------------------------------------------------------
 

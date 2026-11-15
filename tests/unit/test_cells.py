@@ -8,7 +8,7 @@ import pytest
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.faults.plan import check_configuration, check_run, parse_plan
-from fivefold.harness.cells import Cell, cell_plan, load_expected
+from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
 
 
@@ -28,7 +28,8 @@ def test_every_committed_cells_plan_is_one_the_catalog_and_the_run_accept(expect
     planned = parse_plan(cell_plan(expected))
     assert expected.fault in {str(entry.fault) for entry in planned}
     check_configuration(planned, gateway=expected.config != "B0")
-    check_run(planned, params=load_scenario_file(DEV_001).params, contract=expected.contract)
+    scenario = cell_scenario(expected, load_scenario_file(DEV_001))
+    check_run(planned, params=scenario.params, contract=expected.contract)
 
 
 @pytest.mark.parametrize(
@@ -138,3 +139,39 @@ def test_f5_cells_hold_the_order_where_it_reaches_the_simulator(config: str) -> 
 def test_an_f5_cell_names_one_of_its_variants() -> None:
     with pytest.raises(ValueError, match="F5 has no variant 'late'"):
         cell_plan(cell("F5", "late", "G2"))
+
+
+# F10 ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("variant", ["delayed", "stale_within_lag", "stale_beyond_lag"])
+def test_f10_cells_pair_it_with_f2_so_g2_probes(variant: str) -> None:
+    """0006, notes: F10 needs a status probe, so its cells pair it with F2."""
+    lost, status = cell_plan(cell("F10", variant, "G2", Contract.C1))
+    assert lost == cell_plan(cell("F2", None, "G2", Contract.C1))[0]
+    assert status == {
+        "fault": "F10",
+        "variant": variant,
+        "at": {"point": "sim.status.answer", "match": {"api": "get_order_status"}, "occurrence": 1},
+    }
+
+
+@pytest.mark.parametrize(
+    ("variant", "config", "message"),
+    [("stale", "G2", "no variant"), ("delayed", "B0", "never calls the status tool")],
+)
+def test_an_f10_cell_needs_a_variant_and_a_status_probe(
+    variant: str, config: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        cell_plan(cell("F10", variant, config, Contract.C1))
+
+
+def test_only_the_stale_within_lag_cells_change_the_scenario() -> None:
+    """0006, notes: they set `status_lag_ms` to 3,000, because dev-001's L is 0."""
+    scenario = load_scenario_file(DEV_001)
+    within = cell_scenario(cell("F10", "stale_within_lag", "G2", Contract.C1), scenario)
+    assert within.params.status_lag_ms == 3_000
+    assert within.model_dump(exclude={"params"}) == scenario.model_dump(exclude={"params"})
+    for other in (cell("F10", "delayed", "G2", Contract.C1), cell("F2", None, "G2")):
+        assert cell_scenario(other, scenario) == scenario
