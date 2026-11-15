@@ -215,6 +215,27 @@ def test_start_refuses_a_plan_it_cannot_run_before_touching_a_database(
     assert not (tmp_path / "run").exists()
 
 
+def test_start_refuses_a_random_plan_in_one_line_before_touching_a_database(
+    tmp_path: Path, dev_data: dict[str, object]
+) -> None:
+    """A random plan draws from points the split topology mostly cannot fire at; it runs
+    in the inproc topology (0006, Plans)."""
+    dev_data["faults"] = {"random": {"from": ["F2", "F12"], "max": 2}}
+    scenario = tmp_path / "scenario.yaml"
+    scenario.write_text(yaml.safe_dump(dev_data), encoding="utf-8")
+    with pytest.raises(SplitRefused, match="runs a fixed fault plan only") as refused:
+        start_run(
+            admin_dsn=UNREACHABLE_DSN,
+            scenario_path=scenario,
+            config="G2",
+            contract=Contract.C2,
+            seed=7,
+            run_dir=tmp_path / "run",
+        )
+    assert "\n" not in str(refused.value) and "inproc topology" in str(refused.value)
+    assert not (tmp_path / "run").exists()
+
+
 def test_the_command_line_refuses_such_a_plan_in_one_line(
     tmp_path: Path, dev_data: dict[str, object], capsys: pytest.CaptureFixture[str]
 ) -> None:

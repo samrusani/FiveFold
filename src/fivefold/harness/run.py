@@ -8,6 +8,14 @@ scripted model or a live one, also always recorded (`fivefold.harness.models`). 
 runs its parent's run: the same scenario, configuration, contract level, seed, fault plan
 and workers. It is a new run all the same, with its own run id, the parent's with
 `.branch-K` added, and `harness.run` names its parent and its branch point.
+
+The run's fault plan is fixed before anything runs (`run_plan`): the run's own plan, or
+else the scenario's, is a list of faults, checked against the run, or a random plan,
+from which the run's `faults` generator draws such a list (0006, Plans;
+`fivefold.faults.plan`). Either way, the list, with the parameters drawn from the seed,
+is what fires and what `harness.run` records, so playback, branches and the report see
+the faults the run had.
+
 `InprocRun.execute`:
 
 1. records the run, in its run database and in the run registry (0012,
@@ -85,9 +93,12 @@ from fivefold.faults.catalog import Action
 from fivefold.faults.plan import (
     FaultInjector,
     Fired,
+    PlannedFault,
     check_configuration,
     check_run,
+    draw_plan,
     parse_plan,
+    parse_random_plan,
     seed_parameters,
 )
 from fivefold.gateway.admin import GatewayAdmin
@@ -171,13 +182,15 @@ BASELINE_TOOL_NAMES = frozenset(
 
 @dataclass(frozen=True)
 class RunSpec:
-    """What to run: `plan` defaults to the scenario's fault list."""
+    """What to run: `plan` defaults to the scenario's fault plan. A plan is a list of
+    faults, or a random plan, `{random: {from: [...], max: N}}`, which the run draws from
+    its seed (`run_plan`)."""
 
     scenario: Scenario
     config: Config
     contract: Contract
     seed: int
-    plan: Sequence[Mapping[str, Any]] | None = None
+    plan: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None
     workers: int = 1
     model: ModelSpec = SCRIPTED
     """The model adapter: scripted, scripted with recording, replay, live, or a branch's
@@ -216,6 +229,33 @@ def drain_window_ms(scenario: Scenario) -> int:
     return 2 * (params.commit_deadline_ms + params.max_hop_latency_ms) + params.status_lag_ms
 
 
+def run_plan(spec: RunSpec) -> tuple[PlannedFault, ...]:
+    """The run's fault plan, as it fires and as `harness.run` records it (0006, Plans).
+
+    The run's own plan, or else the scenario's, is either a list of faults, which must
+    fit the run's configuration, timing and contract level, or a random plan, from which
+    the run's `faults` generator draws such a list (`fivefold.faults.plan.draw_plan`).
+    Then the same generator draws each seeded parameter the list leaves unset (0009). So
+    a seed always gives the same plan, and a list with no random part draws what it
+    always did. Raises `ValueError` for a plan the run cannot carry out.
+    """
+    faults = spec.plan if spec.plan is not None else spec.scenario.faults
+    draws = Generators(spec.seed).get("faults")
+    if isinstance(faults, Mapping):
+        plan = draw_plan(
+            parse_random_plan(faults),
+            draws,
+            scenario=spec.scenario,
+            config=spec.config,
+            contract=spec.contract,
+        )
+    else:
+        plan = parse_plan(faults)
+        check_configuration(plan, gateway=spec.config != "B0")
+        check_run(plan, params=spec.scenario.params, contract=spec.contract)
+    return seed_parameters(plan, draws)
+
+
 class InprocRun:
     """One run of a scenario on one scheduler, in a migrated run database."""
 
@@ -224,10 +264,7 @@ class InprocRun:
         if spec.config not in ("B0", *GATEWAY_CONFIGS):
             raise ValueError(f"this build runs B0, G1 and G2, not {spec.config}")
         self.spec = spec
-        self._plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(spec.scenario))
-        check_configuration(self._plan, gateway=spec.config != "B0")
-        check_run(self._plan, params=spec.scenario.params, contract=spec.contract)
-        self._plan = seed_parameters(self._plan, Generators(spec.seed).get("faults"))
+        self._plan = run_plan(spec)
         self._dsn = dsn
         self.scheduler = Scheduler()
         self.result = RunResult(spec.run_id)
@@ -839,10 +876,3 @@ def _check_branch(spec: RunSpec, params: Mapping[str, object], parent: RunHeader
             f"a branch runs its parent's run, but it differs from {parent.run_id} in"
             f" {', '.join(differ)}"
         )
-
-
-def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:
-    """The scenario's fault list; a random plan is not built yet."""
-    if isinstance(scenario.faults, dict):
-        raise ValueError("random fault plans are not built yet (0006)")
-    return list(scenario.faults)

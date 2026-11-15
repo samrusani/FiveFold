@@ -181,11 +181,11 @@ def test_an_episode_runs_its_cell_s_plan_and_scenario() -> None:
     assert (spec.config, spec.contract, spec.seed, spec.plan) == ("B0", Contract.C0, 9, [])
     assert spec.scenario == SCENARIO and spec.model == SCRIPTED
     spec = Episode(2, lost, 7).spec(SCENARIO)
-    assert spec.plan is not None
+    assert isinstance(spec.plan, list)
     assert [entry["fault"] for entry in spec.plan] == ["F2"]
     assert spec.plan[0]["at"]["point"] == "net.gw_sim.answer"
     spec = Episode(3, stale, 7).spec(SCENARIO)
-    assert spec.plan is not None
+    assert isinstance(spec.plan, list)
     assert [entry["fault"] for entry in spec.plan] == ["F2", "F10"]
     assert spec.scenario.params.status_lag_ms == 3_000, "0006, notes"
 

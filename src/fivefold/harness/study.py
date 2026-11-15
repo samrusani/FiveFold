@@ -98,7 +98,6 @@ from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import result_json
-from fivefold.faults.plan import check_configuration, check_run, parse_plan
 from fivefold.harness.cells import Cell, Expected, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DB_DIR, DEV_001
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
@@ -115,7 +114,7 @@ from fivefold.harness.migrations import (
 )
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.registry import forget
-from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS, Config, InprocRun, RunSpec
+from fivefold.harness.run import CONFIGS, Config, InprocRun, RunSpec, run_plan
 from fivefold.recorder.cassette import Cassette, response_message
 
 ALL: Final = "all"
@@ -325,8 +324,8 @@ def check_study(study: Study, prefix: str) -> None:
     """Refuse a study that could not run to its end, before any database is touched.
 
     Each episode's contract level must be one the scenario lists, its fault plan must fit
-    its configuration and timing as a run checks them (`fivefold.faults.plan`), and its
-    database name must be valid. A cell with a fault runs only on the scenario
+    its configuration and timing as a run checks them (`fivefold.harness.run.run_plan`),
+    and its database name must be valid. A cell with a fault runs only on the scenario
     `faults/expected.yaml` is written for: its plan targets that scenario's operation and
     facts, and on another scenario it could fail partway through the study. Raises
     `ValueError`.
@@ -344,9 +343,7 @@ def check_study(study: Study, prefix: str) -> None:
             levels = ", ".join(map(str, scenario.contracts))
             raise ValueError(f"{scenario.id} runs at {levels}, not at {spec.contract}")
         try:
-            plan = parse_plan(spec.plan or [])
-            check_configuration(plan, gateway=spec.config in GATEWAY_CONFIGS)
-            check_run(plan, params=spec.scenario.params, contract=spec.contract)
+            run_plan(spec)
             check_database_name(database_name(prefix, episode))
         except (ValueError, MigrationError) as error:
             raise ValueError(f"episode {episode.name}: {error}") from None
