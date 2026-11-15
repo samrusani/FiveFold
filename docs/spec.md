@@ -382,7 +382,7 @@ fivefold/
     recorder/        cassettes and playback
     viewer/          the viewer's read-only API (0012)
   db/                bootstrap.sql (roles), migrations/
-  tests/             unit/, pg/, property/, scenario/
+  tests/             unit/, pg/ (needs PostgreSQL; the whole-run scenario tests), property/
   scenarios/dev/     development scenarios
   prices/            price files for live runs
   viewer/            the viewer's frontend, React and TypeScript (0012)
