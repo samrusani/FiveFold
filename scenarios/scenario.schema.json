@@ -1,0 +1,575 @@
+{
+  "$defs": {
+    "ApproverRule": {
+      "additionalProperties": false,
+      "description": "A rule of the scripted approver (0002, rule 7). The first matching rule decides.",
+      "properties": {
+        "match": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "description": "Request fields that must be equal; an empty match accepts every request.",
+          "propertyNames": {
+            "enum": [
+              "intent_id",
+              "operation",
+              "supplier_id",
+              "sku",
+              "max_quantity",
+              "max_amount_minor",
+              "currency",
+              "cost_center",
+              "warehouse_id"
+            ]
+          },
+          "title": "Match",
+          "type": "object"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "after_ms": {
+          "description": "The approver's delay after the request, in virtual milliseconds.",
+          "minimum": 0,
+          "title": "After Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "decision",
+        "after_ms"
+      ],
+      "title": "ApproverRule",
+      "type": "object"
+    },
+    "Authority": {
+      "additionalProperties": false,
+      "description": "The run's authority policy, enforced by the approvals service (0002).",
+      "properties": {
+        "allowlist": {
+          "description": "Suppliers that policy allows. Orders from any other supplier are denied.",
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "title": "Allowlist",
+          "type": "array"
+        },
+        "per_order_ceiling_minor": {
+          "description": "Orders above this amount are denied by policy.",
+          "minimum": 0,
+          "title": "Per Order Ceiling Minor",
+          "type": "integer"
+        },
+        "auto_approve_up_to_minor": {
+          "description": "Orders at or below this amount are approved by policy at once.",
+          "minimum": 0,
+          "title": "Auto Approve Up To Minor",
+          "type": "integer"
+        },
+        "approval_ttl_ms": {
+          "description": "An approval expires this long after its decision.",
+          "minimum": 1,
+          "title": "Approval Ttl Ms",
+          "type": "integer"
+        },
+        "approval_wait_ms": {
+          "description": "How long a caller waits for a decision before it gives up (0002, rule 14).",
+          "minimum": 1,
+          "title": "Approval Wait Ms",
+          "type": "integer"
+        },
+        "approver": {
+          "items": {
+            "$ref": "#/$defs/ApproverRule"
+          },
+          "title": "Approver",
+          "type": "array"
+        },
+        "resolver": {
+          "anyOf": [
+            {
+              "const": "none",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/Resolver"
+            }
+          ],
+          "default": "none",
+          "title": "Resolver"
+        }
+      },
+      "required": [
+        "allowlist",
+        "per_order_ceiling_minor",
+        "auto_approve_up_to_minor",
+        "approval_ttl_ms",
+        "approval_wait_ms"
+      ],
+      "title": "Authority",
+      "type": "object"
+    },
+    "Budget": {
+      "additionalProperties": false,
+      "description": "Limits for each agent worker (0009).",
+      "properties": {
+        "max_agent_steps": {
+          "minimum": 1,
+          "title": "Max Agent Steps",
+          "type": "integer"
+        },
+        "max_tokens": {
+          "minimum": 1,
+          "title": "Max Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_agent_steps",
+        "max_tokens"
+      ],
+      "title": "Budget",
+      "type": "object"
+    },
+    "BudgetFact": {
+      "additionalProperties": false,
+      "description": "A cost center's budget: `budget/{cost_center}`. What is left is limit minus committed.",
+      "properties": {
+        "limit_minor": {
+          "minimum": 0,
+          "title": "Limit Minor",
+          "type": "integer"
+        },
+        "committed_minor": {
+          "minimum": 0,
+          "title": "Committed Minor",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit_minor",
+        "committed_minor"
+      ],
+      "title": "BudgetFact",
+      "type": "object"
+    },
+    "Contract": {
+      "description": "The four contract presets of the published matrix (0005).",
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "title": "Contract",
+      "type": "string"
+    },
+    "Decision": {
+      "description": "A decision on an approval request, by policy or by the scripted approver.",
+      "enum": [
+        "approve",
+        "deny"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "Intent": {
+      "additionalProperties": false,
+      "description": "One unit of work with a stable id, such as requisition REQ-1 (0001).",
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "required": {
+          "default": true,
+          "description": "Whether property 4 requires an effect for this intent.",
+          "title": "Required",
+          "type": "boolean"
+        },
+        "accept": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PurchaseOrderAccept"
+            },
+            {
+              "$ref": "#/$defs/ReservationAccept"
+            }
+          ],
+          "title": "Accept"
+        }
+      },
+      "required": [
+        "id",
+        "operation",
+        "accept"
+      ],
+      "title": "Intent",
+      "type": "object"
+    },
+    "InventoryFact": {
+      "additionalProperties": false,
+      "description": "A sku's stock in a warehouse: `inventory/{warehouse_id}/{sku}`.",
+      "properties": {
+        "available": {
+          "description": "Units free to reserve. A destination below C3 can take it below zero.",
+          "title": "Available",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "available"
+      ],
+      "title": "InventoryFact",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "Operation": {
+      "description": "The two write operations of v0.1 (0001, item 2).",
+      "enum": [
+        "submit_purchase_order",
+        "reserve_inventory"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "Params": {
+      "additionalProperties": false,
+      "description": "Contract and timing values in virtual milliseconds (0005, 0009). All optional.",
+      "properties": {
+        "max_hop_latency_ms": {
+          "default": 50,
+          "minimum": 1,
+          "title": "Max Hop Latency Ms",
+          "type": "integer"
+        },
+        "commit_deadline_ms": {
+          "default": 10000,
+          "description": "D: a request not committed within this time of its arrival never commits.",
+          "minimum": 1,
+          "title": "Commit Deadline Ms",
+          "type": "integer"
+        },
+        "status_lag_ms": {
+          "default": 0,
+          "description": "L: a status answer is accurate to at most this long before it is produced.",
+          "minimum": 0,
+          "title": "Status Lag Ms",
+          "type": "integer"
+        },
+        "dispatch_timeout_ms": {
+          "default": 2000,
+          "description": "T: must exceed twice `max_hop_latency_ms`.",
+          "minimum": 1,
+          "title": "Dispatch Timeout Ms",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "status_probe_interval_ms": {
+          "default": 1000,
+          "minimum": 1,
+          "title": "Status Probe Interval Ms",
+          "type": "integer"
+        },
+        "max_probes": {
+          "default": 20,
+          "minimum": 1,
+          "title": "Max Probes",
+          "type": "integer"
+        },
+        "tool_wait_ms": {
+          "default": 2500,
+          "minimum": 0,
+          "title": "Tool Wait Ms",
+          "type": "integer"
+        },
+        "approval_poll_interval_ms": {
+          "default": 500,
+          "minimum": 1,
+          "title": "Approval Poll Interval Ms",
+          "type": "integer"
+        },
+        "max_wait_ms": {
+          "default": 60000,
+          "description": "The longest `wait_ms` a status tool accepts.",
+          "minimum": 0,
+          "title": "Max Wait Ms",
+          "type": "integer"
+        },
+        "think_ms": {
+          "default": 1000,
+          "description": "Virtual time each model call takes (0009).",
+          "minimum": 0,
+          "title": "Think Ms",
+          "type": "integer"
+        }
+      },
+      "title": "Params",
+      "type": "object"
+    },
+    "PurchaseOrderAccept": {
+      "additionalProperties": false,
+      "description": "Acceptance constraints of a purchase-order intent (0004, property 4).",
+      "properties": {
+        "sku": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Sku",
+          "type": "string"
+        },
+        "quantity": {
+          "minimum": 1,
+          "title": "Quantity",
+          "type": "integer"
+        },
+        "suppliers": {
+          "description": "The suppliers the task allows.",
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Suppliers",
+          "type": "array"
+        },
+        "max_unit_price_minor": {
+          "minimum": 0,
+          "title": "Max Unit Price Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "cost_center": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Cost Center",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sku",
+        "quantity",
+        "suppliers",
+        "max_unit_price_minor",
+        "currency",
+        "cost_center"
+      ],
+      "title": "PurchaseOrderAccept",
+      "type": "object"
+    },
+    "QuoteFact": {
+      "additionalProperties": false,
+      "description": "A supplier's quote for a sku: `quote/{supplier_id}/{sku}`.",
+      "properties": {
+        "unit_price_minor": {
+          "minimum": 0,
+          "title": "Unit Price Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "min_quantity": {
+          "minimum": 1,
+          "title": "Min Quantity",
+          "type": "integer"
+        },
+        "lead_time_days": {
+          "minimum": 0,
+          "title": "Lead Time Days",
+          "type": "integer"
+        },
+        "status": {
+          "description": "`active` means the quote is on offer; any other value means it is not.",
+          "minLength": 1,
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_price_minor",
+        "currency",
+        "min_quantity",
+        "lead_time_days",
+        "status"
+      ],
+      "title": "QuoteFact",
+      "type": "object"
+    },
+    "ReservationAccept": {
+      "additionalProperties": false,
+      "description": "Acceptance constraints of a reservation intent (0004, property 4).",
+      "properties": {
+        "warehouse_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Warehouse Id",
+          "type": "string"
+        },
+        "sku": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Sku",
+          "type": "string"
+        },
+        "quantity": {
+          "minimum": 1,
+          "title": "Quantity",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "warehouse_id",
+        "sku",
+        "quantity"
+      ],
+      "title": "ReservationAccept",
+      "type": "object"
+    },
+    "Resolver": {
+      "additionalProperties": false,
+      "description": "The scripted resolver. It attests only after the settle time, and tells the truth.",
+      "properties": {
+        "after_ms": {
+          "minimum": 0,
+          "title": "After Ms",
+          "type": "integer"
+        },
+        "attests": {
+          "const": "truth",
+          "title": "Attests",
+          "type": "string"
+        }
+      },
+      "required": [
+        "after_ms",
+        "attests"
+      ],
+      "title": "Resolver",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A scenario file (0009).",
+  "properties": {
+    "id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "task": {
+      "description": "The task text the agent receives.",
+      "minLength": 1,
+      "title": "Task",
+      "type": "string"
+    },
+    "intents": {
+      "items": {
+        "$ref": "#/$defs/Intent"
+      },
+      "minItems": 1,
+      "title": "Intents",
+      "type": "array"
+    },
+    "facts": {
+      "description": "Initial facts. Every fact starts at version 1.",
+      "patternProperties": {
+        "^(quote/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|budget/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|inventory/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63})$": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuoteFact"
+            },
+            {
+              "$ref": "#/$defs/BudgetFact"
+            },
+            {
+              "$ref": "#/$defs/InventoryFact"
+            }
+          ]
+        }
+      },
+      "title": "Facts",
+      "type": "object"
+    },
+    "authority": {
+      "$ref": "#/$defs/Authority"
+    },
+    "contracts": {
+      "items": {
+        "$ref": "#/$defs/Contract"
+      },
+      "minItems": 1,
+      "title": "Contracts",
+      "type": "array"
+    },
+    "faults": {
+      "anyOf": [
+        {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      ],
+      "description": "The fault plan (0006): a list of faults, or a random plan. Not interpreted here.",
+      "title": "Faults"
+    },
+    "params": {
+      "$ref": "#/$defs/Params"
+    },
+    "budget": {
+      "$ref": "#/$defs/Budget"
+    }
+  },
+  "required": [
+    "id",
+    "task_id",
+    "title",
+    "task",
+    "intents",
+    "facts",
+    "authority",
+    "contracts",
+    "budget"
+  ],
+  "title": "Scenario",
+  "type": "object"
+}
