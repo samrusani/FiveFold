@@ -11,7 +11,7 @@ import pytest
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 
-from fivefold.harness.log import FaultRecord, MessageRecord, PgHarnessLog, ReportRecord
+from fivefold.harness.log import FaultRecord, MessageRecord, PgHarnessLog, ReportRecord, RunRecord
 from fivefold.harness.reports import TEXT_KEY, ReportSink
 from fivefold.harness.scheduler import Scheduler
 
@@ -287,6 +287,49 @@ def test_a_run_stops_once_and_its_stop_never_changes(migrated_database: str) -> 
     with psycopg.connect(migrated_database, autocommit=True) as conn:
         _refused(conn, psycopg.errors.RaiseException, "UPDATE harness.run_stop SET stopped_vt = 1")
         _refused(conn, psycopg.errors.RaiseException, "DELETE FROM harness.run_stop")
+
+
+RUN = RunRecord(
+    run_id="RUN-1",
+    scenario_id="dev-001",
+    scenario_digest="abc",
+    config="G2",
+    contract="C2",
+    seed=7,
+    model_adapter="scripted",
+    model="scripted",
+    params={"workers": 1},
+)
+
+
+def test_a_recording_run_records_its_cassette_once(migrated_database: str) -> None:
+    """The cassette is complete only when the run stops, after the run was recorded."""
+    digest = "ab" * 32
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        with pytest.raises(ValueError, match="never recorded"):
+            log.cassette_recorded(digest)
+        log.run_recorded(RUN)
+        assert log.run == RUN
+        log.cassette_recorded(digest)
+        assert log.run == replace(RUN, cassette_digest=digest)
+        with pytest.raises(ValueError, match="already names its cassette"):
+            log.cassette_recorded("cd" * 32)
+        assert conn.execute(
+            "SELECT model_adapter, model, cassette_digest FROM harness.run"
+        ).fetchall() == [("scripted", "scripted", digest)]
+
+
+def test_a_replay_names_its_cassette_from_the_start(migrated_database: str) -> None:
+    replay = replace(RUN, model_adapter="replay", cassette_digest="ef" * 32)
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        log.run_recorded(replay)
+        with pytest.raises(ValueError, match="already names its cassette"):
+            log.cassette_recorded("ab" * 32)
+        assert conn.execute(
+            "SELECT model_adapter, model, cassette_digest FROM harness.run"
+        ).fetchall() == [("replay", "scripted", "ef" * 32)]
 
 
 def test_a_run_database_describes_one_run(migrated_database: str) -> None:

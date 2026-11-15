@@ -324,6 +324,10 @@ Detail: 0009.
 ## Playback and branching
 
 - **Recorded playback** re-executes a run from its scenario, seed and cassette into a fresh run database. It never writes to the original run or to anything outside the simulator.
+- **Cassette:** the run it was recorded from, as `harness.run` records it; the model that answered; and every model call in run order, with the worker that asked, the request's hash and the response. The file is JSON with sorted keys and two-space indents, in one canonical form. Its SHA-256 is the cassette digest that `harness.run` records, for the recording run and for each replay.
+- **Request hash:** the SHA-256 of the canonical JSON of what the model is asked: the messages without their random ids, the schemas of the tools bound to it, and its name and parameters, `stop` and anything bound with the tools among them.
+- **Recording and replay:** a scripted run records a cassette on request; a live run will always record one. The replay adapter serves a cassette's responses in order, after `think_ms` per call like every adapter. The run fails if a request's hash or worker differs from the recorded call, or if the run asks for more or fewer calls than the cassette holds. The error names the call's number and both hashes.
+- **Checks:** `python -m fivefold.recorder play` refuses a scenario whose digest differs from the cassette's, and an original run that did not record the cassette. After the replay it compares, ignoring wall-clock columns: the message log and the harness's other logs, the effects ledger, the approval events, the action events, and the evaluation JSON without its model adapter, which a replay records as `replay`. It reads the original run only as `ff_viewer`.
 - **Timeline view** reads a stored run's message log without executing anything.
 - **Experimental branch** replays a run to event N, then switches to a live model or another script. It becomes a new run with a parent, labelled a new experiment.
 - **Later:** shrink a failing run to the fewest events that still reproduce it.

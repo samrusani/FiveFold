@@ -94,6 +94,8 @@ class RunRecord:
     model: str
     params: Mapping[str, object]
     topology: Literal["inproc", "split"] = "inproc"
+    cassette_digest: str | None = None
+    """The cassette a replay serves, or the one a recording made (`cassette_recorded`)."""
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,11 @@ class HarnessLog(ABC):
     @abstractmethod
     def run_stopped(self, vt: int) -> None:
         """Record when the run stopped, once, at the end of the drain window (0009)."""
+
+    @abstractmethod
+    def cassette_recorded(self, digest: str) -> None:
+        """Record, once, the digest of the cassette the run recorded (0009). It is known
+        only when the run stops, after the run itself was recorded."""
 
     @abstractmethod
     def next_seq(self) -> int:
@@ -200,6 +207,11 @@ class MemoryHarnessLog(HarnessLog):
         if self.stopped_vt is not None:
             raise ValueError("the run has already stopped")
         self.stopped_vt = vt
+
+    def cassette_recorded(self, digest: str) -> None:
+        if self.run is None or self.run.cassette_digest is not None:
+            raise ValueError("the run was never recorded, or already names its cassette")
+        self.run = replace(self.run, cassette_digest=digest)
 
     @property
     def messages(self) -> list[MessageRecord]:
@@ -270,12 +282,14 @@ class PgHarnessLog(HarnessLog):
             " (SELECT max(seq) FROM harness.actor_log))"
         ).fetchone()
         self._last_seq = 0 if row is None or row[0] is None else int(row[0])
+        self.run: RunRecord | None = None
+        """The run as this log recorded it."""
 
     def run_recorded(self, record: RunRecord) -> None:
         self._conn.execute(
             "INSERT INTO harness.run (run_id, scenario_id, scenario_digest, config, contract,"
-            " seed, topology, model_adapter, model, params)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " seed, topology, model_adapter, model, cassette_digest, params)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 record.run_id,
                 record.scenario_id,
@@ -286,15 +300,26 @@ class PgHarnessLog(HarnessLog):
                 record.topology,
                 record.model_adapter,
                 record.model,
+                record.cassette_digest,
                 Jsonb(dict(record.params)),
             ),
         )
+        self.run = record
 
     def run_stopped(self, vt: int) -> None:
         self._conn.execute(
             "INSERT INTO harness.run_stop (run_id, stopped_vt) SELECT run_id, %s FROM harness.run",
             (vt,),
         )
+
+    def cassette_recorded(self, digest: str) -> None:
+        updated = self._conn.execute(
+            "UPDATE harness.run SET cassette_digest = %s WHERE cassette_digest IS NULL",
+            (digest,),
+        )
+        if updated.rowcount != 1 or self.run is None:
+            raise ValueError("the run was never recorded, or already names its cassette")
+        self.run = replace(self.run, cassette_digest=digest)
 
     def next_seq(self) -> int:
         self._last_seq += 1

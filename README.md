@@ -20,7 +20,7 @@ Milestone M0, the design freeze, is done: decision records 0001 to 0009 were acc
 - the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`);
 - the evaluator, which scores every run from ground truth on all five properties (`src/fivefold/evaluator/`).
 
-All four demos of record 0006 run from a seed (see Demo below). The development scenario has 145 expected-outcome cells: faults F1 to F7 and F9 to F12, at each contract level (C0 to C3) and configuration (the baseline B0 and the gateway G2) they apply to. F10 needs a status probe, so it applies at C1 in G2 only. Each cell runs from the committed seed and gets the verdict `faults/expected.yaml` expects, and every G2 cell passes except the limits record 0006 documents. The scripted approver decides approvals, and approvals can be revoked (F6) or expire. When a scenario names a resolver, a scripted human settles each escalated action through the gateway's admin path, after the settle time, and says truthfully whether it committed. Milestone M3 has started: faults F3 (a gateway crash after the reply arrives, before it is recorded), F4 (a request delivered twice), F5 (a commit after the caller's timeout) and F10 (status answers delayed or stale), and demos 2 and 3, are in. Two of F10's cells contradict record 0006; record 0013 proposes how to resolve them, and they wait for the maintainer.
+All four demos of record 0006 run from a seed (see Demo below). The development scenario has 145 expected-outcome cells: faults F1 to F7 and F9 to F12, at each contract level (C0 to C3) and configuration (the baseline B0 and the gateway G2) they apply to. F10 needs a status probe, so it applies at C1 in G2 only. Each cell runs from the committed seed and gets the verdict `faults/expected.yaml` expects, and every G2 cell passes except the limits record 0006 documents. The scripted approver decides approvals, and approvals can be revoked (F6) or expire. When a scenario names a resolver, a scripted human settles each escalated action through the gateway's admin path, after the settle time, and says truthfully whether it committed. Milestone M3 has started: faults F3 (a gateway crash after the reply arrives, before it is recorded), F4 (a request delivered twice), F5 (a commit after the caller's timeout) and F10 (status answers delayed or stale), demos 2 and 3, and recorded playback (see below) are in. Two of F10's cells contradict record 0006; record 0013 proposes how to resolve them, and they wait for the maintainer.
 
 ## Demo
 
@@ -29,6 +29,15 @@ All four demos of record 0006 run from a seed (see Demo below). The development 
 1. **Order placed, reply lost** (C2). The purchase order's reply is lost (fault F2), and the agent is killed right after sending the order and resumed from its checkpoint 10 seconds later (F11). Without the gateway, the resumed agent orders again: two orders, one approval, an overdrawn budget. With the gateway, it retries with the same idempotency key while the agent is down, and the resumed agent's repeated proposal attaches to the confirmed order: one order. The evaluator scores both runs: B0 fails properties 1 (a duplicate order), 2 (the second order reuses the first approval) and 3 (the budget no longer covers it); G2 passes all five.
 2. **Approval goes stale** (C2). A human approves the order; before it is sent, the quote's price goes up (2a, fault F7) or the approval is revoked (2b, F6). G2 refuses to send and names the stale fact (`quote/S-1/W-100`, version 1 to 2, `unit_price_minor`) or the revoked approval. In 2a the agent reads again and orders at the new price on a new approval. B0 orders anyway, on the old price or the revoked approval.
 3. **Outcome unknown** (C0). The order's reply is lost, and the destination offers no way to ask. G2 tells the agent that the outcome is unknown and what a human must reconcile, the report says "unknown", and the verdict is pass_unresolved. B0 orders twice.
+
+## Recorded playback
+
+A run can record every model call into a cassette, and be played back from it into a fresh database (record 0009). The replay must ask the model exactly what the recording did, and its logs, effects ledger and evaluation must match the original run's byte for byte, apart from wall-clock times. Playback needs PostgreSQL but no API key.
+
+```
+uv run python -m fivefold.recorder record --demo 1 --config G2 --cassette demo-1-g2.json
+uv run python -m fivefold.recorder play demo-1-g2.json --scenario scenarios/dev/dev-001-single-po.yaml
+```
 
 ## Documents
 
