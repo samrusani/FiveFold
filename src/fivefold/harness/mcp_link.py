@@ -35,6 +35,12 @@ attaches its per-request data: `ServerMessageMetadata(request_context=...)`, whi
 SDK hands to the handler as `ServerRequestContext.request` (mcp 2.3.0,
 `mcp/shared/message.py`, `mcp/server/runner.py` `_make_context`). So the gateway names
 the delivery it served, the copy included, when it records a final report (0004).
+
+A message of the agent's that holds a NUL character, in a value or a key, is refused
+before anything logs it, since the harness's log cannot store one
+(`fivefold.harness.log.holds_nul`). As the split gateway does, the link answers a request
+with invalid params, at once and in the agent's own inbox, and drops a notification.
+Nothing goes on the wire, so the refusal takes no seq, no latency draw and no virtual time.
 """
 
 from __future__ import annotations
@@ -46,9 +52,10 @@ from dataclasses import dataclass, field
 from types import TracebackType
 
 import anyio
+import mcp_types as types
 from mcp.shared.message import ServerMessageMetadata, SessionMessage
 
-from fivefold.harness.log import DropReason, Kind
+from fivefold.harness.log import NUL_REFUSED, DropReason, Kind, holds_nul
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Envelope, Transport, answer_to_copy
 
@@ -177,6 +184,9 @@ class Outbox:
         body = item.message.model_dump(mode="json", by_alias=True, exclude_none=True)
         method = body.get("method")
         message_id = body.get("id")
+        if self._sender == self._link.agent and holds_nul(body):
+            self._refuse(method, message_id)
+            return
         kind: Kind
         correlation: int | None = None
         api: str | None = None
@@ -233,6 +243,19 @@ class Outbox:
         )
         if envelope is not None and kind == "request":
             self._own.sent[message_id] = (envelope.seq, api, intent_id)
+
+    def _refuse(self, method: object, message_id: object) -> None:
+        """Refuse a message of the agent's that holds a NUL character, which the harness's
+        log cannot store (`fivefold.harness.log.holds_nul`): nothing is logged or sent. A
+        request gets the split gateway's answer, invalid params, at once, in the agent's
+        own inbox; a notification is dropped."""
+        if not isinstance(method, str) or not isinstance(message_id, int | str):
+            return
+        error = types.ErrorData(
+            code=types.INVALID_PARAMS, message=f"the message is refused: {NUL_REFUSED}"
+        )
+        refusal = types.JSONRPCError(jsonrpc="2.0", id=message_id, error=error)
+        self._link.client_read.deliver(SessionMessage(refusal))
 
     async def aclose(self) -> None:
         """End this direction, after the messages already on the wire arrive.

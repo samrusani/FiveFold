@@ -69,18 +69,11 @@ from fivefold.domain.report import validation_messages
 from fivefold.faults.plan import FaultInjector, Fired
 from fivefold.harness.actors import ScriptedApprover
 from fivefold.harness.fault_effects import SimulatorFaults, message_context
-from fivefold.harness.log import DropReason
+from fivefold.harness.log import NUL_REFUSED, DropReason, holds_nul
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.sim_points import SimulatorPoints
 from fivefold.harness.split.credentials import GATEWAY, HARNESS
-from fivefold.harness.split.hops import (
-    NUL_REFUSED,
-    SEQ_HEADER,
-    WRITES,
-    Hops,
-    holds_nul,
-    logged_message,
-)
+from fivefold.harness.split.hops import SEQ_HEADER, WRITES, Hops, logged_message
 from fivefold.harness.split.rundir import SplitRun
 from fivefold.harness.split.service import OpenRun, open_run, unavailable, until_gone
 from fivefold.harness.transport import Envelope, Handler, Hop, Reply

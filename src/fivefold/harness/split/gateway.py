@@ -99,13 +99,13 @@ from fivefold.gateway.store import ActionStore
 from fivefold.gateway.tools import GatewayTools, ToolTiming
 from fivefold.harness.actors import ATTEST
 from fivefold.harness.clock import HostClock
-from fivefold.harness.log import ActorRecord, HarnessLog, JsonValue
+from fivefold.harness.log import NUL_REFUSED, ActorRecord, HarnessLog, JsonValue, holds_nul
 from fivefold.harness.mcp_link import Delivery, answer_label
 from fivefold.harness.reports import ReportSink
 from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
 from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
-from fivefold.harness.split.hops import NUL_REFUSED, SEQ_HEADER, Hops, answer_class, holds_nul
+from fivefold.harness.split.hops import SEQ_HEADER, Hops, answer_class
 from fivefold.harness.split.rundir import SplitRun
 from fivefold.harness.split.service import OpenRun, open_run, unavailable
 from fivefold.harness.transport import Envelope, Hop, Reply, TransportTimeout
