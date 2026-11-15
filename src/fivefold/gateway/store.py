@@ -46,6 +46,7 @@ from fivefold.gateway.codec import storable
 from fivefold.gateway.invariants import InvariantViolation, check_invariants
 from fivefold.gateway.records import (
     Action,
+    ActionEvent,
     ActionResult,
     Admission,
     Answer,
@@ -190,6 +191,10 @@ class Transaction(ABC):
     def snapshot(self) -> Snapshot:
         """Every record as this transaction sees it, in one consistent state."""
 
+    @abstractmethod
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
+        """The run's action events with seq `seq` or more, in seq order."""
+
 
 class ActionStore(ABC):
     """One run's gateway records, changed only through the operations below.
@@ -243,6 +248,12 @@ class ActionStore(ABC):
         """Every record as it is now."""
         with self._reading() as tx:
             return tx.snapshot()
+
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
+        """The run's action events with seq `seq` or more, in seq order, read without the
+        rest of the run's records."""
+        with self._reading() as tx:
+            return tx.events_from(seq)
 
     def view(self, action_id: str) -> ActionView:
         """One action's records, as steps read them."""

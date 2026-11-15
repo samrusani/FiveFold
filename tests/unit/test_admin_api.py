@@ -32,6 +32,7 @@ from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.memory import MemoryStore
 from fivefold.gateway.records import (
     Action,
+    ActionEvent,
     ActionResult,
     Answer,
     ApprovalStatus,
@@ -475,6 +476,26 @@ def test_events_lists_the_runs_events_in_seq_order_from_a_given_seq() -> None:
         assert response.json()["message"].startswith("query.from_seq: ")
 
 
+class EventsOnly:
+    """A read path whose snapshot fails: only `events_from` works."""
+
+    def __init__(self, store: MemoryStore) -> None:
+        self._store = store
+
+    def snapshot(self) -> Snapshot:
+        raise AssertionError("polling the events read the whole run")
+
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
+        return self._store.events_from(seq)
+
+
+def test_polling_the_events_reads_only_the_events() -> None:
+    gateway = escalated()
+    app = admin_app(gateway.admin, EventsOnly(gateway.store), token=TOKEN)
+    assert call(app, "GET", "/events").json() == {"events": EVENTS}
+    assert call(app, "GET", "/events", params={"from_seq": 5}).json() == {"events": EVENTS[4:]}
+
+
 def test_escalations_lists_the_open_ones_as_the_admin_path_does() -> None:
     gateway = escalated()
     response = call(gateway.app, "GET", "/escalations")
@@ -743,6 +764,9 @@ class BrokenRecords:
     """A read path that fails."""
 
     def snapshot(self) -> Snapshot:
+        raise RuntimeError("the database went away")
+
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
         raise RuntimeError("the database went away")
 
 

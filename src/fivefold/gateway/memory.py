@@ -241,6 +241,9 @@ class _MemoryTransaction(Transaction):
     def snapshot(self) -> Snapshot:
         return self._working
 
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
+        return tuple(event for event in self._working.events if event.seq >= seq)
+
 
 def _last_seq(snapshot: Snapshot) -> int:
     return snapshot.events[-1].seq if snapshot.events else 0

@@ -124,6 +124,11 @@ class GatewayRecords(Protocol):
         """Every gateway record of the run, as one read sees them."""
         ...
 
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
+        """The run's action events with seq `seq` or more, in seq order. `GET /events`
+        reads only these, so polling it never reads the rest of the run."""
+        ...
+
 
 class Attestation(BaseModel):
     """What a human attests about an escalated action (0003, escalation)."""
@@ -219,7 +224,7 @@ def admin_app(admin: GatewayAdmin, records: GatewayRecords, *, token: str) -> Fa
 
     @app.get("/events")
     async def list_events(from_seq: Annotated[int, Query(ge=0)] = 0) -> JSONResponse:
-        events = [_event(e) for e in records.snapshot().events if e.seq >= from_seq]
+        events = [_event(e) for e in records.events_from(from_seq)]
         return JSONResponse({"events": events})
 
     @app.get("/escalations")

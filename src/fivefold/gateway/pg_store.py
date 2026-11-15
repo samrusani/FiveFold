@@ -543,6 +543,10 @@ class _PgTransaction(Transaction):
             proposals=tuple(_proposal(r) for r in self._conn.execute(_PROPOSAL).fetchall()),
         )
 
+    def events_from(self, seq: int) -> tuple[ActionEvent, ...]:
+        rows = self._conn.execute(_EVENT + " WHERE seq >= %s ORDER BY seq", (seq,)).fetchall()
+        return tuple(_event(r) for r in rows)
+
     def _one(self, query: LiteralString, params: tuple[object, ...]) -> Row:
         row = self._conn.execute(query, params).fetchone()
         if row is None:
