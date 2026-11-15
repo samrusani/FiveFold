@@ -95,6 +95,22 @@ Observer = Callable[[Envelope, Stage], None]
 """Called after a message is sent, and again after it is delivered."""
 
 
+@dataclass(frozen=True)
+class Outgoing:
+    """A message about to be sent: what a fault point before a send can match on."""
+
+    hop: Hop
+    kind: Kind
+    sender: str
+    receiver: str
+    api: str | None
+    intent_id: str | None
+
+
+BeforeSend = Callable[[Outgoing], None]
+"""Called before a message is sent, for the fault point `agent.before_tool_call`."""
+
+
 class Transport:
     """Carries messages between a run's components, on the scheduler's clock."""
 
@@ -116,6 +132,7 @@ class Transport:
         self._faults = faults if faults is not None else FaultInjector()
         self._handlers: dict[str, Handler] = {}
         self._observers: list[Observer] = []
+        self._before_send: list[BeforeSend] = []
         self._effect: Effect | None = None
 
     @property
@@ -140,6 +157,15 @@ class Transport:
         observer crashed never gets it: the delivery happened, and the crash voided it.
         """
         self._observers.append(observer)
+
+    def before_send(self, hook: BeforeSend) -> None:
+        """Call `hook` before each message is sent.
+
+        The harness uses it for `agent.before_tool_call`, F1's B0 equivalent (0006). A
+        hook that crashes the sender stops the message: a component that is down sends
+        nothing, so the message is never sent or logged.
+        """
+        self._before_send.append(hook)
 
     def draw_latency(self) -> int:
         """One hop's latency, from the run's latency generator (0009)."""
@@ -167,12 +193,18 @@ class Transport:
 
         `wanted`, checked on arrival, names a reason to drop the message instead, for
         example that the caller has timed out. Returns None, sending nothing, when the
-        sender is down.
+        sender is down, or a before-send hook crashed it.
         """
         if hop not in HOPS:
             raise ValueError(f"unknown hop {hop!r}")
         if not self._scheduler.is_up(sender):
             return None
+        if self._before_send:
+            outgoing = Outgoing(hop, kind, sender, receiver, api, intent_id)
+            for hook in self._before_send:
+                hook(outgoing)
+            if not self._scheduler.is_up(sender):
+                return None
         text = json.dumps(body, sort_keys=True)
         envelope = Envelope(
             seq=self._log.next_seq(),

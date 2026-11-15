@@ -113,6 +113,9 @@ def test_the_catalog_names_only_points_0006_lists() -> None:
 @pytest.mark.parametrize(
     ("fault", "point"),
     [
+        ("F1", "gw.dispatch.after_check"),
+        ("F1", "gw.dispatch.after_record"),
+        ("F1", "agent.before_tool_call"),
         ("F6", "gw.dispatch.before_check"),
         ("F6", "net.agent_sim.answer"),
         ("F7", "net.gw_sim.request"),
@@ -153,6 +156,26 @@ def test_f12_never_fires_on_an_answer() -> None:
             "F11 after_tool_call fires at",
         ),
         ({"fault": "F2", "variant": "any", "at": {"point": "net.gw_sim.answer"}}, "no variant"),
+        (
+            {"fault": "F1", "variant": "a", "at": {"point": "gw.dispatch.after_record"}},
+            "F1 a fires at",
+        ),
+        (
+            {"fault": "F1", "variant": "b", "at": {"point": "gw.dispatch.after_check"}},
+            "F1 b fires at",
+        ),
+        (
+            {"fault": "F1", "at": {"point": "gw.dispatch.after_answer"}},
+            "F1 does not fire at",
+        ),
+        (
+            {
+                "fault": "F1",
+                "at": {"point": "gw.dispatch.after_check"},
+                "params": {"restart_delay_ms": -1},
+            },
+            "restart_delay_ms must be at least 0",
+        ),
     ],
 )
 def test_a_variant_or_parameter_the_fault_does_not_have_is_refused(
@@ -172,5 +195,13 @@ def test_each_variant_is_accepted_at_its_own_points() -> None:
                 "variant": "after_tool_result",
                 "at": {"point": "agent.after_tool_result"},
             },
+            {"fault": "F1", "variant": "a", "at": {"point": "gw.dispatch.after_check"}},
+            {"fault": "F1", "variant": "b", "at": {"point": "gw.dispatch.after_record"}},
+            {"fault": "F1", "variant": "b", "at": {"point": "agent.before_tool_call"}},
         ]
     )
+
+
+def test_f1_restarts_after_a_second_by_default() -> None:
+    (planned,) = parse_plan([{"fault": "F1", "at": {"point": "gw.dispatch.after_check"}}])
+    assert planned.param("restart_delay_ms") == 1_000

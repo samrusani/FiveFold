@@ -11,7 +11,7 @@ from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.harness.log import MemoryHarnessLog, MessageRecord
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
-from fivefold.harness.transport import Envelope, Reply, Transport, TransportTimeout
+from fivefold.harness.transport import Envelope, Outgoing, Reply, Transport, TransportTimeout
 
 
 class Rig:
@@ -369,3 +369,36 @@ def test_every_fault_that_fires_on_one_message_is_logged() -> None:
         ("F2", answer.seq),
         ("F2", answer.seq),
     ]
+
+
+def test_a_hook_before_a_send_sees_the_message_and_lets_it_go() -> None:
+    rig = Rig()
+    seen: list[Outgoing] = []
+    rig.transport.before_send(seen.append)
+
+    async def caller() -> None:
+        await rig.call(1)
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", caller(), name="call"))
+    assert seen[0] == Outgoing(
+        "gw_sim", "request", "gateway", "sim", "submit_purchase_order", "REQ-1"
+    )
+    assert [m.kind for m in rig.log.messages] == ["request", "answer"]
+
+
+def test_a_hook_that_crashes_the_sender_stops_the_message() -> None:
+    """F1's B0 equivalent: the sender dies before its call leaves (0006)."""
+    rig = Rig()
+
+    def kill(outgoing: Outgoing) -> None:
+        if outgoing.kind == "request":
+            rig.scheduler.crash(outgoing.sender)
+
+    rig.transport.before_send(kill)
+
+    async def caller() -> None:
+        await rig.call(1)
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", caller(), name="call"))
+    assert rig.log.messages == [], "nothing was sent, and nothing was logged"
+    assert not rig.scheduler.is_up("gateway")

@@ -15,12 +15,12 @@ A task passes only if every real-world action:
 Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine. Milestone M1, the thin slice, is done:
 
 - the simulator: purchase orders and reservations at contract levels C0 to C3, the effects ledger, fact history and the approvals service (`src/fivefold/sim/`);
-- the deterministic harness: the scheduler, the virtual clock, transports with a message log, fault plans with F2 and F11 (`src/fivefold/harness/`);
+- the deterministic harness: the scheduler, the virtual clock, transports with a message log, fault plans and the faults built so far (`src/fivefold/harness/`, `src/fivefold/faults/`);
 - the gateway: the state machine with invariants I1 to I7, the PostgreSQL store, the dispatcher and the agent-facing tools over MCP (`src/fivefold/gateway/`);
 - the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`);
 - the evaluator, which scores runs from ground truth; properties 1 (exactly once) and 5 (truthfully reported) so far (`src/fivefold/evaluator/`).
 
-Demo 1 runs from a seed, and every built fault cell of the development scenario gets the verdict `faults/expected.yaml` expects. Milestone M2 has started: the scripted approver and faults F6, F7 and F12 are in.
+Demo 1 runs from a seed, and every built fault cell of the development scenario gets the verdict `faults/expected.yaml` expects. Milestone M2 has started: the scripted approver and faults F1, F6, F7 and F12 are in, and B0 and G2 run at contract levels C0 to C3. In F1 the gateway crashes before it sends; it restarts through startup recovery, and the agent reconnects to it.
 
 ## Demo
 
