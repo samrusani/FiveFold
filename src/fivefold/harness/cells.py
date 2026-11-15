@@ -16,6 +16,9 @@ The variants of a cell:
   `early_price_up`, `late_price_up`, `early_harmless` or `late_harmless`.
 - F12 names the hop it drops the order on: `gw_sim` or `agent_gw` in G modes, `agent_sim`
   in B0, its B0 equivalent (0006).
+- F1 is `a` or `b`: in G modes the gateway crashes after the order's dispatch check (`a`)
+  or after its attempt is recorded (`b`); in B0, both kill the agent just before it sends
+  the order, F1's B0 equivalent. The crashed component restarts 1,000 ms later.
 - F9 is `same_args` or `different_args`: a second worker starts at the first worker's
   first step (0006).
 """
@@ -50,6 +53,9 @@ TIMINGS: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
 
 F7_CHANGES = ("price_up", "harmless")
 """F7's changes: the price up within the intent's maximum, or the lead time only."""
+
+F1_POINTS: dict[str, str] = {"a": "gw.dispatch.after_check", "b": "gw.dispatch.after_record"}
+"""Where F1 crashes the gateway, by variant (0006, catalog)."""
 
 F12_HOPS: dict[str, frozenset[str]] = {
     "G2": frozenset({"gw_sim", "agent_gw"}),
@@ -151,6 +157,20 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                     "match": {"api": ORDER},
                     "occurrence": 1,
                 },
+            }
+        ]
+    if cell.fault == "F1":
+        if cell.variant not in F1_POINTS:
+            raise ValueError(f"F1 has no variant {cell.variant!r}")
+        if cell.config == "B0":
+            point, match = "agent.before_tool_call", {"tool": ORDER}
+        else:
+            point, match = F1_POINTS[cell.variant], {"api": ORDER}
+        return [
+            {
+                "fault": "F1",
+                "variant": cell.variant,
+                "at": {"point": point, "match": match, "occurrence": 1},
             }
         ]
     if cell.fault == "F9":
