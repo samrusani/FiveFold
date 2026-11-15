@@ -34,7 +34,8 @@ The variants of a cell:
   probe, so its cells pair it with F2 on the order's committed answer (0006, notes), and
   it fires at the first status answer. The `stale_within_lag` cells set `status_lag_ms` to
   3,000 (`cell_scenario`). B0 has no F10 cells: its scripted agent never calls the status
-  tool (0008), so F10's B0 equivalent never fires.
+  tool (0008), so F10's B0 equivalent never fires. G1 has none either: its gateway never
+  probes, and its agent has no status tool (0008), so nothing asks for a status answer.
 """
 
 from __future__ import annotations
@@ -248,6 +249,10 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             raise ValueError(f"F10 has no variant {cell.variant!r}")
         if cell.config == "B0":
             raise ValueError("B0's scripted agent never calls the status tool, so F10 never fires")
+        if cell.config == "G1":
+            raise ValueError(
+                "G1 never asks for the destination's status (0008), so F10 never fires"
+            )
         lost_reply = cell_plan(cell.model_copy(update={"fault": "F2", "variant": None}))
         return [
             *lost_reply,

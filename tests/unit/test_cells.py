@@ -167,7 +167,11 @@ def test_f10_cells_pair_it_with_f2_so_g2_probes(variant: str) -> None:
 
 @pytest.mark.parametrize(
     ("variant", "config", "message"),
-    [("stale", "G2", "no variant"), ("delayed", "B0", "never calls the status tool")],
+    [
+        ("stale", "G2", "no variant"),
+        ("delayed", "B0", "never calls the status tool"),
+        ("stale_within_lag", "G1", "never asks for the destination's status"),
+    ],
 )
 def test_an_f10_cell_needs_a_variant_and_a_status_probe(
     variant: str, config: str, message: str
