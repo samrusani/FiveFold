@@ -17,7 +17,10 @@ token metrics from them, and its report prices those tokens.
 
 `MemoryHarnessLog` keeps the records in memory, for unit tests. `PgHarnessLog` writes them
 to the `harness` schema of the run's database (`db/migrations/0004_harness.sql`) as role
-`ff_harness`. Both number events the same way.
+`ff_harness`. Both number events the same way. `SharedPgHarnessLog` is the split
+topology's: the simulator's and the gateway's services each write the records of the
+traffic they see, and draw event numbers from one database sequence (0009,
+`db/migrations/0013_split_topology.sql`).
 """
 
 from __future__ import annotations
@@ -105,7 +108,9 @@ class RunRecord:
     config: Literal["B0", "G1", "G2"]
     contract: Literal["C0", "C1", "C2", "C3"]
     seed: int
-    model_adapter: Literal["scripted", "live", "replay"]
+    model_adapter: Literal["scripted", "live", "replay", "external"]
+    """`external` for a split run, whose agent is the user's own: the harness runs no model
+    for it, and `model` is the name the user gave."""
     model: str
     params: Mapping[str, object]
     topology: Literal["inproc", "split"] = "inproc"
@@ -490,3 +495,19 @@ class PgHarnessLog(HarnessLog):
                 record.wall_ms,
             ),
         )
+
+
+class SharedPgHarnessLog(PgHarnessLog):
+    """Harness records that several processes of one run write: the split topology's.
+
+    Event numbers come from the sequence `harness.event_seq`, so the simulator's and the
+    gateway's services number one series of events between them, in the order they reach
+    it. A sequence never hands out a number twice. A number that a process took and never
+    used leaves a gap, which no reader relies on.
+    """
+
+    def next_seq(self) -> int:
+        row = self._conn.execute("SELECT nextval('harness.event_seq')").fetchone()
+        if row is None:
+            raise RuntimeError("harness.event_seq gave no number")
+        return int(row[0])
