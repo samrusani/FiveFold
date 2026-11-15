@@ -26,6 +26,10 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
 7. runs the evaluator, which scores the run from the simulator's and the harness's
    records and writes its result to the `eval` schema (0004, 0009).
 
+In G modes, when the scenario has a scripted resolver (0009), the gateway's dispatcher
+tells it when an action is left to a human, and it attests what the simulator's ledger
+shows through the gateway's admin path (`fivefold.harness.actors`, 0003).
+
 Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 `ff_harness`, `ff_agent` and `ff_eval` (0008).
 """
@@ -59,6 +63,7 @@ from fivefold.faults.plan import (
     parse_plan,
     seed_parameters,
 )
+from fivefold.gateway.admin import GatewayAdmin
 from fivefold.gateway.dispatcher import Dispatcher, Timing
 from fivefold.gateway.freshness import RuleFreshness
 from fivefold.gateway.pg_store import PgStore
@@ -66,7 +71,7 @@ from fivefold.gateway.server import serve
 from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.tools import GatewayTools, ToolTiming
-from fivefold.harness.actors import ScriptedApprover
+from fivefold.harness.actors import PgEffectsLedger, ScriptedApprover, ScriptedResolver
 from fivefold.harness.clock import settle
 from fivefold.harness.fault_effects import SimulatorFaults, message_context
 from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
@@ -228,6 +233,7 @@ class InprocRun:
         self.approver = ScriptedApprover(
             self.scheduler, self.simulator.control, self.log, scenario.authority
         )
+        self.resolver = self._resolver(PgEffectsLedger(harness_conn))
         self.effects = SimulatorFaults(self.scheduler, self.simulator.control, self.log, scenario)
         self.transport.apply_faults_with(
             lambda fired, envelope: self.effects.apply(fired, message_context(envelope.body))
@@ -317,6 +323,7 @@ class InprocRun:
             ),
             faults=self.faults,
             on_fault=self._gateway_fault,
+            on_escalated=self._escalated,
         )
         self.tools = GatewayTools(
             self.scheduler,
@@ -409,6 +416,33 @@ class InprocRun:
         if self.scheduler.is_up(GATEWAY):
             self.scheduler.spawn(GATEWAY, serve(self.tools, link), name=f"mcp server for {worker}")
         return link
+
+    # The scripted resolver (0003, 0009) -----------------------------------------------------
+
+    def _resolver(self, ledger: PgEffectsLedger) -> ScriptedResolver | None:
+        """The scripted resolver, in G modes when the scenario has one (0009).
+
+        It reads the simulator's ledger out of band through `ledger`, as `ff_harness`
+        (0008). B0 has no gateway, so nothing there escalates.
+        """
+        rule = self.spec.scenario.authority.resolver
+        if self.spec.config == "B0" or rule == "none":
+            return None
+        settle_ms = self.spec.scenario.params.contract_params().settle_ms
+        return ScriptedResolver(
+            self.scheduler, self._admin, ledger, self.log, rule, settle_ms=settle_ms
+        )
+
+    def _admin(self) -> GatewayAdmin | None:
+        """The admin path of the gateway's current incarnation, or None while it is down."""
+        if not self.scheduler.is_up(GATEWAY):
+            return None
+        return GatewayAdmin(self.scheduler, self.store, self.dispatcher)
+
+    def _escalated(self, action_id: str) -> None:
+        """The gateway left an escalated action to a human: tell the resolver, if any."""
+        if self.resolver is not None:
+            self.resolver.escalated(action_id)
 
     # Agent workers ------------------------------------------------------------------------
 
