@@ -8,8 +8,14 @@ these readings of when a message is sent and delivered:
 
 - A message from the user's agent, which the harness cannot watch, is logged when it
   arrives: sent and delivered at once, at the same virtual time.
-- An answer a service sends to the agent is logged as sent, then as delivered once the
-  service has written it to the connection, or as dropped if the caller has gone.
+- An answer a service sends to the agent is logged as sent, then as delivered when the
+  service hands it to its HTTP server, before the server writes it: the harness cannot
+  see whether the agent read it. The simulator first asks whether the agent's connection
+  is still open, and logs the answer as dropped (`caller_timed_out`) if it is not. The
+  gateway's answers go through the MCP SDK, which writes them itself, so the gateway logs
+  each one as delivered when its handler returns, even if the agent has gone. In G1 and
+  G2 the evaluator reads no answer on the agent's hop as evidence (0004), so this changes
+  no verdict there.
 - On the `gw_sim` hop the gateway logs each request as it sends it, and each answer as it
   arrives; the simulator logs each request as it arrives, and each answer as it sends it.
   A request carries the seq the gateway logged it under, and an answer the seq the

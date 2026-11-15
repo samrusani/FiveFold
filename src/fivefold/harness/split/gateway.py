@@ -17,6 +17,9 @@ that gets no answer within its timeout, or fails on its connection, raises
 
 `AgentHop`, a context-tier MCP middleware, logs every MCP message the agent sends, and the
 gateway's answers, on the `agent_gw` hop, and fires F4 and F12 at `net.agent_gw.request`.
+It logs an answer as delivered when the gateway's handler returns it, before the SDK
+writes it to the agent's connection, and it cannot see whether the agent is still there
+to read it (`fivefold.harness.split.hops`).
 It sees every request and notification in both of the SDK's protocol eras, the
 `initialize` handshake and the 2026-07-28 per-request envelope. It gives the gateway's
 handler the message's seq, as the inproc link does, so the report sink records which
