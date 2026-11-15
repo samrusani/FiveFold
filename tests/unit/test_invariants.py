@@ -285,7 +285,10 @@ def test_i5_an_accepted_report_that_contradicts_the_records(snapshot: Snapshot) 
 
 def test_i5_a_response_from_before_the_action_existed(snapshot: Snapshot) -> None:
     result = ActionResult("A-0003", "REQ-3", S.PROPOSED, None, Reason.ADMITTED, (), None)
-    early = ToolCall(len(snapshot.tool_calls) + 1, "get_action_status", "A-0003", result, 1, 0)
+    args = {"action_id": "A-0003"}
+    early = ToolCall(
+        len(snapshot.tool_calls) + 1, "get_action_status", args, "A-0003", result, 1, 0
+    )
     assert labels(replace(snapshot, tool_calls=(*snapshot.tool_calls, early))) == {"I5"}
 
 
@@ -357,7 +360,7 @@ def with_attempt(snapshot: Snapshot, action_id: str, index: int, **changes: obje
 
 
 def with_call(snapshot: Snapshot, result: ActionResult | Refusal, as_of_seq: int) -> Snapshot:
-    call = ToolCall(len(snapshot.tool_calls) + 1, "t", None, result, as_of_seq, 10**6)
+    call = ToolCall(len(snapshot.tool_calls) + 1, "t", {}, None, result, as_of_seq, 10**6)
     return replace(snapshot, tool_calls=(*snapshot.tool_calls, call))
 
 

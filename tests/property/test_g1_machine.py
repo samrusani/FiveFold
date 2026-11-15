@@ -322,8 +322,11 @@ class G1Machine(RuleBasedStateMachine):
     @rule(data=st.data())
     def status(self, data: st.DataObject) -> None:
         action_id = data.draw(st.sampled_from(sorted(self.store.snapshot().actions)))
-        result = self.store.status(action_id, self.tick(0))
+        sent = {"action_id": action_id, "wait_ms": data.draw(st.integers(0, 60_000))}
+        result = self.store.status(action_id, self.tick(0), args=sent)
         assert result.state is self.state(action_id) and result.reconcile is None
+        logged = self.store.snapshot().tool_calls[-1]
+        assert (logged.tool, logged.args) == ("get_action_status", sent), "logged as sent"
 
     @precondition(lambda self: self.ids(S.OUTCOME_UNKNOWN))
     @rule(data=st.data())

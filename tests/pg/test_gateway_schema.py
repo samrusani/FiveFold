@@ -313,8 +313,8 @@ def test_a_report_names_the_response_that_accepted_it(migrated_database: str) ->
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
         conn.execute(
-            "INSERT INTO gw.tool_call (call_no, tool, result, as_of_seq, vt)"
-            " VALUES (1, 'submit_final_report', '{}', 0, 0)"
+            "INSERT INTO gw.tool_call (call_no, tool, args, result, as_of_seq, vt)"
+            " VALUES (1, 'submit_final_report', '{}', '{}', 0, 0)"
         )
         conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
         with pytest.raises(psycopg.errors.UniqueViolation):
@@ -350,8 +350,8 @@ def test_a_closed_run_stays_closed_and_its_counters_move_forward(migrated_databa
 def test_reports_are_history_for_every_role(migrated_database: str) -> None:
     with psycopg.connect(migrated_database, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO gw.tool_call (call_no, tool, result, as_of_seq, vt)"
-            " VALUES (1, 'submit_final_report', '{}', 0, 0)"
+            "INSERT INTO gw.tool_call (call_no, tool, args, result, as_of_seq, vt)"
+            " VALUES (1, 'submit_final_report', '{}', '{}', 0, 0)"
         )
         conn.execute("INSERT INTO gw.report (worker, call_no) VALUES ('W1', 1)")
         _refused(conn, psycopg.errors.RaiseException, "UPDATE gw.report SET worker = 'W2'")

@@ -17,6 +17,7 @@ from mcp.client.session import ClientSession
 from fivefold.domain.api import FactRead, GetBudget, GetInventory, GetQuote, ListSuppliers
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.faults.plan import FaultInjector, parse_plan
+from fivefold.gateway.codec import plain_from_json
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
 from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.freshness import RuleFreshness
@@ -288,6 +289,48 @@ def test_each_report_names_the_delivery_that_carried_it_a_copy_included() -> Non
     )
     assert copy.copy_of == request.seq
     assert [report.message_seq for report in run.log.reports] == [request.seq, copy.seq]
+
+
+def test_each_logged_response_holds_the_arguments_its_call_arrived_with() -> None:
+    """0003's data model: `tool_call` holds each call's arguments. Writes that are
+    admitted, attach, are refused or break the schema, a status call, and reports refused
+    and accepted each log the arguments as the agent sent them: a field outside the
+    schema, the currency before it is uppercased, a float. Reads and tool errors are not
+    logged."""
+    run = Run()
+    sent: list[tuple[str, dict[str, object]]] = []
+
+    async def agent(client: Client) -> None:
+        async def call(name: str, **arguments: object) -> None:
+            sent.append((name, arguments))
+            await client.call(name, **arguments)
+
+        based_on = await read_both(client)
+        extra = {"why": ["cheapest", 1]}
+        await call("submit_purchase_order", **ORDER, based_on=based_on, note="n", extra=extra)
+        await call("submit_purchase_order", **ORDER, based_on=based_on[::-1])
+        await call("submit_purchase_order", **{**ORDER, "intent_id": "REQ-9"}, based_on=based_on)
+        await call("submit_purchase_order", **{**ORDER, "quantity": 1.5})
+        await call("get_action_status", action_id="A-0001", wait_ms=0)
+        not_done = {"intent_id": "REQ-1", "status": "not_done", "effect_ids": []}
+        await call("submit_final_report", claims=[not_done])
+        done = {"intent_id": "REQ-1", "status": "done", "effect_ids": ["PO-0001"]}
+        await call("submit_final_report", claims=[done])
+        await client.call("get_action_status", action_id="A-0042")
+
+    run.go(agent)
+    logged = run.store.snapshot().tool_calls
+    assert [(c.tool, c.args) for c in logged] == [(n, plain_from_json(a)) for n, a in sent]
+    assert [type(c.result).__name__ for c in logged] == [
+        "ActionResult",
+        "ActionResult",
+        "Refusal",
+        "Refusal",
+        "ActionResult",
+        "Refusal",
+        "ReportAccepted",
+    ]
+    assert logged[0].args["currency"] == "usd", "as sent, before the gateway uppercased it"
 
 
 def test_a_write_that_breaks_the_schema_is_refused_and_recorded() -> None:

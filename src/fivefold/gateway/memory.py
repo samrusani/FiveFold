@@ -228,13 +228,15 @@ class _MemoryTransaction(Transaction):
     def log(
         self,
         tool: str,
+        args: Mapping[str, object],
         action_id: str | None,
         result: ActionResult | Refusal | ReportAccepted,
         vt: int,
     ) -> int:
         snapshot = self._working
         call_no = len(snapshot.tool_calls) + 1
-        call = ToolCall(call_no, tool, action_id, result, _last_seq(snapshot), vt)
+        kept = _object(plain_from_json(args))
+        call = ToolCall(call_no, tool, kept, action_id, result, _last_seq(snapshot), vt)
         self._working = replace(snapshot, tool_calls=(*snapshot.tool_calls, call))
         return call_no
 
@@ -251,5 +253,5 @@ def _last_seq(snapshot: Snapshot) -> int:
 
 def _object(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise ValueError("a write call's arguments are a JSON object")
+        raise ValueError("a call's arguments are a JSON object")
     return value
