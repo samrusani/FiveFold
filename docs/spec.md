@@ -97,7 +97,7 @@ Detail: 0007.
 | Database access | psycopg 3 with hand-written SQL; plain SQL migrations, forward only |
 | Gateway interfaces | An MCP server built with the official MCP Python SDK: in-process in tests and demos, streamable HTTP in the split topology. An admin API built with FastAPI |
 | Agent | LangGraph with its Postgres checkpointer |
-| Models | Adapters: scripted (no network), live (Ollama through `langchain-ollama` now; one API provider to come, as one more entry in the live adapter's provider table), replay (cassettes). A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file, and always records a cassette |
+| Models | Adapters: scripted (no network), live (Ollama through `langchain-ollama`, Anthropic through `langchain-anthropic` and OpenAI through `langchain-openai`, each one entry in the live adapter's provider table; Google's Gemini through `langchain-google-genai` to come), replay (cassettes). A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD, a price file and, for an API provider, its key in the provider's own environment variable, and always records a cassette |
 | Tests | pytest; Hypothesis rule-based state machines |
 | Packaging | Docker Compose; `make demo` runs the four demos of record 0006 (1, 2a, 2b and 3) for B0 and G2 with the scripted model, and needs no API key |
 | Viewer | React and TypeScript (Vite, Vitest, ESLint, npm) over a read-only Starlette API; see 0012 |
@@ -353,7 +353,7 @@ Detail: 0009.
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.
 - **CI:** deterministic suites and the determinism check on every pull request. Live runs are manual and capped by budget.
-- **Live runs:** `python -m fivefold.recorder record --live ollama:MODEL --spend-cap-usd X --prices PATH` runs one, and refuses unless the environment sets `FIVEFOLD_LIVE=1` and the price file, which records its price date, prices the model. One spend cap holds across a command's runs, and the spend can pass it by at most the cost of the one call in flight. `prices/example.yaml` shows the format with Ollama models at 0 USD, since they run locally, and lists no API provider. Tests use fake chat models and never reach a provider.
+- **Live runs:** `python -m fivefold.recorder record --live PROVIDER:MODEL --spend-cap-usd X --prices PATH` runs one, where `PROVIDER` is `ollama`, `anthropic` or `openai`. It refuses unless the environment sets `FIVEFOLD_LIVE=1` and, for an API provider, the provider's key. It also refuses unless the price file, which records its price date, prices the model. A run's parameters are generation parameters only, so no key, base URL or header can reach a cassette. One spend cap holds across a command's runs, and the spend can pass it by at most the cost of the one call in flight. `prices/example.yaml` shows the format with Ollama models at 0 USD, since they run locally, and lists no API provider. Tests use fake chat models and never reach a provider; they build each API provider's model with a dummy key and never invoke it.
 
 ## Later releases
 
