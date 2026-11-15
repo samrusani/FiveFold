@@ -17,7 +17,7 @@ from fivefold.harness.scheduler import Scheduler
 pytestmark = pytest.mark.pg
 
 Connection = psycopg.Connection[TupleRow]
-TABLES = ["run", "message_log", "fault_log", "actor_log", "final_report"]
+TABLES = ["run", "run_stop", "message_log", "fault_log", "actor_log", "final_report"]
 
 
 def _message(seq: int, *, kind: str = "request", correlation: int | None = None) -> MessageRecord:
@@ -184,6 +184,25 @@ def test_faults_actor_actions_and_reports_are_append_only(migrated_database: str
                 "INSERT INTO harness.fault_log (seq, fault, point, occurrence, action, params, vt)"
                 " VALUES (4, 'F13', 'agent.step', 1, 'kill', '{}', 0)"
             )
+
+
+def test_a_run_stops_once_and_its_stop_never_changes(migrated_database: str) -> None:
+    with _harness(migrated_database) as conn:
+        conn.execute(
+            "INSERT INTO harness.run (run_id, scenario_id, scenario_digest, config, contract,"
+            " seed, topology, model_adapter, model, params) VALUES ('RUN-1', 'dev-001', 'abc',"
+            " 'G2', 'C2', 7, 'inproc', 'scripted', 'scripted-policy', '{}')"
+        )
+        log = PgHarnessLog(conn)
+        log.run_stopped(40_000)
+        assert conn.execute("SELECT run_id, stopped_vt FROM harness.run_stop").fetchall() == [
+            ("RUN-1", 40_000)
+        ]
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            log.run_stopped(50_000)
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _refused(conn, psycopg.errors.RaiseException, "UPDATE harness.run_stop SET stopped_vt = 1")
+        _refused(conn, psycopg.errors.RaiseException, "DELETE FROM harness.run_stop")
 
 
 def test_a_run_database_describes_one_run(migrated_database: str) -> None:

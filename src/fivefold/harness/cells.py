@@ -3,8 +3,21 @@
 `faults/expected.yaml` lists every cell built so far: a fault variant, a contract level and
 a configuration, with the verdict the run must get. `cell_plan` turns a cell into the plan
 the run uses. A fault that acts on a message targets the purchase order's call, on the hop
-the configuration uses: `gw_sim` in G modes, `agent_sim` in B0. F9's variant is
-`same_args` or `different_args`; its second worker starts at the first worker's first step.
+the configuration uses: `gw_sim` in G modes, `agent_sim` in B0.
+
+The variants of a cell:
+
+- F2 has none.
+- F11 names the agent's point: `after_tool_call` or `after_tool_result`.
+- F6 is `early` or `late`. Early fires at the gateway's dispatch check in G modes, and in
+  B0 as the approval answer reaches the agent; late fires as the order leaves for the
+  simulator (0006).
+- F7 names its timing and its change, as F6's timing then `price_up` or `harmless`:
+  `early_price_up`, `late_price_up`, `early_harmless` or `late_harmless`.
+- F12 names the hop it drops the order on: `gw_sim` or `agent_gw` in G modes, `agent_sim`
+  in B0, its B0 equivalent (0006).
+- F9 is `same_args` or `different_args`: a second worker starts at the first worker's
+  first step (0006).
 """
 
 from __future__ import annotations
@@ -21,6 +34,28 @@ ROOT = Path(__file__).resolve().parents[3]
 EXPECTED = ROOT / "faults" / "expected.yaml"
 
 ORDER = "submit_purchase_order"
+APPROVAL = "request_approval"
+
+TIMINGS: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
+    "early": {
+        "G2": ("gw.dispatch.before_check", {}),
+        "B0": ("net.agent_sim.answer", {"api": APPROVAL}),
+    },
+    "late": {
+        "G2": ("net.gw_sim.request", {"api": ORDER}),
+        "B0": ("net.agent_sim.request", {"api": ORDER}),
+    },
+}
+"""Where F6 and F7 fire, early and late, by configuration (0006, catalog)."""
+
+F7_CHANGES = ("price_up", "harmless")
+"""F7's changes: the price up within the intent's maximum, or the lead time only."""
+
+F12_HOPS: dict[str, frozenset[str]] = {
+    "G2": frozenset({"gw_sim", "agent_gw"}),
+    "B0": frozenset({"agent_sim"}),
+}
+"""The hops F12 can drop the order on, by configuration."""
 
 
 class Cell(BaseModel):
@@ -84,6 +119,40 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                 },
             }
         ]
+    if cell.fault == "F6":
+        point, match = _timing(cell, str(cell.variant))
+        return [
+            {
+                "fault": "F6",
+                "variant": cell.variant,
+                "at": {"point": point, "match": match, "occurrence": 1},
+            }
+        ]
+    if cell.fault == "F7":
+        timing, _, change = str(cell.variant).partition("_")
+        if change not in F7_CHANGES:
+            raise ValueError(f"F7 has no variant {cell.variant!r}")
+        point, match = _timing(cell, timing)
+        return [
+            {
+                "fault": "F7",
+                "variant": change,
+                "at": {"point": point, "match": match, "occurrence": 1},
+            }
+        ]
+    if cell.fault == "F12":
+        if cell.variant not in F12_HOPS.get(cell.config, frozenset()):
+            raise ValueError(f"F12 cannot drop the order on {cell.variant!r} in {cell.config}")
+        return [
+            {
+                "fault": "F12",
+                "at": {
+                    "point": f"net.{cell.variant}.request",
+                    "match": {"api": ORDER},
+                    "occurrence": 1,
+                },
+            }
+        ]
     if cell.fault == "F9":
         if cell.variant not in ("same_args", "different_args"):
             raise ValueError(f"F9 has no variant {cell.variant!r}")
@@ -95,3 +164,12 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             }
         ]
     raise ValueError(f"no plan for {cell.fault} yet")
+
+
+def _timing(cell: Cell, timing: str) -> tuple[str, dict[str, str]]:
+    """Where an F6 or F7 cell fires: its point and match."""
+    points = TIMINGS.get(timing)
+    if points is None or cell.config not in points:
+        raise ValueError(f"{cell.fault} cannot fire {timing!r} in {cell.config}")
+    point, match = points[cell.config]
+    return point, dict(match)

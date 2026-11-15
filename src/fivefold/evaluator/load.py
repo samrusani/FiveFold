@@ -23,11 +23,14 @@ from fivefold.domain.rules import Operation
 from fivefold.domain.scenario import Scenario
 from fivefold.evaluator.records import (
     ActorAction,
+    Approval,
     Config,
     Destination,
     Effect,
+    FactVersion,
     Fault,
     Message,
+    Read,
     RecordsError,
     RunInfo,
     RunRecords,
@@ -56,6 +59,9 @@ def load_run(conn: Connection, scenario: Scenario) -> RunRecords:
             faults=_faults(conn),
             actor_actions=_actor_actions(conn),
             reports=_reports(conn),
+            approvals=_approvals(conn),
+            fact_versions=_fact_versions(conn),
+            reads=_reads(conn),
         )
     records.check_scenario()
     return records
@@ -90,6 +96,9 @@ def _run(conn: Connection) -> RunInfo:
     if len(rows) != 1:
         raise RecordsError(f"harness.run holds {len(rows)} rows; a run database holds one")
     row = rows[0]
+    stops = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchall()
+    if len(stops) != 1:
+        raise RecordsError("harness.run_stop is empty: score a run only after the harness stops it")
     return RunInfo(
         run_id=str(row[0]),
         scenario_id=str(row[1]),
@@ -104,13 +113,14 @@ def _run(conn: Connection) -> RunInfo:
         parent_run_id=_text(row[10]),
         branch_point=_integer(row[11]),
         params=row[12],
+        stopped_vt=int(stops[0][0]),
     )
 
 
 def _destination(conn: Connection) -> Destination:
     row = conn.execute(
         "SELECT scenario_id, task_id, capabilities, max_hop_latency_ms, commit_deadline_ms,"
-        " status_lag_ms FROM sim.run"
+        " status_lag_ms, last_vt FROM sim.run"
     ).fetchone()
     if row is None:
         raise RecordsError("sim.run is empty: the simulator was never set up")
@@ -123,6 +133,7 @@ def _destination(conn: Connection) -> Destination:
             commit_deadline_ms=int(row[4]),
             status_lag_ms=int(row[5]),
         ),
+        last_vt=int(row[6]),
     )
 
 
@@ -222,6 +233,66 @@ def _actor_actions(conn: Connection) -> tuple[ActorAction, ...]:
             vt=int(row[5]),
         )
         for row in rows
+    )
+
+
+def _approvals(conn: Connection) -> tuple[Approval, ...]:
+    rows = conn.execute(
+        "SELECT approval_id, intent_id, operation, scope, requested_seq, requested_vt, status,"
+        " decided_seq, decided_vt, decided_by, expires_at, revoked_seq, revoked_vt, revoked_by"
+        " FROM sim.approval ORDER BY requested_seq"
+    ).fetchall()
+    return tuple(
+        Approval(
+            approval_id=str(row[0]),
+            intent_id=str(row[1]),
+            operation=Operation(row[2]),
+            scope=_object(row[3], f"the scope of {row[0]}"),
+            requested_seq=int(row[4]),
+            requested_vt=int(row[5]),
+            status=str(row[6]),
+            decided_seq=_integer(row[7]),
+            decided_vt=_integer(row[8]),
+            decided_by=_text(row[9]),
+            expires_at=_integer(row[10]),
+            revoked_seq=_integer(row[11]),
+            revoked_vt=_integer(row[12]),
+            revoked_by=_text(row[13]),
+        )
+        for row in rows
+    )
+
+
+def _fact_versions(conn: Connection) -> tuple[FactVersion, ...]:
+    rows = conn.execute(
+        "SELECT key, version, value, valid_from_seq, valid_from_vt, cause, cause_effect_id"
+        " FROM sim.fact_version ORDER BY key, version"
+    ).fetchall()
+    return tuple(
+        FactVersion(
+            key=str(row[0]),
+            version=int(row[1]),
+            value=_object(row[2], f"version {row[1]} of {row[0]}"),
+            valid_from_seq=int(row[3]),
+            valid_from_vt=int(row[4]),
+            cause=str(row[5]),
+            cause_effect_id=_text(row[6]),
+        )
+        for row in rows
+    )
+
+
+def _reads(conn: Connection) -> tuple[Read, ...]:
+    rows = conn.execute("SELECT seq, key, version, caller, vt FROM sim.read_log ORDER BY seq")
+    return tuple(
+        Read(
+            seq=int(row[0]),
+            key=str(row[1]),
+            version=int(row[2]),
+            caller=str(row[3]),
+            vt=int(row[4]),
+        )
+        for row in rows.fetchall()
     )
 
 

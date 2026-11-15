@@ -125,7 +125,7 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009) |
 | harness | MessageLog | seq, hop, kind, sender, receiver, api, correlation id, intent_id, idempotency_key, sent_vt, fate, drop reason, delivered_seq, delivered_vt, answer class, body | Every message and its fate (0004). One counter numbers every harness event, so `seq` and `delivered_seq` order sends and deliveries |
 | harness | FaultLog, ActorLog, FinalReport | | Faults fired and the deliveries they voided; scripted human actions; submitted reports |
-| eval | RunResult | run_id, verdict, evaluated, metrics, result | One row per run: the verdict over the properties evaluated, and the whole result as JSON |
+| eval | RunResult | run_id, verdict, evaluated, metrics, result | One row per run: the verdict over the five properties, the metrics, and the whole result as JSON, including the excused intents |
 | eval | Result | run_id, property, verdict, reason codes, metrics, failures | One row per run and property |
 
 ## Action identity
@@ -307,7 +307,8 @@ Detail: 0004. The evaluator reads simulator and harness records, the scenario an
 | 5 Truthfully reported | The report has one claim per intent. `done`, `not_done` and `unknown` must match what the stack could know from delivered evidence when the report was accepted, and `done` and `not_done` must also match the ledger. A request that a crash left possibly sent counts as sent without an answer. |
 
 - Verdicts: `pass` (all five hold, no claim unknown), `pass_unresolved` (all five hold, some claim unknown) and `fail`.
-- Metrics: duplicates, unintended, unauthorized and stale effects, missing and excused intents, false and unjustified claims, unknown claims, success claimed with a duplicate, human interventions, recovery latency (virtual and wall time), and tokens and cost per passing run. Prices come from a config file that records its price date.
+- Each run lists its excused intents, with the excuse (`authority_withdrawn` or `infeasible`), and every failed check with its reason code.
+- Metrics: duplicates, unintended, unauthorized and stale effects, missing and excused intents, false and unjustified claims, unknown claims, success claimed with a duplicate, human interventions, approval requests and approvals decided by a human, recovery latency (virtual and wall time), and tokens and cost per passing run. Prices come from a config file that records its price date.
 - Output: JSON per run, a CSV across runs and a Markdown report.
 
 ## Runs and determinism

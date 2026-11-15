@@ -145,3 +145,19 @@ def test_a_result_voided_by_a_crash_is_never_seen_and_the_call_is_repeated(
     assert voided == [first_answer[0]], "the fault voids the result just delivered"
     assert first_answer[12] == "delivered"
     assert len(effects(dsn)) == orders
+
+
+def test_the_run_records_when_it_stopped_and_the_evaluator_ends_it_there(
+    run_database: Callable[[str], str],
+) -> None:
+    """The stop comes after the drain window, past the last record (0009)."""
+    dsn = run_database("demo_1_stop")
+    inproc = run(dsn, "G2")
+    with psycopg.connect(dsn) as conn:
+        ((stopped_vt,),) = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchall()
+        ((last_vt,),) = conn.execute(
+            "SELECT max(greatest(sent_vt, coalesce(delivered_vt, 0))) FROM harness.message_log"
+        ).fetchall()
+    assert stopped_vt == inproc.result.stopped_vt > last_vt
+    assert inproc.result.evaluation is not None
+    assert inproc.result.evaluation.run.end_vt == stopped_vt

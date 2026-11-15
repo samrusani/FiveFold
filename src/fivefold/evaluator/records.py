@@ -14,6 +14,9 @@ The harness's conventions that the property checks rely on (0006, 0008):
   in G modes, `agent_sim` in baselines.
 - A message's body is the request or answer as sent. On `gw_sim` and `agent_sim` it is
   the simulator API's JSON (`fivefold.domain.api`).
+- The approvals service records a decision that policy makes on arrival with the actor
+  `policy` (`fivefold.domain.authority.POLICY_ACTOR`). Any other actor that decides is a
+  human: the scripted approver in deterministic runs (0002, rules 6 and 7).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from enum import StrEnum
 from pydantic import JsonValue
 
 from fivefold.domain.api import ApiName
+from fivefold.domain.authority import POLICY_ACTOR, Decision
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.rules import Operation
 from fivefold.domain.scenario import Scenario, scenario_digest
@@ -114,6 +118,9 @@ class RunInfo:
     branch_point: int | None = None
     params: JsonValue = None
     """The values the run used (0009), as the harness recorded them."""
+    stopped_vt: int | None = None
+    """When the harness stopped the run, at the end of the drain window (0009). A run read
+    from its database always has one; records built in memory may leave it out."""
 
 
 @dataclass(frozen=True)
@@ -124,6 +131,8 @@ class Destination:
     task_id: str
     capabilities: frozenset[str]
     params: ContractParams
+    last_vt: int = 0
+    """The virtual time of the simulator's last event."""
 
     @property
     def settle_ms(self) -> int:
@@ -146,6 +155,103 @@ class Effect:
     received_seq: int
     commit_seq: int
     committed_vt: int
+
+
+APPROVAL_STATUSES = frozenset({"pending", "approved", "denied", "revoked"})
+"""The statuses `sim.approval` stores. Expiry is never stored (0002, rule 8)."""
+
+
+@dataclass(frozen=True)
+class Approval:
+    """A row of `sim.approval`: one approval request and what became of it (0002).
+
+    `status` is as stored: pending, approved, denied or revoked. A revoked approval was
+    approved first. An approved approval expires at `expires_at`, which needs no change to
+    the row. `decided_by` is `policy` for a decision on arrival (rule 6), otherwise the
+    actor of the human approver who decided (rule 7). The seqs are simulator events.
+    """
+
+    approval_id: str
+    intent_id: str
+    operation: Operation
+    scope: Mapping[str, object]
+    requested_seq: int
+    requested_vt: int
+    status: str
+    decided_seq: int | None = None
+    decided_vt: int | None = None
+    decided_by: str | None = None
+    expires_at: int | None = None
+    revoked_seq: int | None = None
+    revoked_vt: int | None = None
+    revoked_by: str | None = None
+
+    @property
+    def decision(self) -> Decision | None:
+        """The decision on the request by the end of the run, or None while pending."""
+        if self.status not in APPROVAL_STATUSES:
+            raise RecordsError(f"approval {self.approval_id} has no known status: {self.status!r}")
+        if self.status == "pending":
+            return None
+        if self.decided_seq is None:
+            raise RecordsError(
+                f"approval {self.approval_id} is {self.status} but was never decided"
+            )
+        return Decision.DENY if self.status == "denied" else Decision.APPROVE
+
+    def decision_before(self, seq: int) -> Decision | None:
+        """The decision as it stood before simulator event `seq`: None if still pending."""
+        decision = self.decision
+        if decision is None or self.decided_seq is None or self.decided_seq >= seq:
+            return None
+        return decision
+
+    @property
+    def revoked(self) -> bool:
+        """Whether the approval was revoked by the end of the run."""
+        return self.status == "revoked"
+
+    def revoked_before(self, seq: int) -> bool:
+        """Whether the approval was revoked before simulator event `seq`."""
+        if self.revoked and self.revoked_seq is None:
+            raise RecordsError(f"approval {self.approval_id} is revoked but has no revocation")
+        return self.revoked_seq is not None and self.revoked_seq < seq
+
+    @property
+    def decided_by_policy(self) -> bool:
+        """Whether policy decided the request on arrival, not a human (0002, rule 6)."""
+        return self.decided_by == POLICY_ACTOR
+
+
+@dataclass(frozen=True)
+class FactVersion:
+    """A row of `sim.fact_version`: one version of a fact, valid from simulator event
+    `valid_from_seq` (0004).
+
+    `cause` is `initial` (version 1, from the scenario), `effect` (the consequence of the
+    effect `cause_effect_id`) or `control` (a change through the simulator's control
+    interface, such as fault F7's).
+    """
+
+    key: str
+    version: int
+    value: Mapping[str, object]
+    valid_from_seq: int
+    valid_from_vt: int
+    cause: str
+    cause_effect_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Read:
+    """A row of `sim.read_log`: version `version` of fact `key`, served to `caller` at
+    simulator event `seq` (0004)."""
+
+    seq: int
+    key: str
+    version: int
+    caller: str
+    vt: int
 
 
 @dataclass(frozen=True)
@@ -244,6 +350,38 @@ class RunRecords:
     faults: tuple[Fault, ...] = ()
     actor_actions: tuple[ActorAction, ...] = ()
     reports: tuple[SubmittedReport, ...] = ()
+    approvals: tuple[Approval, ...] = ()
+    fact_versions: tuple[FactVersion, ...] = ()
+    reads: tuple[Read, ...] = ()
+
+    def end_vt(self) -> int:
+        """The virtual time of the run's end: when the harness stopped it (0009).
+
+        Time passes in a quiet drain window without any record, so the latest record can
+        come well before the end; an approval can expire in between. Records built in
+        memory without a stop time end at the latest virtual time on record: the
+        simulator's last event, and every message, fault, actor action, report and
+        effect. A stop before any of those is refused.
+        """
+        latest = self._latest_vt()
+        stopped = self.run.stopped_vt
+        if stopped is None:
+            return latest
+        if stopped < latest:
+            raise RecordsError(f"the run stopped at vt {stopped}, before its record at vt {latest}")
+        return stopped
+
+    def _latest_vt(self) -> int:
+        times = [self.destination.last_vt]
+        for message in self.messages:
+            times.append(message.sent_vt)
+            if message.delivered_vt is not None:
+                times.append(message.delivered_vt)
+        times.extend(fault.vt for fault in self.faults)
+        times.extend(action.vt for action in self.actor_actions)
+        times.extend(report.vt for report in self.reports)
+        times.extend(effect.committed_vt for effect in self.effects)
+        return max(times)
 
     def check_scenario(self) -> None:
         """Refuse records that belong to another scenario than the one given, or to a

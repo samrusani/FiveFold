@@ -1,15 +1,14 @@
 """Score one run from its records (0004).
 
 `evaluate` is pure: records in, result out, with no I/O, clock or randomness, so the same
-records always give the same result (0009). This evaluator checks properties 1 and 5
-(milestone M1). Properties 2 to 4 are marked `not_evaluated`, and the run verdict covers
-only the properties evaluated:
+records always give the same result (0009). It checks all five properties, lists the
+intents property 4 excuses, and gives the run verdict:
 
 | Verdict | When |
 | --- | --- |
-| pass | Every property evaluated passes, and no claim is `unknown` |
-| pass_unresolved | Every property evaluated passes, and at least one claim is `unknown` |
-| fail | A property evaluated fails |
+| pass | All five properties pass, and no claim is `unknown` |
+| pass_unresolved | All five properties pass, and at least one claim is `unknown` |
+| fail | Any property fails |
 """
 
 from __future__ import annotations
@@ -17,7 +16,11 @@ from __future__ import annotations
 from importlib import metadata
 
 from fivefold.domain.report import ClaimStatus
-from fivefold.evaluator.checks import check_exactly_once, check_truthfully_reported, not_evaluated
+from fivefold.evaluator.authorization import check_authorized_at_commit
+from fivefold.evaluator.checks import check_exactly_once, check_truthfully_reported
+from fivefold.evaluator.freshness import check_inputs_still_fresh
+from fivefold.evaluator.liveness import check_actually_committed
+from fivefold.evaluator.metrics import run_metrics
 from fivefold.evaluator.records import RunRecords
 from fivefold.evaluator.result import (
     CountedReport,
@@ -40,7 +43,7 @@ def code_version() -> str:
 
 
 def run_verdict(properties: tuple[PropertyResult, ...], report: CountedReport | None) -> Verdict:
-    """The run's verdict over the properties evaluated (0004, Verdict)."""
+    """The run's verdict over the properties given (0004, Verdict)."""
     if any(result.verdict is PropertyVerdict.FAIL for result in properties):
         return Verdict.FAIL
     unknown = report is not None and any(
@@ -50,28 +53,27 @@ def run_verdict(properties: tuple[PropertyResult, ...], report: CountedReport | 
 
 
 def evaluate(records: RunRecords) -> RunResult:
-    """Score a run: properties 1 and 5, the run verdict and the metrics.
+    """Score a run: the five properties, the excused intents, the verdict and the metrics.
 
     Raises `RecordsError` when the records break a rule the checks rely on.
     """
     records.check_scenario()
     exactly_once = check_exactly_once(records)
+    authorized_at_commit = check_authorized_at_commit(records)
+    inputs_still_fresh = check_inputs_still_fresh(records)
+    actually_committed, excused = check_actually_committed(records)
     truthfully_reported, report = check_truthfully_reported(records)
     properties = (
         exactly_once,
-        not_evaluated(2),
-        not_evaluated(3),
-        not_evaluated(4),
+        authorized_at_commit,
+        inputs_still_fresh,
+        actually_committed,
         truthfully_reported,
-    )
-    evaluated = tuple(
-        result.property
-        for result in properties
-        if result.verdict is not PropertyVerdict.NOT_EVALUATED
     )
     metrics: dict[str, int] = {}
     for result in properties:
         metrics.update(result.metrics)
+    metrics.update(run_metrics(records))
     run = records.run
     return RunResult(
         code_version=code_version(),
@@ -89,11 +91,12 @@ def evaluate(records: RunRecords) -> RunResult:
             parent_run_id=run.parent_run_id,
             branch_point=run.branch_point,
             params=run.params,
+            end_vt=records.end_vt(),
         ),
         verdict=run_verdict(properties, report),
-        evaluated=evaluated,
+        evaluated=tuple(result.property for result in properties),
         properties=properties,
         metrics=metrics,
-        excused_intents=None,
+        excused_intents=excused,
         report=report,
     )

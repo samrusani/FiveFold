@@ -4,14 +4,16 @@ Each golden run is written as the owning roles would write it: the simulator's g
 truth through the simulator itself, as ff_sim, and the harness's records by hand, as
 ff_harness, numbering every send, delivery, fault, actor action and report on one
 counter. The evaluator then reads the run as ff_eval. There is at least one golden run
-per reason code (0004, Checks), and one for each passing verdict.
+per reason code (0004, Checks), one for each passing verdict, and one for each excuse.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import psycopg
 import pytest
@@ -24,16 +26,20 @@ from fivefold.domain.api import (
     GetOrderStatus,
     GetQuote,
     PurchaseOrderScope,
+    Refusal,
     RequestApproval,
     SubmitPurchaseOrder,
     WriteCommitted,
     WriteReceived,
 )
+from fivefold.domain.authority import Decision
 from fivefold.domain.contracts import Contract
 from fivefold.domain.rules import Operation
 from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
 from fivefold.evaluator import (
+    RUN_METRICS,
     Config,
+    Excuse,
     Knowledge,
     PropertyVerdict,
     ReasonCode,
@@ -211,6 +217,38 @@ class Recorder:
         )
         return seq
 
+    def approver(self, action: str, approval_id: str, *, vt: int) -> None:
+        """The scripted approver decides or revokes an approval through the simulator's
+        control interface, as the harness does (0002, rules 7 and 8), and logs it."""
+        control = self.sim.control
+        if action == "revoke":
+            answer = control.revoke(approval_id, actor="approver", vt=vt)
+        else:
+            answer = control.decide(approval_id, Decision(action), actor="approver", vt=vt)
+        self.harness.execute(
+            "INSERT INTO harness.actor_log (seq, actor, action, subject, details, vt)"
+            " VALUES (%s, 'approver', %s, %s, %s, %s)",
+            (self.next(), action, approval_id, Jsonb({"status": str(answer.status)}), vt),
+        )
+
+    def approval(self, *, supplier_id: str, unit_price_minor: int, vt: int) -> str:
+        """Another approval request for REQ-1, for 100 W-100 from a supplier at a price.
+        Returns the approval's id."""
+        scope = PurchaseOrderScope(
+            supplier_id=supplier_id,
+            sku="W-100",
+            max_quantity=100,
+            max_amount_minor=100 * unit_price_minor,
+            currency="USD",
+            cost_center="CC-OPS",
+        )
+        request = RequestApproval(
+            intent_id="REQ-1", operation=Operation.SUBMIT_PURCHASE_ORDER, scope=scope
+        )
+        answer = self.sim.request_approval(request, caller=self.stack, vt=vt)
+        assert not isinstance(answer, Refusal)
+        return answer.approval_id
+
     # Calls -----------------------------------------------------------------------------------
 
     def order(
@@ -220,17 +258,24 @@ class Recorder:
         intent_id: str = "REQ-1",
         key: str | None = None,
         sender: str | None = None,
+        approval_id: str = "APR-0001",
+        basis: Mapping[str, int] | None = None,
+        supplier_id: str = "S-1",
+        unit_price_minor: int = 540,
     ) -> tuple[int, SubmitPurchaseOrder]:
-        """Send a purchase order for 100 W-100 from S-1 at 540: the request and its seq."""
+        """Send a purchase order for 100 W-100, by default from S-1 at 540 on APR-0001,
+        citing version 1 of its quote and of the budget: the request and its seq."""
+        if basis is None:
+            basis = {f"quote/{supplier_id}/W-100": 1, "budget/CC-OPS": 1}
         request = SubmitPurchaseOrder(
             intent_id=intent_id,
-            approval_id="APR-0001",
-            basis={"quote/S-1/W-100": 1, "budget/CC-OPS": 1},
+            approval_id=approval_id,
+            basis=dict(basis),
             idempotency_key=key,
-            supplier_id="S-1",
+            supplier_id=supplier_id,
             sku="W-100",
             quantity=100,
-            unit_price_minor=540,
+            unit_price_minor=unit_price_minor,
             currency="USD",
             cost_center="CC-OPS",
         )
@@ -279,10 +324,12 @@ class Recorder:
         key: str | None = None,
         fate: str = "delivered",
         sender: str | None = None,
+        **order: Any,
     ) -> tuple[int, int]:
         """A whole order: sent at `vt`, it reaches the simulator 20 ms later and commits
-        (or replays), and the answer goes back. Returns the request's and answer's seqs."""
-        seq, request = self.order(vt=vt, intent_id=intent_id, key=key, sender=sender)
+        (or replays), and the answer goes back. Returns the request's and answer's seqs.
+        `order` changes the order, as `order` takes it."""
+        seq, request = self.order(vt=vt, intent_id=intent_id, key=key, sender=sender, **order)
         self.deliver(seq, vt + 20)
         answer = self.sim.submit_purchase_order(request, caller=sender or self.stack, vt=vt + 20)
         body = answer.model_dump(mode="json")
@@ -351,7 +398,25 @@ class Recorder:
         )
         return seq
 
-    def evaluate(self) -> RunResult:
+    def evaluate(self, *, stopped_vt: int | None = None) -> RunResult:
+        """Stop the run, as the harness does, then score it.
+
+        The run stops at `stopped_vt`, or by default at its latest record. Stopping again
+        keeps the first stop time, so a run can be scored twice.
+        """
+        self.harness.execute(
+            "INSERT INTO harness.run_stop (run_id, stopped_vt)"
+            " SELECT run_id, coalesce(%s, greatest("
+            "   (SELECT last_vt FROM sim.run),"
+            "   (SELECT max(greatest(sent_vt, coalesce(delivered_vt, 0)))"
+            "    FROM harness.message_log),"
+            "   (SELECT max(vt) FROM harness.fault_log),"
+            "   (SELECT max(vt) FROM harness.actor_log),"
+            "   (SELECT max(vt) FROM harness.final_report),"
+            "   (SELECT max(committed_vt) FROM sim.effect)))"
+            " FROM harness.run ON CONFLICT DO NOTHING",
+            (stopped_vt,),
+        )
         return evaluate_run(make_conninfo(self.dsn, user="ff_eval"), self.scenario)
 
 
@@ -462,7 +527,8 @@ def g2_crash_voids_the_answer_at_c0(run: Recorder) -> None:
 
 def g2_possibly_sent_then_settled(run: Recorder) -> None:
     """F1b at C1: the gateway crashes after recording the attempt, before sending it. A
-    status answer after the settle time lists nothing, so not_done is proven."""
+    status answer after the settle time lists nothing, so not_done is proven. Nothing
+    ever committed and nothing excuses it, so property 4 fails."""
     run.fault(
         "F1",
         "gw.dispatch.after_record",
@@ -488,6 +554,129 @@ def g2_resolver_attests_the_order(run: Recorder) -> None:
     run.report({"REQ-1": ("done", ["PO-0001"])}, vt=32_000)
 
 
+# Property 2: one golden run per clause ------------------------------------------------------
+
+
+def b0_order_on_an_unknown_approval(run: Recorder) -> None:
+    """B0 cites an approval the approvals service never filed. Below C3 the destination
+    records the approval without checking it (0002, rule 11)."""
+    run.write(vt=1_000, approval_id="APR-0099")
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_order_while_the_approval_is_pending(run: Recorder) -> None:
+    """The order is above the auto-approval threshold, so its approval waits for the
+    approver. B0 orders first, and the approver approves after the commit."""
+    run.write(vt=1_000)
+    run.approver("approve", "APR-0001", vt=2_000)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_order_after_the_approver_denies(run: Recorder) -> None:
+    """The approver denies the order's approval, and B0 orders anyway."""
+    run.approver("deny", "APR-0001", vt=500)
+    run.write(vt=1_000)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_order_on_a_revoked_approval(run: Recorder) -> None:
+    """F6 early in B0: the approval is revoked as its answer reaches the agent, which
+    orders anyway."""
+    run.fault("F6", "net.agent_sim.answer", vt=0, action="revoke", variant="early")
+    run.approver("revoke", "APR-0001", vt=0)
+    run.write(vt=1_000)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_order_after_the_approval_expires(run: Recorder) -> None:
+    """The approval lives 1,000 ms from its decision at 0, and the order commits at
+    2,020."""
+    run.write(vt=2_000)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_order_outside_the_approvals_scope(run: Recorder) -> None:
+    """B0 reads S-2's quote and orders from S-2 at 575 on the approval it got for S-1 at
+    540: another supplier, and more than the approved amount."""
+    run.sim.get_quote(GetQuote(supplier_id="S-2", sku="W-100"), caller=run.stack, vt=500)
+    run.write(vt=1_000, supplier_id="S-2", unit_price_minor=575)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+# Property 3: one golden run per check ----------------------------------------------------
+
+
+def b0_order_without_the_budget_in_its_basis(run: Recorder) -> None:
+    """B0 cites only the quote: the budget the order depends on is undeclared."""
+    run.write(vt=1_000, basis={"quote/S-1/W-100": 1})
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_order_on_a_quote_it_never_read(run: Recorder) -> None:
+    """B0 gets an approval for S-2 at 575 and orders from S-2, citing version 1 of a
+    quote that was never served to it."""
+    approval = run.approval(supplier_id="S-2", unit_price_minor=575, vt=500)
+    run.write(vt=1_000, approval_id=approval, supplier_id="S-2", unit_price_minor=575)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+def b0_quote_changes_as_the_order_leaves(run: Recorder) -> None:
+    """F7 late, price_up, in B0: the quote goes up 5% as the order leaves for the
+    simulator, which commits it at the old price, since C2 checks nothing."""
+    seq, request = run.order(vt=1_000)
+    run.fault(
+        "F7",
+        "net.agent_sim.request",
+        vt=1_000,
+        action="change_quote",
+        variant="price_up",
+        target_seq=seq,
+    )
+    run.sim.control.change_fact(
+        "quote/S-1/W-100", {"unit_price_minor": 567}, actor="fault-plan", vt=1_000
+    )
+    run.deliver(seq, 1_020)
+    answer = run.sim.submit_purchase_order(request, caller="agent-1", vt=1_020)
+    run.reply(seq, answer.model_dump(mode="json"), vt=1_020)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
+# Property 4: the excuses -----------------------------------------------------------------
+
+
+def g2_approval_revoked_before_dispatch(run: Recorder) -> None:
+    """F6 early in G2: the approval is revoked at the gateway's dispatch check, so the
+    gateway never sends the order, and the report says not_done. Authority was
+    withdrawn, so property 4 excuses the missing order."""
+    run.fault(
+        "F6",
+        "gw.dispatch.before_check",
+        vt=1_000,
+        action="revoke",
+        variant="early",
+        component="gateway",
+    )
+    run.approver("revoke", "APR-0001", vt=1_000)
+    run.report({"REQ-1": ("not_done", ())}, vt=15_000)
+
+
+def g2_the_approver_denies(run: Recorder) -> None:
+    """The order needs the approver, who denies it, so the gateway sends nothing."""
+    run.approver("deny", "APR-0001", vt=2_000)
+    run.report({"REQ-1": ("not_done", ())}, vt=15_000)
+
+
+def g2_prices_rise_above_the_maximum(run: Recorder) -> None:
+    """After the stack read the quotes, both suppliers raise their prices above the
+    intent's maximum of 600. No allowed option is left, so property 4 excuses the
+    missing order."""
+    for supplier_id, price in (("S-1", 610), ("S-2", 620)):
+        run.sim.control.change_fact(
+            f"quote/{supplier_id}/W-100", {"unit_price_minor": price}, actor="supplier", vt=500
+        )
+    run.report({"REQ-1": ("not_done", ())}, vt=15_000)
+
+
 @dataclass(frozen=True)
 class Golden:
     """A golden run and what the evaluator must find."""
@@ -499,10 +688,34 @@ class Golden:
     knowledge: Knowledge | None
     """REQ-1's K at the report; None when there is no valid report."""
     exactly_once: tuple[ReasonCode, ...] = ()
+    authorized_at_commit: tuple[ReasonCode, ...] = ()
+    inputs_still_fresh: tuple[ReasonCode, ...] = ()
+    actually_committed: tuple[ReasonCode, ...] = ()
     truthfully_reported: tuple[ReasonCode, ...] = ()
+    excuse: Excuse | None = None
+    """REQ-1's excuse, when property 4 excuses it."""
     metrics: Mapping[str, int] = field(default_factory=dict)
-    """The metrics that are not zero."""
+    """The metrics that are not zero, besides `approval_requests`."""
+    approval_requests: int = 1
+    """Every golden run files one approval request first, as the policy does (0008)."""
+    authority: Mapping[str, object] = field(default_factory=dict)
+    """Changes to dev-001's authority section for this run."""
 
+    @property
+    def codes(self) -> dict[int, tuple[ReasonCode, ...]]:
+        """Each property's expected reason codes, by number."""
+        return {
+            1: self.exactly_once,
+            2: self.authorized_at_commit,
+            3: self.inputs_still_fresh,
+            4: self.actually_committed,
+            5: self.truthfully_reported,
+        }
+
+
+QUEUED = {"auto_approve_up_to_minor": 50_000}
+"""dev-001's authority with an order of 54,000 above the auto-approval threshold, so its
+approval waits for the approver."""
 
 GOLDEN: list[Golden] = [
     Golden(g2_demo_1, Config.G2, Contract.C2, Verdict.PASS, Knowledge.COMMITTED),
@@ -513,7 +726,14 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.COMMITTED,
         exactly_once=(ReasonCode.DUPLICATE_EFFECTS,),
-        metrics={"duplicates": 1, "success_claimed_with_duplicate": 1},
+        authorized_at_commit=(ReasonCode.APPROVAL_USED,),
+        inputs_still_fresh=(ReasonCode.STALE_INPUT,),
+        metrics={
+            "duplicates": 1,
+            "unauthorized_effects": 1,
+            "stale_effects": 1,
+            "success_claimed_with_duplicate": 1,
+        },
     ),
     Golden(
         b0_unintended,
@@ -522,7 +742,9 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.COMMITTED,
         exactly_once=(ReasonCode.UNINTENDED_EFFECT,),
-        metrics={"unintended_effects": 1},
+        authorized_at_commit=(ReasonCode.APPROVAL_OUT_OF_SCOPE, ReasonCode.APPROVAL_USED),
+        inputs_still_fresh=(ReasonCode.STALE_INPUT,),
+        metrics={"unintended_effects": 1, "unauthorized_effects": 2, "stale_effects": 1},
     ),
     Golden(
         b0_no_valid_report,
@@ -556,8 +778,9 @@ GOLDEN: list[Golden] = [
         Contract.C2,
         Verdict.FAIL,
         Knowledge.UNKNOWABLE,
+        actually_committed=(ReasonCode.MISSING_EFFECT,),
         truthfully_reported=(ReasonCode.NOT_DONE_UNSUPPORTED,),
-        metrics={"unjustified_claims": 1},
+        metrics={"missing_effects": 1, "unjustified_claims": 1},
     ),
     Golden(
         g2_late_commit_beyond_the_deadline,
@@ -589,8 +812,10 @@ GOLDEN: list[Golden] = [
         g2_possibly_sent_then_settled,
         Config.G2,
         Contract.C1,
-        Verdict.PASS,
+        Verdict.FAIL,
         Knowledge.NOT_COMMITTED,
+        actually_committed=(ReasonCode.MISSING_EFFECT,),
+        metrics={"missing_effects": 1},
     ),
     Golden(
         g2_resolver_attests_the_order,
@@ -598,17 +823,138 @@ GOLDEN: list[Golden] = [
         Contract.C0,
         Verdict.PASS,
         Knowledge.COMMITTED,
+        metrics={"human_interventions": 1},
+    ),
+    Golden(
+        b0_order_on_an_unknown_approval,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        authorized_at_commit=(ReasonCode.APPROVAL_UNKNOWN,),
+        metrics={"unauthorized_effects": 1},
+    ),
+    Golden(
+        b0_order_while_the_approval_is_pending,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        authorized_at_commit=(ReasonCode.APPROVAL_PENDING,),
+        metrics={"unauthorized_effects": 1, "approvals_decided_by_human": 1},
+        authority=QUEUED,
+    ),
+    Golden(
+        b0_order_after_the_approver_denies,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        authorized_at_commit=(ReasonCode.APPROVAL_DENIED,),
+        metrics={"unauthorized_effects": 1, "approvals_decided_by_human": 1},
+        authority=QUEUED,
+    ),
+    Golden(
+        b0_order_on_a_revoked_approval,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        authorized_at_commit=(ReasonCode.APPROVAL_REVOKED,),
+        metrics={"unauthorized_effects": 1},
+    ),
+    Golden(
+        b0_order_after_the_approval_expires,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        authorized_at_commit=(ReasonCode.APPROVAL_EXPIRED,),
+        metrics={"unauthorized_effects": 1},
+        authority={"approval_ttl_ms": 1_000},
+    ),
+    Golden(
+        b0_order_outside_the_approvals_scope,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        authorized_at_commit=(ReasonCode.APPROVAL_OUT_OF_SCOPE,),
+        metrics={"unauthorized_effects": 1},
+    ),
+    Golden(
+        b0_order_without_the_budget_in_its_basis,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        inputs_still_fresh=(ReasonCode.UNDECLARED_INPUT,),
+        metrics={"stale_effects": 1},
+    ),
+    Golden(
+        b0_order_on_a_quote_it_never_read,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        inputs_still_fresh=(ReasonCode.UNOBSERVED_INPUT,),
+        metrics={"stale_effects": 1},
+        approval_requests=2,
+    ),
+    Golden(
+        b0_quote_changes_as_the_order_leaves,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        inputs_still_fresh=(ReasonCode.STALE_INPUT,),
+        metrics={"stale_effects": 1},
+    ),
+    Golden(
+        g2_approval_revoked_before_dispatch,
+        Config.G2,
+        Contract.C2,
+        Verdict.PASS,
+        Knowledge.NOT_COMMITTED,
+        excuse=Excuse.AUTHORITY_WITHDRAWN,
+        metrics={"excused_intents": 1},
+    ),
+    Golden(
+        g2_the_approver_denies,
+        Config.G2,
+        Contract.C2,
+        Verdict.PASS,
+        Knowledge.NOT_COMMITTED,
+        excuse=Excuse.AUTHORITY_WITHDRAWN,
+        metrics={"excused_intents": 1, "approvals_decided_by_human": 1},
+        authority=QUEUED,
+    ),
+    Golden(
+        g2_prices_rise_above_the_maximum,
+        Config.G2,
+        Contract.C2,
+        Verdict.PASS,
+        Knowledge.NOT_COMMITTED,
+        excuse=Excuse.INFEASIBLE,
+        metrics={"excused_intents": 1},
     ),
 ]
 
 
 @pytest.fixture
 def make_run(sim_database: str, dev_data: dict[str, object]) -> Iterator[Callable[..., Recorder]]:
-    """Opens a recorder for a fresh run database, and closes it afterwards."""
+    """Opens a recorder for a fresh run database, and closes it afterwards. `authority`
+    changes dev-001's authority section."""
     opened: list[Recorder] = []
 
-    def factory(config: Config, contract: Contract) -> Recorder:
-        run = Recorder(sim_database, dev_data, config, contract)
+    def factory(
+        config: Config, contract: Contract, authority: Mapping[str, object] | None = None
+    ) -> Recorder:
+        data = copy.deepcopy(dev_data)
+        section = data["authority"]
+        assert isinstance(section, dict)
+        section.update(authority or {})
+        run = Recorder(sim_database, data, config, contract)
         opened.append(run)
         return run
 
@@ -631,18 +977,21 @@ def _rows(dsn: str) -> tuple[list[tuple[object, ...]], tuple[object, ...] | None
 
 @pytest.mark.parametrize("golden", GOLDEN, ids=[golden.build.__name__ for golden in GOLDEN])
 def test_golden_run(golden: Golden, make_run: Callable[..., Recorder], sim_database: str) -> None:
-    run = make_run(golden.config, golden.contract)
+    run = make_run(golden.config, golden.contract, golden.authority)
     golden.build(run)
     result = run.evaluate()
 
     assert result.verdict is golden.verdict
-    assert result.evaluated == (1, 5)
-    assert result.property_result(1).reason_codes == golden.exactly_once
-    assert result.property_result(5).reason_codes == golden.truthfully_reported
-    for number, codes in ((1, golden.exactly_once), (5, golden.truthfully_reported)):
+    assert result.evaluated == (1, 2, 3, 4, 5)
+    for number, codes in golden.codes.items():
+        assert result.property_result(number).reason_codes == codes, f"property {number}"
         expected = PropertyVerdict.FAIL if codes else PropertyVerdict.PASS
-        assert result.property_result(number).verdict is expected
-    assert {name: value for name, value in result.metrics.items() if value} == dict(golden.metrics)
+        assert result.property_result(number).verdict is expected, f"property {number}"
+    excused = [(excused.intent_id, excused.excuse) for excused in result.excused_intents]
+    assert excused == ([] if golden.excuse is None else [("REQ-1", golden.excuse)])
+    metrics = {name: value for name, value in result.metrics.items() if value}
+    assert metrics.pop("approval_requests") == golden.approval_requests
+    assert metrics == dict(golden.metrics)
     if golden.knowledge is None:
         assert result.report is None
     else:
@@ -667,18 +1016,20 @@ def test_golden_run(golden: Golden, make_run: Callable[..., Recorder], sim_datab
     assert run_row == (
         "RUN-golden",
         str(result.verdict),
-        [1, 5],
+        [1, 2, 3, 4, 5],
         result.metrics,
         json.loads(result_json(result)),
     )
 
 
 def test_every_reason_code_has_a_golden_run() -> None:
-    covered = {
-        code for golden in GOLDEN for code in (*golden.exactly_once, *golden.truthfully_reported)
-    }
+    covered = {code for golden in GOLDEN for codes in golden.codes.values() for code in codes}
     assert covered == set(ReasonCode)
     assert {golden.verdict for golden in GOLDEN} == set(Verdict)
+    assert {golden.excuse for golden in GOLDEN} - {None} == set(Excuse)
+    assert set(RUN_METRICS) <= {name for golden in GOLDEN for name in golden.metrics} | {
+        "approval_requests"
+    }
 
 
 def test_the_possibly_sent_request_is_reported_with_what_settled_it(
@@ -719,7 +1070,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
     """The whole JSON of one result, which pins its shape."""
     run = make_run(Config.G2, Contract.C2)
     g2_demo_1(run)
-    data = json.loads(result_json(run.evaluate()))
+    data = json.loads(result_json(run.evaluate(stopped_vt=100_000)))
     claim = {
         "claimed_effects": ["PO-0001"],
         "intent_id": "REQ-1",
@@ -748,16 +1099,23 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
         ],
         "status": "done",
     }
-    not_evaluated = {"failures": [], "metrics": {}, "reason_codes": [], "verdict": "not_evaluated"}
+    passed = {"failures": [], "reason_codes": [], "verdict": "pass"}
     assert data == {
         "code_version": data["code_version"],
-        "evaluated": [1, 5],
-        "excused_intents": None,
+        "evaluated": [1, 2, 3, 4, 5],
+        "excused_intents": [],
         "metrics": {
+            "approval_requests": 1,
+            "approvals_decided_by_human": 0,
             "duplicates": 0,
+            "excused_intents": 0,
             "false_done_claims": 0,
             "false_not_done_claims": 0,
+            "human_interventions": 0,
+            "missing_effects": 0,
+            "stale_effects": 0,
             "success_claimed_with_duplicate": 0,
+            "unauthorized_effects": 0,
             "unintended_effects": 0,
             "unjustified_claims": 0,
             "unknown_claims": 0,
@@ -771,9 +1129,24 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
                 "reason_codes": [],
                 "verdict": "pass",
             },
-            {"name": "authorized_at_commit", "property": 2, **not_evaluated},
-            {"name": "inputs_still_fresh", "property": 3, **not_evaluated},
-            {"name": "actually_committed", "property": 4, **not_evaluated},
+            {
+                "metrics": {"unauthorized_effects": 0},
+                "name": "authorized_at_commit",
+                "property": 2,
+                **passed,
+            },
+            {
+                "metrics": {"stale_effects": 0},
+                "name": "inputs_still_fresh",
+                "property": 3,
+                **passed,
+            },
+            {
+                "metrics": {"excused_intents": 0, "missing_effects": 0},
+                "name": "actually_committed",
+                "property": 4,
+                **passed,
+            },
             {
                 "failures": [],
                 "metrics": {
@@ -802,6 +1175,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
             "cassette_digest": None,
             "config": "G2",
             "contract": "C2",
+            "end_vt": 100_000,
             "model": "scripted-policy",
             "model_adapter": "scripted",
             "params": run.scenario.params.model_dump(),
@@ -812,5 +1186,69 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
             "seed": 7,
             "topology": "inproc",
         },
+        "verdict": "pass",
+    }
+
+
+def test_failures_of_properties_2_and_3_in_full(make_run: Callable[..., Recorder]) -> None:
+    """The JSON of property 2's and property 3's failures, which pins their shape."""
+    run = make_run(Config.B0, Contract.C2)
+    b0_demo_1(run)
+    data = json.loads(result_json(run.evaluate()))
+    assert data["properties"][1:3] == [
+        {
+            "failures": [
+                {
+                    "code": "approval_used",
+                    "detail": "APR-0001 already backs PO-0001, which committed before PO-0002",
+                    "effect_ids": ["PO-0002"],
+                    "intent_id": "REQ-1",
+                }
+            ],
+            "metrics": {"unauthorized_effects": 1},
+            "name": "authorized_at_commit",
+            "property": 2,
+            "reason_codes": ["approval_used"],
+            "verdict": "fail",
+        },
+        {
+            "failures": [
+                {
+                    "code": "stale_input",
+                    "detail": "PO-0002 relies on budget/CC-OPS version 1, but just before the"
+                    " commit version 2 breaks rule budget_covers; changed: committed_minor",
+                    "effect_ids": ["PO-0002"],
+                    "intent_id": "REQ-1",
+                }
+            ],
+            "metrics": {"stale_effects": 1},
+            "name": "inputs_still_fresh",
+            "property": 3,
+            "reason_codes": ["stale_input"],
+            "verdict": "fail",
+        },
+    ]
+
+
+def test_an_excused_intent_in_full(make_run: Callable[..., Recorder]) -> None:
+    """The JSON of an intent property 4 excuses, which pins its shape."""
+    run = make_run(Config.G2, Contract.C2)
+    g2_approval_revoked_before_dispatch(run)
+    data = json.loads(result_json(run.evaluate()))
+    assert data["excused_intents"] == [
+        {
+            "approval_ids": ["APR-0001"],
+            "detail": "authority for REQ-1 was withdrawn (APR-0001), and no approval for it is"
+            " valid and unused at the end",
+            "excuse": "authority_withdrawn",
+            "intent_id": "REQ-1",
+        }
+    ]
+    assert data["properties"][3] == {
+        "failures": [],
+        "metrics": {"excused_intents": 1, "missing_effects": 0},
+        "name": "actually_committed",
+        "property": 4,
+        "reason_codes": [],
         "verdict": "pass",
     }

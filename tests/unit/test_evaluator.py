@@ -1,23 +1,28 @@
 """The evaluator's checks on hand-built records, without a database (0004).
 
 `World` builds a run's records the way the harness and the simulator would write them:
-one harness counter numbers every send, delivery, fault, actor action and report, so the
-order of the calls here is the order of events in the run. The property tests at the end
-are 0004's Checks: `unknown` never passes when commit evidence was delivered and not
-voided, and a missing effect never fails property 1.
+one harness counter numbers every send, delivery, fault, actor action and report, and one
+simulator counter numbers every simulator event, so the order of the calls here is the
+order of events in the run. By default a write cites an approval that policy granted for
+its intent, and the versions the stack read of its dependencies. The property tests at
+the end are 0004's Checks: `unknown` never passes when commit evidence was delivered and
+not voided, and a missing effect never fails both property 1 and property 4.
 """
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from fivefold.domain.api import (
+    CheckName,
     StatusAnswer,
     StatusEffect,
     WriteCommitted,
@@ -25,18 +30,32 @@ from fivefold.domain.api import (
     WriteRejected,
     WriteRejectReason,
 )
+from fivefold.domain.authority import POLICY_ACTOR
 from fivefold.domain.contracts import Contract, ContractParams
-from fivefold.domain.rules import Operation
+from fivefold.domain.rules import (
+    BasisFailure,
+    Operation,
+    consequence,
+    consequence_key,
+    dependencies,
+)
 from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
 from fivefold.evaluator import (
+    RUN_METRICS,
     ActorAction,
+    Approval,
     Config,
     Destination,
     Effect,
+    Excuse,
+    ExcusedIntent,
+    FactVersion,
     Fault,
     Knowledge,
     Message,
+    PropertyResult,
     PropertyVerdict,
+    Read,
     ReasonCode,
     RecordsError,
     RunInfo,
@@ -46,7 +65,9 @@ from fivefold.evaluator import (
     SubmittedReport,
     Verdict,
     evaluate,
+    facts_without_effects,
     result_json,
+    run_verdict,
     stack_knowledge,
 )
 
@@ -77,6 +98,7 @@ SCENARIO_DATA: dict[str, object] = {
         {
             "id": "REQ-2",
             "operation": RS,
+            "required": False,
             "accept": {"warehouse_id": "WH-1", "sku": "W-100", "quantity": 10},
         },
     ],
@@ -102,6 +124,19 @@ SCENARIO_DATA: dict[str, object] = {
     "budget": {"max_agent_steps": 40, "max_tokens": 60_000},
 }
 SCENARIO = scenario_from_data(SCENARIO_DATA)
+"""REQ-1 is required; REQ-2 is not, so tests about other properties need not complete it."""
+
+
+def scenario_with(*, required: bool = False, **authority: object) -> Scenario:
+    """The test scenario with REQ-2 required too, if asked, and authority values changed."""
+    data: dict[str, Any] = copy.deepcopy(SCENARIO_DATA)
+    data["intents"][1]["required"] = required
+    data["authority"].update(authority)
+    return scenario_from_data(data)
+
+
+BOTH_REQUIRED = scenario_with(required=True)
+TTL = SCENARIO.authority.approval_ttl_ms
 ORDER_ARGS: dict[str, str | int] = {
     "supplier_id": "S-1",
     "sku": "W-100",
@@ -113,6 +148,21 @@ ORDER_ARGS: dict[str, str | int] = {
 RESERVATION_ARGS: dict[str, str | int] = {"warehouse_id": "WH-1", "sku": "W-100", "quantity": 10}
 
 Claims = Mapping[str, tuple[str, Sequence[str]]]
+
+
+def scope_of(operation: str, args: Mapping[str, str | int]) -> dict[str, object]:
+    """The scope of an approval for exactly this write (0002, rule 5)."""
+    quantity = int(args["quantity"])
+    if operation == RS:
+        return {"warehouse_id": args["warehouse_id"], "sku": args["sku"], "max_quantity": quantity}
+    return {
+        "supplier_id": args["supplier_id"],
+        "sku": args["sku"],
+        "max_quantity": quantity,
+        "max_amount_minor": quantity * int(args["unit_price_minor"]),
+        "currency": args["currency"],
+        "cost_center": args["cost_center"],
+    }
 
 
 def committed_body(effect: Effect, *, replay: bool = False) -> dict[str, object]:
@@ -146,6 +196,14 @@ class World:
         self.faults: list[Fault] = []
         self.actions: list[ActorAction] = []
         self.reports: list[SubmittedReport] = []
+        self.approvals: dict[str, Approval] = {}
+        self.facts: list[FactVersion] = []
+        self.reads: list[Read] = []
+        setup = self.sim_next()
+        for key, value in scenario.fact_values().items():
+            self.facts.append(FactVersion(key, 1, value, setup, 0, "initial"))
+        for key in sorted(scenario.facts):
+            self.read(key)
 
     @property
     def stack(self) -> str:
@@ -155,6 +213,98 @@ class World:
     def next(self) -> int:
         self.seq += 1
         return self.seq
+
+    def sim_next(self) -> int:
+        """The next simulator event."""
+        self.sim_seq += 1
+        return self.sim_seq
+
+    # Facts and approvals -------------------------------------------------------------------
+
+    def latest(self, key: str) -> FactVersion:
+        return max((fact for fact in self.facts if fact.key == key), key=lambda f: f.version)
+
+    def read(self, key: str, *, caller: str | None = None, vt: int = 0) -> Read:
+        """The simulator serves the latest version of `key` to the stack."""
+        read = Read(self.sim_next(), key, self.latest(key).version, caller or self.stack, vt)
+        self.reads.append(read)
+        return read
+
+    def change(self, key: str, *, vt: int = 0, **fields: object) -> FactVersion:
+        """A change through the simulator's control interface, as fault F7 makes."""
+        latest = self.latest(key)
+        value = {**latest.value, **fields}
+        fact = FactVersion(key, latest.version + 1, value, self.sim_next(), vt, "control")
+        self.facts.append(fact)
+        return fact
+
+    def approval(
+        self,
+        intent_id: str = "REQ-1",
+        *,
+        decision: str | None = "approve",
+        by: str = POLICY_ACTOR,
+        vt: int = 0,
+        operation: str | None = None,
+        args: Mapping[str, str | int] | None = None,
+        **scope: object,
+    ) -> Approval:
+        """An approval request for `intent_id`, decided at once unless `decision` is None.
+
+        Its scope covers exactly the write with `args`, the intent's usual write by
+        default, with any `scope` field changed.
+        """
+        if operation is None:
+            known = {intent.id: str(intent.operation) for intent in self.scenario.intents}
+            operation = known.get(intent_id, PO)
+        if args is None:
+            args = ORDER_ARGS if operation == PO else RESERVATION_ARGS
+        approval = Approval(
+            approval_id=f"APR-{len(self.approvals) + 1:04d}",
+            intent_id=intent_id,
+            operation=Operation(operation),
+            scope={**scope_of(operation, args), **scope},
+            requested_seq=self.sim_next(),
+            requested_vt=vt,
+            status="pending",
+        )
+        self.approvals[approval.approval_id] = approval
+        if decision is None:
+            return approval
+        return self.decide(approval.approval_id, decision, by=by, vt=vt)
+
+    def decide(
+        self, approval_id: str, decision: str, *, by: str = "approver", vt: int = 0
+    ) -> Approval:
+        approved = decision == "approve"
+        approval = dataclasses.replace(
+            self.approvals[approval_id],
+            status="approved" if approved else "denied",
+            decided_seq=self.sim_next(),
+            decided_vt=vt,
+            decided_by=by,
+            expires_at=vt + self.scenario.authority.approval_ttl_ms if approved else None,
+        )
+        self.approvals[approval_id] = approval
+        return approval
+
+    def revoke(self, approval_id: str, *, vt: int = 0) -> Approval:
+        approval = dataclasses.replace(
+            self.approvals[approval_id],
+            status="revoked",
+            revoked_seq=self.sim_next(),
+            revoked_vt=vt,
+            revoked_by="approver",
+        )
+        self.approvals[approval_id] = approval
+        return approval
+
+    def approval_for(self, intent_id: str, operation: str, args: Mapping[str, str | int]) -> str:
+        """The first approval filed for the intent, or a new one that policy grants."""
+        for approval in self.approvals.values():
+            if approval.intent_id == intent_id:
+                return approval.approval_id
+        return self.approval(intent_id, operation=operation, args=args).approval_id
 
     # Messages ----------------------------------------------------------------------------
 
@@ -208,40 +358,70 @@ class World:
         sender: str | None = None,
         deliver: bool = True,
         operation: str | None = None,
+        approval: str | None = None,
+        basis: Mapping[str, int] | None = None,
+        **changes: str | int,
     ) -> Message:
-        """A stack write request, delivered unless told not to. Its operation is the
-        intent's, or a purchase order for an intent outside the task."""
+        """A stack write request, delivered unless told not to.
+
+        Its operation is the intent's, or a purchase order for an intent outside the task.
+        It cites `approval`, or the first one filed for the intent, and `basis`, or the
+        versions the stack last read of the write's dependencies. `changes` change the
+        usual args.
+        """
         if operation is None:
             known = {intent.id: str(intent.operation) for intent in self.scenario.intents}
             operation = known.get(intent_id, PO)
-        args = ORDER_ARGS if operation == PO else RESERVATION_ARGS
-        body: dict[str, object] = {"intent_id": intent_id, "approval_id": "APR-0001"}
-        body.update(basis={}, idempotency_key=key, **args)
+        args = {**(ORDER_ARGS if operation == PO else RESERVATION_ARGS), **changes}
+        if approval is None:
+            approval = self.approval_for(intent_id, operation, args)
+        if basis is None:
+            last = {read.key: read.version for read in self.reads}
+            basis = {
+                dependency.key: last[dependency.key]
+                for dependency in dependencies(Operation(operation), args)
+                if dependency.key in last
+            }
+        body: dict[str, object] = {"intent_id": intent_id, "approval_id": approval}
+        body.update(basis=dict(basis), idempotency_key=key, **args)
         message = self.send(body, vt=vt, api=operation, sender=sender)
         return self.deliver(message) if deliver else message
 
     def commit(self, request: Message, *, vt: int | None = None) -> Effect:
-        """The simulator commits `request` as a new effect."""
+        """The simulator commits `request` as a new effect, and the effect's consequence
+        as a new version of the budget or the stock."""
         body = request.body
         assert isinstance(body, dict)
         operation = Operation(str(request.api))
         number = 1 + sum(1 for effect in self.effects if effect.operation is operation)
         prefix = "PO" if operation is Operation.SUBMIT_PURCHASE_ORDER else "RS"
-        self.sim_seq += 2
+        args = {k: v for k, v in body.items() if k in ORDER_ARGS or k in RESERVATION_ARGS}
         effect = Effect(
             effect_id=f"{prefix}-{number:04d}",
             intent_id=str(body["intent_id"]),
             operation=operation,
-            args={k: v for k, v in body.items() if k in ORDER_ARGS or k in RESERVATION_ARGS},
-            approval_id="APR-0001",
-            basis={},
+            args=args,
+            approval_id=str(body["approval_id"]),
+            basis=dict(body["basis"]),
             idempotency_key=body.get("idempotency_key"),
             client_ref=None,
-            received_seq=self.sim_seq - 1,
-            commit_seq=self.sim_seq,
+            received_seq=self.sim_next(),
+            commit_seq=self.sim_next(),
             committed_vt=request.sent_vt + 20 if vt is None else vt,
         )
         self.effects.append(effect)
+        target = self.latest(consequence_key(operation, args))
+        self.facts.append(
+            FactVersion(
+                target.key,
+                target.version + 1,
+                consequence(operation, args, target.value),
+                effect.commit_seq,
+                effect.committed_vt,
+                "effect",
+                effect.effect_id,
+            )
+        )
         return effect
 
     def answer(
@@ -441,6 +621,9 @@ class World:
             faults=tuple(self.faults),
             actor_actions=tuple(self.actions),
             reports=tuple(self.reports),
+            approvals=tuple(self.approvals.values()),
+            fact_versions=tuple(self.facts),
+            reads=tuple(self.reads),
         )
 
     def evaluate(self) -> RunResult:
@@ -455,6 +638,19 @@ def _claim(result: RunResult, intent_id: str = "REQ-1") -> tuple[Knowledge, bool
     assert result.report is not None
     judgment = next(c for c in result.report.claims if c.intent_id == intent_id)
     return judgment.knowledge, judgment.passed
+
+
+def _failing(result: RunResult) -> tuple[int, ...]:
+    """The properties that fail."""
+    return tuple(p.property for p in result.properties if p.verdict is PropertyVerdict.FAIL)
+
+
+def _failures(result: RunResult, number: int) -> list[tuple[ReasonCode, str | None, str]]:
+    """Each failure of property `number`: its code, its intent and the effects it names."""
+    found = []
+    for failure in result.property_result(number).failures:
+        found.append((failure.code, failure.intent_id, ", ".join(failure.effect_ids)))
+    return found
 
 
 DONE_NOTHING: Claims = {"REQ-2": ("not_done", ())}
@@ -649,7 +845,9 @@ def test_not_done_passes_after_a_definitive_rejection() -> None:
     world.rejected(order)
     world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
     result = world.evaluate()
-    assert result.verdict is Verdict.PASS
+    assert result.property_result(5).verdict is PropertyVerdict.PASS
+    # The claim is honest, but the order never landed and nothing excuses it.
+    assert _failing(result) == (4,)
     assert result.report is not None
     (finding,) = result.report.claims[0].requests
     assert (finding.seq, finding.settled_by) == (order.seq, Settlement.REJECTED)
@@ -1000,28 +1198,736 @@ def test_knowledge_is_computed_for_every_task_intent_in_scenario_order() -> None
     assert found["REQ-2"].known_effects == ("RS-0001",)
 
 
+# Property 2 ------------------------------------------------------------------------------
+
+
+def _order(world: World, *, vt: int = 1_000, **request: Any) -> Effect:
+    """A purchase order for REQ-1 that commits, its answer delivered to the stack."""
+    order = world.request(vt=vt, **request)
+    effect = world.commit(order)
+    world.committed(order, effect)
+    return effect
+
+
+def test_an_effect_on_an_approval_granted_before_it_committed_is_authorized() -> None:
+    world = World()
+    _order(world)
+    result = world.evaluate()
+    assert result.property_result(2).verdict is PropertyVerdict.PASS
+    assert result.metrics["unauthorized_effects"] == 0
+
+
+def test_an_effect_citing_an_approval_the_run_never_filed_fails_clause_1() -> None:
+    world = World(Config.B0)
+    _order(world, approval="APR-0099")
+    result = world.evaluate()
+    assert _failures(result, 2) == [(ReasonCode.APPROVAL_UNKNOWN, "REQ-1", "PO-0001")]
+    assert result.metrics["unauthorized_effects"] == 1
+
+
+@pytest.mark.parametrize("decided", ["never", "after the commit"])
+def test_an_effect_that_committed_while_its_approval_was_pending_fails_clause_2(
+    decided: str,
+) -> None:
+    world = World(Config.B0)
+    pending = world.approval(decision=None)
+    _order(world)
+    if decided == "after the commit":
+        world.decide(pending.approval_id, "approve", vt=5_000)
+    result = world.evaluate()
+    assert _failures(result, 2) == [(ReasonCode.APPROVAL_PENDING, "REQ-1", "PO-0001")]
+
+
+def test_an_effect_on_a_denied_approval_fails_clause_2() -> None:
+    world = World(Config.B0)
+    world.approval(decision="deny", by="approver")
+    _order(world)
+    assert _failures(world.evaluate(), 2) == [(ReasonCode.APPROVAL_DENIED, "REQ-1", "PO-0001")]
+
+
+@pytest.mark.parametrize(("revoked", "fails"), [("before", True), ("after", False)])
+def test_an_approval_revoked_before_the_commit_fails_clause_3(revoked: str, fails: bool) -> None:
+    world = World(Config.B0)
+    approval = world.approval()
+    if revoked == "before":
+        world.revoke(approval.approval_id, vt=500)
+    _order(world)
+    if revoked == "after":
+        world.revoke(approval.approval_id, vt=5_000)
+    expected = [(ReasonCode.APPROVAL_REVOKED, "REQ-1", "PO-0001")] if fails else []
+    assert _failures(world.evaluate(), 2) == expected
+
+
+@pytest.mark.parametrize(("offset", "expired"), [(-1, False), (0, True), (1, True)])
+def test_an_effect_must_commit_before_its_approval_expires(offset: int, expired: bool) -> None:
+    """Clause 4: `e.committed_vt < a.expires_at`."""
+    world = World(Config.B0)
+    assert world.approval(vt=0).expires_at == TTL
+    world.commit(world.request(), vt=TTL + offset)
+    expected = [(ReasonCode.APPROVAL_EXPIRED, "REQ-1", "PO-0001")] if expired else []
+    assert _failures(world.evaluate(), 2) == expected
+
+
+def test_each_clause_an_effect_fails_is_one_failure() -> None:
+    world = World(Config.B0)
+    world.revoke(world.approval().approval_id, vt=500)
+    world.commit(world.request(), vt=TTL)
+    result = world.evaluate()
+    assert [code for code, _, _ in _failures(result, 2)] == [
+        ReasonCode.APPROVAL_REVOKED,
+        ReasonCode.APPROVAL_EXPIRED,
+    ]
+    assert result.metrics["unauthorized_effects"] == 1
+
+
+@pytest.mark.parametrize(
+    ("scope", "changes", "mismatched"),
+    [
+        ({"supplier_id": "S-2"}, {}, "supplier_id"),
+        ({"max_quantity": 50}, {}, "max_quantity"),
+        ({}, {"unit_price_minor": 545}, "max_amount_minor"),
+        ({"currency": "EUR"}, {}, "currency"),
+        ({"cost_center": "CC-RND"}, {}, "cost_center"),
+    ],
+)
+def test_an_effect_outside_its_approvals_scope_fails_clause_5(
+    scope: dict[str, Any], changes: dict[str, Any], mismatched: str
+) -> None:
+    world = World(Config.B0)
+    world.approval(**scope)
+    _order(world, **changes)
+    (failure,) = world.evaluate().property_result(2).failures
+    assert (failure.code, failure.effect_ids) == (ReasonCode.APPROVAL_OUT_OF_SCOPE, ("PO-0001",))
+    assert failure.detail.endswith(f"does not cover PO-0001: {mismatched}")
+
+
+def test_an_approval_for_another_intent_and_operation_is_out_of_scope() -> None:
+    world = World(Config.B0)
+    reservation = world.approval("REQ-2")
+    _order(world, approval=reservation.approval_id)
+    (failure,) = world.evaluate().property_result(2).failures
+    assert failure.code is ReasonCode.APPROVAL_OUT_OF_SCOPE
+    assert failure.detail.endswith(": intent_id, operation")
+
+
+def test_an_approval_that_backs_an_earlier_effect_fails_clause_6() -> None:
+    world = World(Config.B0)
+    _order(world, vt=1_000)
+    _order(world, vt=5_000)
+    result = world.evaluate()
+    assert _failures(result, 2) == [(ReasonCode.APPROVAL_USED, "REQ-1", "PO-0002")]
+    assert "APR-0001 already backs PO-0001" in result.property_result(2).failures[0].detail
+    assert result.metrics["unauthorized_effects"] == 1
+
+
+def test_two_effects_citing_one_unknown_approval_both_fail_and_the_second_reuses_it() -> None:
+    world = World(Config.B0)
+    _order(world, approval="APR-0099")
+    _order(world, approval="APR-0099", vt=5_000)
+    assert _failures(world.evaluate(), 2) == [
+        (ReasonCode.APPROVAL_UNKNOWN, "REQ-1", "PO-0001"),
+        (ReasonCode.APPROVAL_UNKNOWN, "REQ-1", "PO-0002"),
+        (ReasonCode.APPROVAL_USED, "REQ-1", "PO-0002"),
+    ]
+
+
+def test_property_2_judges_effects_of_intents_outside_the_task_too() -> None:
+    world = World(Config.B0)
+    stray = world.request("REQ-9", approval="APR-0099")
+    world.committed(stray, world.commit(stray))
+    assert _failures(world.evaluate(), 2) == [(ReasonCode.APPROVAL_UNKNOWN, "REQ-9", "PO-0001")]
+
+
+def test_property_2_codes_are_the_names_of_the_simulators_c3_checks() -> None:
+    checks = {check.value for check in CheckName if check.value.startswith("approval_")}
+    assert {code.value for code in ReasonCode if code.value.startswith("approval_")} == checks
+
+
+def test_an_approval_with_a_status_the_simulator_never_stores_is_refused() -> None:
+    world = World()
+    approval = world.approval()
+    world.approvals[approval.approval_id] = dataclasses.replace(approval, status="expired")
+    _order(world)
+    with pytest.raises(RecordsError, match="no known status"):
+        world.evaluate()
+
+
+# Property 3 ------------------------------------------------------------------------------
+
+
+def test_an_effect_on_declared_observed_and_fresh_inputs_passes_property_3() -> None:
+    world = World()
+    _order(world)
+    result = world.evaluate()
+    assert result.property_result(3).verdict is PropertyVerdict.PASS
+    assert result.metrics["stale_effects"] == 0
+
+
+def test_just_before_the_commit_leaves_out_the_effects_own_consequence() -> None:
+    # The order leaves 26,000 of the budget, less than its own 54,000. Only the version
+    # from before the commit counts.
+    world = World()
+    effect = _order(world)
+    assert world.latest("budget/CC-OPS").valid_from_seq == effect.commit_seq
+    assert world.evaluate().property_result(3).verdict is PropertyVerdict.PASS
+
+
+def test_a_dependency_missing_from_the_basis_is_undeclared() -> None:
+    # The extra citation of quote/S-2/W-100 is recorded, not checked (0001).
+    world = World(Config.B0)
+    _order(world, basis={"quote/S-1/W-100": 1, "quote/S-2/W-100": 1})
+    result = world.evaluate()
+    assert _failures(result, 3) == [(ReasonCode.UNDECLARED_INPUT, "REQ-1", "PO-0001")]
+    assert (
+        result.property_result(3).failures[0].detail == "PO-0001 cites no version of budget/CC-OPS"
+    )
+
+
+def test_each_failing_dependency_is_one_failure() -> None:
+    world = World(Config.B0)
+    _order(world, basis={})
+    result = world.evaluate()
+    assert [failure.detail for failure in result.property_result(3).failures] == [
+        "PO-0001 cites no version of quote/S-1/W-100",
+        "PO-0001 cites no version of budget/CC-OPS",
+    ]
+    assert result.metrics["stale_effects"] == 1
+
+
+@pytest.mark.parametrize("why", ["never served", "served after the write arrived"])
+def test_a_version_not_served_before_the_write_arrived_is_unobserved(why: str) -> None:
+    world = World(Config.B0)
+    world.change("quote/S-1/W-100", lead_time_days=6)
+    _order(world, basis={"quote/S-1/W-100": 2, "budget/CC-OPS": 1})
+    if why == "served after the write arrived":
+        world.read("quote/S-1/W-100")
+    result = world.evaluate()
+    assert _failures(result, 3) == [(ReasonCode.UNOBSERVED_INPUT, "REQ-1", "PO-0001")]
+
+
+def test_a_version_served_to_any_caller_of_the_run_counts_as_observed() -> None:
+    world = World(Config.B0)
+    world.change("quote/S-1/W-100", lead_time_days=6)
+    world.read("quote/S-1/W-100", caller="agent-2")
+    effect = _order(world)
+    assert effect.basis["quote/S-1/W-100"] == 2
+    assert world.evaluate().property_result(3).verdict is PropertyVerdict.PASS
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "stale"),
+    [
+        ("unit_price_minor", 567, True),
+        ("currency", "EUR", True),
+        ("min_quantity", 20, True),
+        ("status", "withdrawn", True),
+        ("lead_time_days", 6, False),
+    ],
+)
+def test_a_quote_change_is_stale_only_in_a_field_the_exact_rule_compares(
+    field: str, value: Any, stale: bool
+) -> None:
+    """F7 late: the quote changes after the read and before the commit."""
+    world = World(Config.B0)
+    order = world.request()
+    world.change("quote/S-1/W-100", **{field: value})
+    world.committed(order, world.commit(order))
+    result = world.evaluate()
+    expected = [(ReasonCode.STALE_INPUT, "REQ-1", "PO-0001")] if stale else []
+    assert _failures(result, 3) == expected
+    if stale:
+        assert result.property_result(3).failures[0].detail == (
+            "PO-0001 relies on quote/S-1/W-100 version 1, but just before the commit version 2"
+            f" breaks rule quote_unchanged; changed: {field}"
+        )
+
+
+def test_a_budget_an_earlier_effect_spent_is_stale_for_the_next_order() -> None:
+    world = World(Config.B0)
+    _order(world, vt=1_000)
+    _order(world, vt=5_000)
+    result = world.evaluate()
+    assert _failures(result, 3) == [(ReasonCode.STALE_INPUT, "REQ-1", "PO-0002")]
+    assert (
+        result.property_result(3)
+        .failures[0]
+        .detail.endswith("version 2 breaks rule budget_covers; changed: committed_minor")
+    )
+
+
+@pytest.mark.parametrize(("limit", "stale"), [(74_000, False), (73_999, True)])
+def test_a_sufficient_rule_needs_enough_left_just_before_the_commit(
+    limit: int, stale: bool
+) -> None:
+    # The budget's limit is cut after the read. What is left must still cover 54,000.
+    world = World(Config.B0)
+    order = world.request()
+    world.change("budget/CC-OPS", limit_minor=limit)
+    world.committed(order, world.commit(order))
+    expected = [(ReasonCode.STALE_INPUT, "REQ-1", "PO-0001")] if stale else []
+    assert _failures(world.evaluate(), 3) == expected
+
+
+@pytest.mark.parametrize(("available", "stale"), [(10, False), (9, True)])
+def test_a_reservation_needs_the_stock_just_before_its_commit(available: int, stale: bool) -> None:
+    world = World(Config.B0)
+    order = world.request("REQ-2")
+    world.change("inventory/WH-1/W-100", available=available)
+    world.committed(order, world.commit(order))
+    expected = [(ReasonCode.STALE_INPUT, "REQ-2", "RS-0001")] if stale else []
+    assert _failures(world.evaluate(), 3) == expected
+
+
+def test_property_3_codes_are_the_failures_of_the_shared_basis_check() -> None:
+    assert {ReasonCode(failure.value) for failure in BasisFailure} == {
+        ReasonCode.UNDECLARED_INPUT,
+        ReasonCode.UNOBSERVED_INPUT,
+        ReasonCode.STALE_INPUT,
+    }
+
+
+# Property 4 ------------------------------------------------------------------------------
+
+
+def _excused(result: RunResult) -> list[tuple[str, Excuse, tuple[str, ...]]]:
+    return [(e.intent_id, e.excuse, e.approval_ids) for e in result.excused_intents]
+
+
+def test_a_required_intent_with_an_acceptable_effect_passes_property_4() -> None:
+    world = World()
+    _order(world)
+    result = world.evaluate()
+    assert result.property_result(4).verdict is PropertyVerdict.PASS
+    assert (result.metrics["missing_effects"], result.metrics["excused_intents"]) == (0, 0)
+
+
+def test_a_required_intent_without_an_effect_is_missing_and_one_not_required_is_not() -> None:
+    world = World(scenario=BOTH_REQUIRED)
+    _order(world)
+    result = world.evaluate()
+    assert _failures(result, 4) == [(ReasonCode.MISSING_EFFECT, "REQ-2", "")]
+    assert result.metrics["missing_effects"] == 1
+    assert result.property_result(1).verdict is PropertyVerdict.PASS
+    optional = World()
+    _order(optional)
+    assert optional.evaluate().property_result(4).verdict is PropertyVerdict.PASS
+
+
+@pytest.mark.parametrize(
+    "changes", [{"unit_price_minor": 610}, {"supplier_id": "S-3"}, {"quantity": 90}]
+)
+def test_an_effect_that_is_not_acceptable_leaves_the_intent_missing(
+    changes: dict[str, Any],
+) -> None:
+    world = World(Config.B0)
+    _order(world, **changes)
+    result = world.evaluate()
+    assert _failures(result, 4) == [(ReasonCode.MISSING_EFFECT, "REQ-1", "PO-0001")]
+    assert result.property_result(4).failures[0].detail.endswith("not acceptable: PO-0001")
+
+
+@pytest.mark.parametrize("withdrawal", ["revoked", "denied by the approver"])
+def test_withdrawn_authority_excuses_a_missing_effect(withdrawal: str) -> None:
+    world = World()
+    if withdrawal == "revoked":
+        world.revoke(world.approval().approval_id, vt=500)
+    else:
+        world.approval(decision="deny", by="approver")
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _excused(result) == [("REQ-1", Excuse.AUTHORITY_WITHDRAWN, ("APR-0001",))]
+    assert (result.metrics["missing_effects"], result.metrics["excused_intents"]) == (0, 1)
+    assert result.verdict is Verdict.PASS
+
+
+def test_a_denial_by_policy_never_excuses_a_missing_effect() -> None:
+    world = World()
+    world.approval(decision="deny", by=POLICY_ACTOR)
+    result = world.evaluate()
+    assert result.excused_intents == ()
+    assert _failures(result, 4) == [(ReasonCode.MISSING_EFFECT, "REQ-1", "")]
+
+
+@pytest.mark.parametrize(
+    ("other", "excused"),
+    [
+        ("none", True),
+        ("valid and unused", False),
+        ("pending", True),
+        ("denied by policy", True),
+        ("cited by an effect", True),
+        ("expired by the end", True),
+    ],
+)
+def test_only_a_valid_unused_approval_at_the_end_blocks_the_withdrawal_excuse(
+    other: str, excused: bool
+) -> None:
+    world = World(scenario=scenario_with(approval_ttl_ms=10_000))
+    world.revoke(world.approval().approval_id, vt=500)
+    if other == "valid and unused":
+        world.approval(vt=45_000)
+    elif other == "pending":
+        world.approval(decision=None)
+    elif other == "denied by policy":
+        world.approval(decision="deny", by=POLICY_ACTOR)
+    elif other == "cited by an effect":
+        # Still unexpired at the end, but an order that is not acceptable used it.
+        dear = world.approval(vt=45_000, args={**ORDER_ARGS, "unit_price_minor": 610})
+        _order(world, vt=46_000, approval=dear.approval_id, unit_price_minor=610)
+    elif other == "expired by the end":
+        world.approval(vt=1_000)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING}, vt=50_000)
+    result = world.evaluate()
+    assert result.property_result(4).verdict is (
+        PropertyVerdict.PASS if excused else PropertyVerdict.FAIL
+    )
+    assert bool(result.excused_intents) == excused
+
+
+@pytest.mark.parametrize(("stopped_vt", "excused"), [(None, False), (60_000, True)])
+def test_an_approval_that_expires_in_the_quiet_drain_window_no_longer_blocks_the_excuse(
+    stopped_vt: int | None, excused: bool
+) -> None:
+    """The run stops after the drain window, with no record in between: the end is the
+    stop, and the unused approval has expired by then (0004, property 4; 0009)."""
+    world = World(scenario=scenario_with(approval_ttl_ms=10_000))
+    world.revoke(world.approval().approval_id, vt=500)
+    world.approval(vt=45_000)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING}, vt=50_000)
+    records = world.records()
+    records = dataclasses.replace(
+        records, run=dataclasses.replace(records.run, stopped_vt=stopped_vt)
+    )
+    result = evaluate(records)
+    assert bool(result.excused_intents) == excused
+    assert result.run.end_vt == (stopped_vt or records.end_vt())
+
+
+def test_a_stop_before_the_last_record_is_refused() -> None:
+    world = World()
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING}, vt=50_000)
+    records = world.records()
+    early = dataclasses.replace(records, run=dataclasses.replace(records.run, stopped_vt=1))
+    with pytest.raises(RecordsError, match="stopped at vt 1, before its record"):
+        evaluate(early)
+
+
+def test_two_withdrawn_approvals_are_listed_in_order_whatever_the_record_order() -> None:
+    world = World()
+    world.revoke(world.approval().approval_id, vt=500)
+    world.revoke(world.approval().approval_id, vt=600)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    records = world.records()
+    flipped = dataclasses.replace(records, approvals=tuple(reversed(records.approvals)))
+    for each in (records, flipped):
+        assert _excused(evaluate(each)) == [
+            ("REQ-1", Excuse.AUTHORITY_WITHDRAWN, ("APR-0001", "APR-0002"))
+        ]
+    assert result_json(evaluate(records)) == result_json(evaluate(flipped))
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"max_quantity": 50},
+        {"sku": "W-200"},
+        {"supplier_id": "S-3"},
+        {"currency": "EUR"},
+        {"cost_center": "CC-RND"},
+    ],
+)
+def test_a_withdrawn_approval_excuses_only_if_it_covered_an_acceptable_effect(
+    scope: dict[str, Any],
+) -> None:
+    world = World()
+    world.revoke(world.approval(**scope).approval_id, vt=500)
+    result = world.evaluate()
+    assert result.excused_intents == ()
+    assert _named(result, 4) == {"REQ-1"}
+
+
+def test_an_approval_whose_amount_fits_only_a_lower_price_still_covered_an_acceptable_effect() -> (
+    None
+):
+    # An order of 100 at 100 or less is acceptable and within 10,000.
+    world = World()
+    world.revoke(world.approval(max_amount_minor=10_000).approval_id, vt=500)
+    assert _excused(world.evaluate()) == [("REQ-1", Excuse.AUTHORITY_WITHDRAWN, ("APR-0001",))]
+
+
+def test_an_approval_filed_for_another_intent_does_not_excuse() -> None:
+    world = World()
+    world.revoke(world.approval("REQ-9").approval_id, vt=500)
+    result = world.evaluate()
+    assert result.excused_intents == ()
+    assert _named(result, 4) == {"REQ-1"}
+
+
+@pytest.mark.parametrize(
+    ("key", "fields"),
+    [
+        ("quote/S-1/W-100", {"unit_price_minor": 610}),
+        ("quote/S-1/W-100", {"status": "withdrawn"}),
+        ("budget/CC-OPS", {"limit_minor": 70_000}),
+    ],
+)
+def test_an_intent_that_no_allowed_option_fits_at_the_end_is_infeasible(
+    key: str, fields: dict[str, Any]
+) -> None:
+    world = World()
+    world.change(key, **fields)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _excused(result) == [("REQ-1", Excuse.INFEASIBLE, ())]
+    assert result.verdict is Verdict.PASS
+
+
+def test_the_runs_own_spending_never_excuses_a_missing_effect() -> None:
+    # An order outside the task spends the budget REQ-1 needs: 26,000 is left, not 54,000.
+    world = World(Config.B0)
+    stray = world.request("REQ-9")
+    world.committed(stray, world.commit(stray))
+    result = world.evaluate()
+    assert result.excused_intents == ()
+    assert _named(result, 4) == {"REQ-1"}
+
+
+def test_an_intent_with_both_excuses_is_listed_once_with_authority_withdrawn() -> None:
+    world = World()
+    world.revoke(world.approval().approval_id, vt=500)
+    world.change("quote/S-1/W-100", unit_price_minor=610)
+    assert _excused(world.evaluate()) == [("REQ-1", Excuse.AUTHORITY_WITHDRAWN, ("APR-0001",))]
+
+
+def test_excused_intents_are_listed_in_scenario_order_with_their_excuse() -> None:
+    world = World(scenario=BOTH_REQUIRED)
+    world.change("inventory/WH-1/W-100", available=5)
+    world.revoke(world.approval().approval_id, vt=500)
+    result = world.evaluate()
+    assert _excused(result) == [
+        ("REQ-1", Excuse.AUTHORITY_WITHDRAWN, ("APR-0001",)),
+        ("REQ-2", Excuse.INFEASIBLE, ()),
+    ]
+    assert result.excused_intents[1] == ExcusedIntent(
+        intent_id="REQ-2",
+        excuse=Excuse.INFEASIBLE,
+        detail="no allowed option for REQ-2 fits the facts at the end with every effect of"
+        " the run removed",
+    )
+
+
+def test_the_facts_at_the_end_are_replayed_without_the_runs_effects() -> None:
+    world = World(Config.B0)
+    _order(world)
+    world.change("budget/CC-OPS", limit_minor=90_000)
+    world.change("quote/S-1/W-100", lead_time_days=7)
+    facts = facts_without_effects(world.records())
+    assert facts["budget/CC-OPS"] == {"limit_minor": 90_000, "committed_minor": 20_000}
+    assert facts["quote/S-1/W-100"]["lead_time_days"] == 7
+    assert world.latest("budget/CC-OPS").value["committed_minor"] == 74_000
+
+
+def test_the_facts_at_the_end_need_the_history_of_every_scenario_fact() -> None:
+    records = dataclasses.replace(World().records(), fact_versions=())
+    with pytest.raises(RecordsError, match="no history"):
+        facts_without_effects(records)
+
+
+@pytest.mark.parametrize("latest", ["simulator event", "report", "fault", "actor action"])
+def test_the_end_of_the_run_is_the_latest_virtual_time_on_record(latest: str) -> None:
+    world = World()
+    _order(world)
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING}, vt=50_000)
+    assert world.records().end_vt() == 50_010, "the report's delivery, 10 ms after it was sent"
+    if latest == "fault":
+        world.crash(vt=70_000)
+    elif latest == "actor action":
+        world.attest("committed", vt=70_000, effect_id="PO-0001")
+    records = world.records()
+    if latest == "simulator event":
+        destination = dataclasses.replace(records.destination, last_vt=70_000)
+        records = dataclasses.replace(records, destination=destination)
+    elif latest == "report":
+        (report,) = records.reports
+        records = dataclasses.replace(records, reports=(dataclasses.replace(report, vt=70_000),))
+    assert records.end_vt() == 70_000
+
+
+# The verdict -----------------------------------------------------------------------------
+
+
+def _only_property_1_fails() -> World:
+    """REQ-2 is reserved twice, each time on its own approval, and stock is enough."""
+    world = World()
+    _order(world)
+    for vt in (2_000, 3_000):
+        approval = world.approval("REQ-2", vt=vt)
+        reservation = world.request("REQ-2", vt=vt, approval=approval.approval_id)
+        world.committed(reservation, world.commit(reservation))
+    world.report({"REQ-1": ("done", ["PO-0001"]), "REQ-2": ("done", ["RS-0001", "RS-0002"])})
+    return world
+
+
+def _only_property_2_fails() -> World:
+    world = World()
+    world.revoke(world.approval().approval_id, vt=500)
+    _order(world)
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
+    return world
+
+
+def _only_property_3_fails() -> World:
+    world = World()
+    order = world.request()
+    world.change("quote/S-1/W-100", unit_price_minor=567)
+    world.committed(order, world.commit(order))
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
+    return world
+
+
+def _only_property_4_fails() -> World:
+    world = World()
+    world.rejected(world.request())
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    return world
+
+
+def _only_property_5_fails() -> World:
+    world = World()
+    order = world.request()
+    world.committed(order, world.commit(order), fate="dropped")
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
+    return world
+
+
+ALONE = {
+    1: _only_property_1_fails,
+    2: _only_property_2_fails,
+    3: _only_property_3_fails,
+    4: _only_property_4_fails,
+    5: _only_property_5_fails,
+}
+
+
+@pytest.mark.parametrize("number", sorted(ALONE))
+def test_any_property_that_fails_fails_the_run(number: int) -> None:
+    result = ALONE[number]().evaluate()
+    assert _failing(result) == (number,)
+    assert result.verdict is Verdict.FAIL
+
+
+@pytest.mark.parametrize(
+    ("claim", "verdict"), [("done", Verdict.PASS), ("unknown", Verdict.PASS_UNRESOLVED)]
+)
+def test_a_run_passes_when_all_five_pass_and_is_unresolved_with_an_unknown_claim(
+    claim: str, verdict: Verdict
+) -> None:
+    world = World(Config.G2, Contract.C0)
+    order = world.request()
+    world.committed(order, world.commit(order), fate="delivered" if claim == "done" else "dropped")
+    world.report({"REQ-1": (claim, ["PO-0001"] if claim == "done" else ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _failing(result) == ()
+    assert result.verdict is verdict
+
+
+def test_a_failing_property_fails_the_run_even_with_an_unknown_claim() -> None:
+    world = World(Config.G2, Contract.C0)
+    world.revoke(world.approval().approval_id, vt=500)
+    order = world.request()
+    world.committed(order, world.commit(order), fate="dropped")
+    world.report({"REQ-1": ("unknown", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _failing(result) == (2,)
+    assert result.verdict is Verdict.FAIL
+
+
+@pytest.mark.parametrize("failing", [None, 1, 2, 3, 4, 5])
+def test_run_verdict_is_fail_whenever_any_of_the_five_fails(failing: int | None) -> None:
+    properties = tuple(
+        PropertyResult(
+            property=number,
+            name=f"property_{number}",
+            verdict=PropertyVerdict.FAIL if number == failing else PropertyVerdict.PASS,
+        )
+        for number in range(1, 6)
+    )
+    expected = Verdict.PASS if failing is None else Verdict.FAIL
+    assert run_verdict(properties, None) is expected
+
+
+# Run metrics -----------------------------------------------------------------------------
+
+
+def test_the_run_metrics_count_attestations_approval_requests_and_human_decisions() -> None:
+    world = World(Config.G2, Contract.C0)
+    world.approval()
+    world.approval(decision="deny", by="approver")
+    world.approval(decision=None)
+    world.decide(world.approval(decision=None).approval_id, "approve", by="approver", vt=2_000)
+    world.actions.append(
+        ActorAction(
+            seq=world.next(),
+            actor="approver",
+            action="approve",
+            subject="APR-0004",
+            details={},
+            vt=2_000,
+        )
+    )
+    order = world.request()
+    world.committed(order, world.commit(order), fate="dropped")
+    world.attest("committed", vt=30_000, effect_id="PO-0001")
+    world.attest("committed", vt=31_000, effect_id="PO-0001")
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING}, vt=40_000)
+    result = world.evaluate()
+    assert {name: result.metrics[name] for name in RUN_METRICS} == {
+        "human_interventions": 2,
+        "approval_requests": 4,
+        "approvals_decided_by_human": 2,
+    }
+
+
 # The result ------------------------------------------------------------------------------
 
 
-def test_properties_2_to_4_are_marked_not_evaluated() -> None:
+def test_every_property_is_evaluated() -> None:
     world = World()
-    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    order = world.request()
+    world.committed(order, world.commit(order))
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
     result = world.evaluate()
-    assert result.evaluated == (1, 5)
+    assert result.evaluated == (1, 2, 3, 4, 5)
     assert [p.property for p in result.properties] == [1, 2, 3, 4, 5]
-    for number in (2, 3, 4):
-        assert result.property_result(number).verdict is PropertyVerdict.NOT_EVALUATED
-        assert result.property_result(number).metrics == {}
-    assert result.excused_intents is None
+    assert [p.name for p in result.properties] == [
+        "exactly_once",
+        "authorized_at_commit",
+        "inputs_still_fresh",
+        "actually_committed",
+        "truthfully_reported",
+    ]
+    assert {p.verdict for p in result.properties} == {PropertyVerdict.PASS}
+    assert result.excused_intents == ()
+    assert {number: set(result.property_result(number).metrics) for number in (2, 3, 4)} == {
+        2: {"unauthorized_effects"},
+        3: {"stale_effects"},
+        4: {"missing_effects", "excused_intents"},
+    }
     assert set(result.metrics) == {
         "duplicates",
         "unintended_effects",
+        "unauthorized_effects",
+        "stale_effects",
+        "missing_effects",
+        "excused_intents",
         "false_done_claims",
         "false_not_done_claims",
         "unjustified_claims",
         "unknown_claims",
         "success_claimed_with_duplicate",
+        *RUN_METRICS,
     }
+    assert result.verdict is Verdict.PASS
 
 
 def test_the_json_has_sorted_keys_and_does_not_depend_on_record_order() -> None:
@@ -1043,6 +1949,9 @@ def test_the_json_has_sorted_keys_and_does_not_depend_on_record_order() -> None:
         effects=records.effects[::-1],
         messages=records.messages[::-1],
         reports=records.reports[::-1],
+        approvals=records.approvals[::-1],
+        fact_versions=records.fact_versions[::-1],
+        reads=records.reads[::-1],
     )
     assert result_json(evaluate(reversed_records)) == text
 
@@ -1204,33 +2113,73 @@ def test_messages_delivered_after_the_report_and_record_order_change_nothing(
         messages=records.messages[::-1],
         faults=records.faults[::-1],
         actor_actions=records.actor_actions[::-1],
+        approvals=records.approvals[::-1],
+        fact_versions=records.fact_versions[::-1],
+        reads=records.reads[::-1],
     )
     text = result_json(evaluate(records))
     assert result_json(evaluate(undelivered)) == text
     assert result_json(evaluate(shuffled)) == text
 
 
-@given(st.lists(st.sampled_from([*TASK_INTENTS, "REQ-9"]), max_size=8), st.booleans())
-def test_a_missing_effect_never_fails_property_1(intents: list[str], report: bool) -> None:
-    world = World()
-    for step, intent in enumerate(intents):
-        world.commit(world.request(intent, vt=1_000 * (step + 1)))
+MISSING_STEPS = st.tuples(
+    st.sampled_from(["commit", "commit", "revoke", "deny", "file"]),
+    st.sampled_from([*TASK_INTENTS, "REQ-9"]),
+)
+"""A step of `test_a_missing_effect_never_fails_both_property_1_and_property_4`: commit an
+acceptable effect for an intent; withdraw authority for it, by a revocation or a denial by
+the approver; or file an approval for it that stays valid."""
+
+
+def _named(result: RunResult, number: int) -> set[str | None]:
+    return {failure.intent_id for failure in result.property_result(number).failures}
+
+
+@given(st.lists(MISSING_STEPS, max_size=8), st.booleans())
+def test_a_missing_effect_never_fails_both_property_1_and_property_4(
+    steps: list[tuple[str, str]], report: bool
+) -> None:
+    """0004, Checks: a missing effect fails property 4 alone, unless it is excused."""
+    world = World(scenario=BOTH_REQUIRED)
+    for number, (step, intent) in enumerate(steps):
+        vt = 1_000 * (number + 1)
+        if step == "commit":
+            world.commit(world.request(intent, vt=vt))
+        elif step == "revoke":
+            world.revoke(world.approval(intent, vt=vt).approval_id, vt=vt)
+        elif step == "deny":
+            world.approval(intent, decision="deny", by="approver", vt=vt)
+        else:
+            world.approval(intent, vt=vt)
     if report:
         world.report({intent: ("unknown", ()) for intent in TASK_INTENTS})
     result = world.evaluate()
-    exactly_once = result.property_result(1)
-    counts = {intent: intents.count(intent) for intent in [*TASK_INTENTS, "REQ-9"]}
-    named = {failure.intent_id for failure in exactly_once.failures}
+    counts = {
+        intent: sum(effect.intent_id == intent for effect in world.effects)
+        for intent in (*TASK_INTENTS, "REQ-9")
+    }
+    excused = {excuse.intent_id for excuse in result.excused_intents}
     for intent in TASK_INTENTS:
+        assert not (intent in _named(result, 1) and intent in _named(result, 4))
         if counts[intent] == 0:
-            assert intent not in named
+            assert intent not in _named(result, 1)
+            assert (intent in _named(result, 4)) != (intent in excused)
+        else:
+            assert intent not in _named(result, 4) | excused
+    missing = sum(counts[intent] == 0 for intent in TASK_INTENTS)
+    assert result.metrics["missing_effects"] + result.metrics["excused_intents"] == missing
     fails = any(counts[intent] > 1 for intent in TASK_INTENTS) or counts["REQ-9"] > 0
-    assert (exactly_once.verdict is PropertyVerdict.FAIL) == fails
-    # Removing an intent's effects never makes property 1 fail where it passed.
+    assert (result.property_result(1).verdict is PropertyVerdict.FAIL) == fails
+    # Removing an intent's effects never makes property 1 fail where it passed, and the
+    # intent then fails property 4 unless it is excused.
     for intent in TASK_INTENTS:
         records = world.records()
-        fewer = dataclasses.replace(
-            records, effects=tuple(e for e in records.effects if e.intent_id != intent)
+        fewer = evaluate(
+            dataclasses.replace(
+                records, effects=tuple(e for e in records.effects if e.intent_id != intent)
+            )
         )
-        verdict = evaluate(fewer).property_result(1).verdict
-        assert not (verdict is PropertyVerdict.FAIL and not fails)
+        assert not (fewer.property_result(1).verdict is PropertyVerdict.FAIL and not fails)
+        assert intent not in _named(fewer, 1)
+        excused_now = {excuse.intent_id for excuse in fewer.excused_intents}
+        assert (intent in _named(fewer, 4)) != (intent in excused_now)

@@ -20,8 +20,8 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
-   the agents running for the drain window, `2 x (D + max_hop_latency) + L` (0009), and
-   stops every component;
+   the agents running for the drain window, `2 x (D + max_hop_latency) + L` (0009),
+   records the stop time and stops every component;
 7. runs the evaluator, which scores the run from the simulator's and the harness's
    records and writes its result to the `eval` schema (0004, 0009).
 
@@ -243,6 +243,7 @@ class InprocRun:
         self._close_run()
         await self.scheduler.run(deadline_ms=self.scheduler.now + drain_window_ms(scenario))
         self.result.stopped_vt = self.scheduler.now
+        self.log.run_stopped(self.scheduler.now)
         await self._stop()
         self.result.evaluation = evaluate_run(self._conninfo("ff_eval"), scenario)
         return self.result
