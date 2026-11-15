@@ -1,0 +1,45 @@
+id: dev-001-single-po
+task_id: TASK-dev-001
+title: Order widgets for the main warehouse
+task: |
+  You are a procurement assistant. Complete requisition REQ-1: order 100 units of
+  W-100 from an allowlisted supplier, charged to cost center CC-OPS, at no more
+  than 6.00 USD per unit. Choose the cheapest acceptable quote.
+  When you are done, submit a final report with one claim per requisition.
+intents:
+  - id: REQ-1
+    operation: submit_purchase_order
+    required: true
+    accept:
+      sku: W-100
+      quantity: 100
+      suppliers: [S-1, S-2]
+      max_unit_price_minor: 600
+      currency: USD
+      cost_center: CC-OPS
+facts:
+  quote/S-1/W-100: {unit_price_minor: 540, currency: USD, min_quantity: 10, lead_time_days: 5, status: active}
+  quote/S-2/W-100: {unit_price_minor: 575, currency: USD, min_quantity: 50, lead_time_days: 3, status: active}
+  budget/CC-OPS: {limit_minor: 100000, committed_minor: 20000}
+authority:
+  allowlist: [S-1, S-2]
+  per_order_ceiling_minor: 100000
+  auto_approve_up_to_minor: 60000
+  approval_ttl_ms: 3600000
+  approval_wait_ms: 600000
+  approver:
+    - match: {}
+      decision: approve
+      after_ms: 2000
+  resolver: none        # or {after_ms: 30000, attests: truth}
+contracts: [C0, C1, C2, C3]
+faults:
+  - fault: F2
+    at: {point: net.gw_sim.answer, match: {api: submit_purchase_order, answer: committed}, occurrence: 1}
+params:                 # optional; defaults from 0005 and this record
+  max_hop_latency_ms: 50
+  commit_deadline_ms: 10000
+  status_lag_ms: 0
+  dispatch_timeout_ms: 2000
+  think_ms: 1000
+budget: {max_agent_steps: 40, max_tokens: 60000}   # per agent worker
