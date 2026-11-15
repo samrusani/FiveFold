@@ -14,6 +14,7 @@ the checks ask what happened, never how long it took.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import signal
 import socket
@@ -21,23 +22,29 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import httpx
+import mcp_types as types
 import psycopg
 import pytest
 import uvicorn
 import yaml
+from mcp.shared.exceptions import MCPError
+from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from starlette.types import Receive, Scope, Send
 
 from fivefold.agents.remote import HttpGatewayConnection, RemoteAgent, RunOver, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
+from fivefold.gateway.admin import GatewayAdmin
 from fivefold.gateway.admin_api import TOKEN_VARIABLE
+from fivefold.gateway.records import ActionResult
 from fivefold.harness.clock import HostClock
 from fivefold.harness.log import SharedPgHarnessLog
 from fivefold.harness.migrations import (
@@ -52,7 +59,7 @@ from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.gateway import AdminFactory, GatewayService, admin_api
-from fivefold.harness.split.lifecycle import end_run, score_run, start_run
+from fivefold.harness.split.lifecycle import default_database, end_run, score_run, start_run
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.service import open_run
 from fivefold.harness.split.simulator import SimulatorService
@@ -129,12 +136,16 @@ class Split:
     database: str
     root: Path
 
-    def scenario(self, **params: int) -> Path:
-        """dev-001 with fast timings, written to a file."""
+    def scenario(self, scenario_id: str | None = None, **params: int) -> Path:
+        """dev-001 with fast timings, written to a file; under another id if given."""
         data = yaml.safe_load(DEV_001.read_text(encoding="utf-8"))
         data["params"] = {**FAST, **params}
         data["faults"] = []
-        path = self.root / "scenario.yaml"
+        name = "scenario.yaml"
+        if scenario_id is not None:
+            data["id"] = scenario_id
+            name = f"scenario-{scenario_id}.yaml"
+        path = self.root / name
         path.write_text(yaml.safe_dump(data), encoding="utf-8")
         return path
 
@@ -548,6 +559,157 @@ def test_score_refuses_an_attestation_of_an_effect_the_ledger_lacks_in_one_line(
     assert "names effect PO-0042, which the ledger lacks" in error
 
 
+@dataclass
+class Resolved:
+    """An escalation of demo 3 that a human resolved while the gateway stopped: the admin
+    API's answer, and what the gateway's and the harness's records hold afterwards."""
+
+    answer: httpx.Response
+    resolved_vt: int | None
+    """The gateway's record of the escalation's resolution."""
+    attestations: int
+    """The harness's actor-log rows, which the evaluator counts (0004)."""
+    records_closed: bool
+    """Whether the gateway's connection for harness records closed."""
+
+
+Human = Callable[
+    [GatewayService, httpx.AsyncClient, str, dict[str, Any]], Awaitable[httpx.Response]
+]
+"""What the human does at the escalation: given the gateway, an admin API client, the
+gateway's address and the escalation, it resolves it and returns the admin API's answer."""
+
+
+def _resolve_while_stopping(
+    split: Split, monkeypatch: pytest.MonkeyPatch, human: Human
+) -> Resolved:
+    """Demo 3 in G2: at C0 the order's answer is lost and the gateway escalates; `human`
+    resolves the escalation as the gateway stops."""
+    monkeypatch.setenv(TOKEN_VARIABLE, ADMIN_TOKEN)
+    factory = admin_api()
+    plan = [{"fault": "F2", **_order_plan("net.gw_sim.answer")[0]}]
+    run = split.start("G2", plan, contract=Contract.C0)
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    service = GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url, admin=factory)
+    gateway = serve(service.app())
+
+    async def acts() -> httpx.Response:
+        agent = RemoteAgent(
+            scenario=run.scenario(),
+            config="G2",
+            contract=run.contract,
+            gateway_url=f"{gateway.url}/mcp",
+        )
+        working = asyncio.ensure_future(run_remote_agent(agent))
+        headers = {"authorization": f"Bearer {ADMIN_TOKEN}"}
+        async with httpx.AsyncClient(base_url=f"{gateway.url}/admin", headers=headers) as client:
+            deadline = time.monotonic() + AGENT_S
+            while not (listed := (await client.get("/escalations")).json()["escalations"]):
+                assert time.monotonic() < deadline, "no escalation opened"
+                await asyncio.sleep(0.05)
+            (escalation,) = listed
+            answer = await human(service, client, gateway.url, escalation)
+        # The gateway has stopped. A status call the agent still waits on would end only
+        # at the agent's own timeout, so the agent is cancelled.
+        working.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await working
+        return answer
+
+    try:
+        answer = asyncio.run(asyncio.wait_for(acts(), AGENT_S))
+        records_closed = service.serving.opened.conn.closed
+    finally:
+        gateway.stop()
+        simulator.stop()
+    with split.connect() as conn:
+        (resolved_vt,) = conn.execute("SELECT resolved_vt FROM gw.escalation").fetchone() or (None,)
+        (attestations,) = conn.execute("SELECT count(*) FROM harness.actor_log").fetchone() or (0,)
+    return Resolved(answer, resolved_vt, attestations, records_closed)
+
+
+def _attestation(split: Split, escalation: dict[str, Any]) -> dict[str, str]:
+    return {
+        "resolution": "committed",
+        "effect_id": _effect_citing(split, escalation["approval_id"]),
+        "actor": "ops-1",
+    }
+
+
+def test_no_attestation_commits_once_the_gateway_has_begun_to_stop(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolution whose body arrives once stop has begun committed in the gateway's
+    records; then its actor-log row failed, since stop had closed the harness's
+    connection, so the admin API answered 500 and the evaluator never saw the
+    attestation. Now no resolution commits once stop has begun: 503, and nothing
+    recorded."""
+
+    async def human(
+        service: GatewayService, client: httpx.AsyncClient, url: str, escalation: dict[str, Any]
+    ) -> httpx.Response:
+        admin = service.serving.admin
+        assert admin is not None
+        inside = threading.Event()
+
+        async def holding(scope: Scope, receive: Receive, send: Send) -> None:
+            inside.set()  # past the gateway's own check that the run has not stopped
+            await admin(scope, receive, send)
+
+        service.serving.admin = holding
+        released = asyncio.Event()
+        body = json.dumps(_attestation(split, escalation)).encode()
+
+        async def sent_late() -> AsyncIterator[bytes]:
+            await released.wait()
+            yield body
+
+        path = f"/escalations/{escalation['escalation_id']}/resolve"
+        headers = {"content-type": "application/json"}
+        resolving = asyncio.ensure_future(client.post(path, content=sent_late(), headers=headers))
+        assert await asyncio.to_thread(inside.wait, START_S), "the request never reached the API"
+        harness = {"authorization": f"Bearer {service.run.secret(HARNESS)}"}
+        async with httpx.AsyncClient() as control:
+            stopped = await control.post(f"{url}/harness/stop", headers=harness)
+        assert stopped.json() == {"status": "stopped"}
+        released.set()
+        return await resolving
+
+    resolved = _resolve_while_stopping(split, monkeypatch, human)
+    assert resolved.answer.status_code == 503, resolved.answer.text
+    assert resolved.answer.json()["reason"] == "unavailable"
+    assert (resolved.resolved_vt, resolved.attestations) == (None, 0)
+    assert resolved.records_closed
+
+
+def test_stop_lets_a_resolution_log_its_attestation_before_closing_the_records(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop closes the harness's records only once every resolution in flight has logged
+    its attestation. The test begins stop inside the resolution, between its commit in the
+    gateway's records and its actor-log row."""
+
+    async def human(
+        service: GatewayService, client: httpx.AsyncClient, url: str, escalation: dict[str, Any]
+    ) -> httpx.Response:
+        commit = GatewayAdmin.resolve
+
+        def commit_then_stop(admin: GatewayAdmin, *args: Any, **kwargs: Any) -> ActionResult:
+            result = commit(admin, *args, **kwargs)
+            service.stop()
+            return result
+
+        monkeypatch.setattr(GatewayAdmin, "resolve", commit_then_stop)
+        path = f"/escalations/{escalation['escalation_id']}/resolve"
+        return await client.post(path, json=_attestation(split, escalation))
+
+    resolved = _resolve_while_stopping(split, monkeypatch, human)
+    assert resolved.answer.status_code == 200, resolved.answer.text
+    assert resolved.resolved_vt is not None
+    assert resolved.attestations == 1
+    assert resolved.records_closed
+
+
 # Trust boundaries and the run's end --------------------------------------------------------------
 
 
@@ -646,12 +808,88 @@ def test_once_the_agents_phase_is_over_the_scripted_agent_is_told_so(split: Spli
     assert "the run's agents' phase is over" in str(error)
 
 
+def test_the_simulator_refuses_a_body_holding_a_nul_before_logging_it(split: Split) -> None:
+    """PostgreSQL's JSONB cannot hold \\u0000. A B0 report holding one failed in the log,
+    and the simulator answered 500 before the sink could record the report and refuse it.
+    The simulator now refuses such a body as it refuses a malformed one: 422, not logged."""
+    run = split.start("B0", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    headers = {"authorization": f"Bearer {run.secret(AGENT)}"}
+    claims = [{"intent_id": "REQ-1", "status": "done", "effect_ids": ["PO-0001\u0000"]}]
+    try:
+        report = httpx.post(
+            f"{simulator.url}/api/submit_final_report", json={"claims": claims}, headers=headers
+        )
+        quote = httpx.post(
+            f"{simulator.url}/api/get_quote",
+            json={"supplier_id": "S-1", "sku": "W-100\u0000"},
+            headers=headers,
+        )
+        health = httpx.get(f"{simulator.url}/health").json()
+    finally:
+        simulator.stop()
+    for refused in (report, quote):
+        assert refused.status_code == 422, refused.text
+        assert "NUL" in refused.json()["detail"]
+    assert health == {"run_id": run.run_id, "status": "serving", "failures": 0}
+    with split.connect() as conn:
+        messages = conn.execute("SELECT count(*) FROM harness.message_log").fetchone()
+        reports = conn.execute("SELECT count(*) FROM harness.final_report").fetchone()
+    assert (messages, reports) == ((0,), (0,))
+
+
+def test_the_gateway_refuses_an_mcp_message_holding_a_nul_before_logging_it(
+    split: Split,
+) -> None:
+    """The gateway logs each MCP message the agent sends before it serves it, so one
+    holding \\u0000 failed in the log, and the agent got the database's error message,
+    with code 0. The gateway now refuses it with invalid params, before logging it."""
+    run = split.start("G2", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    gateway = serve(GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url).app())
+
+    async def refused() -> Exception:
+        scheduler = HostScheduler(HostClock(HostClock.host_ms()))
+        connection = HttpGatewayConnection(scheduler, f"{gateway.url}/mcp", timeout_ms=5_000)
+        try:
+            await connection.list_tools()
+            arguments = {"supplier_id": "S-1", "sku": "W-100\u0000"}
+            try:
+                await connection.call_tool("get_quote", arguments, 5_000)
+            except Exception as error:
+                return error
+            raise AssertionError("the gateway served a message holding a NUL")
+        finally:
+            connection.close()
+
+    try:
+        error = asyncio.run(asyncio.wait_for(refused(), AGENT_S))
+        health = httpx.get(f"{gateway.url}/health").json()
+    finally:
+        gateway.stop()
+        simulator.stop()
+    assert isinstance(error, MCPError), repr(error)
+    assert error.code == types.INVALID_PARAMS
+    assert "NUL" in error.message
+    assert health["failures"] == 0
+    with split.connect() as conn:
+        quotes = conn.execute(
+            "SELECT count(*) FROM harness.message_log WHERE api = 'get_quote'"
+        ).fetchone()
+    assert quotes == (0,)
+
+
 def _start(
-    split: Split, run_dir: Path, *, replace: bool = False, admin: str | None = None
+    split: Split,
+    run_dir: Path,
+    *,
+    replace: bool = False,
+    admin: str | None = None,
+    scenario_id: str | None = None,
 ) -> SplitRun:
     return start_run(
         admin_dsn=split.admin if admin is None else admin,
-        scenario_path=split.scenario(),
+        scenario_path=split.scenario(scenario_id),
         config="B0",
         contract=Contract.C2,
         seed=7,
@@ -672,18 +910,61 @@ def _database_oid(split: Split) -> int | None:
     return None if row is None else int(row[0])
 
 
-def test_start_refuses_a_database_of_the_same_name_unless_asked_to_replace_it(
+def test_start_refuses_a_database_of_the_same_name_unless_it_may_replace_it(
     split: Split,
 ) -> None:
     """A database that already has the run's name is left as it was, unless the person
-    asks to replace it."""
+    asks to replace it and it is this run's. A database that is no run database stays,
+    and so does the template; a copy of the template that holds no run yet, as a start
+    that failed before recording its run leaves it, is replaced."""
     other = create_database(split.admin, split.database)
     with pytest.raises(RunDirError, match="already exists: replace it, or name another"):
         _start(split, split.root / "refused")
+    with pytest.raises(RunDirError, match="is not a run database"):
+        _start(split, split.root / "refused", replace=True)
     assert _database_oid(split) == other.oid
+    drop_database(split.admin, split.database)
+    with psycopg.connect(split.admin, autocommit=True) as conn:
+        conn.execute(
+            sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                sql.Identifier(split.database), sql.Identifier(split.template)
+            )
+        )
+    unrecorded = _database_oid(split)
     _start(split, split.root / "replaced", replace=True)
     replaced = _database_oid(split)
-    assert replaced is not None and replaced != other.oid
+    assert replaced is not None and replaced != unrecorded
+    template = Split(split.admin, split.template, split.template, split.root)
+    with pytest.raises(RunDirError, match="is the template"):
+        _start(template, split.root / "template", replace=True)
+
+
+def test_replace_drops_only_a_database_that_holds_this_run(
+    split: Split, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Scenario ids `sample-a` and `sample_a` give one default database name, and a
+    person can name one database for two runs. `start` with replace dropped whatever
+    database had the name, another run's too. It now drops one only when it holds this
+    run, and refuses in one line otherwise, keeping the database."""
+    assert default_database("sample-a.B0.C2.7") == default_database("sample_a.B0.C2.7")
+    first = _start(split, split.root / "first", scenario_id="sample-a")
+    kept = _database_oid(split)
+    capsys.readouterr()
+    argv = ["--run-dir", str(split.root / "second"), "--dsn", split.admin, "start"]
+    argv += ["--scenario", str(split.scenario("sample_a")), "--config", "B0"]
+    argv += ["--contract", "C2", "--plan", "none", "--database", split.database]
+    argv += ["--template", split.template, "--replace"]
+    assert main(argv) == 1
+    error = capsys.readouterr().err
+    assert error.count("\n") == 1, error
+    assert f"holds run {first.run_id}" in error
+    assert _database_oid(split) == kept
+    with split.connect() as conn:
+        assert conn.execute("SELECT run_id FROM harness.run").fetchall() == [(first.run_id,)]
+    assert not (split.root / "second" / "run.json").exists()
+    # The run that the database holds may replace it.
+    _start(split, split.root / "first", scenario_id="sample-a", replace=True)
+    assert _database_oid(split) not in (None, kept)
 
 
 def test_start_copies_the_run_database_under_the_database_lock(

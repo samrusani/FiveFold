@@ -32,6 +32,9 @@ these readings of when a message is sent and delivered:
   it is sent, and that a copy repeats its request's time.
 - A message whose fate nobody logged, because its receiver never took it, is dropped when
   the run ends (`fivefold.harness.split.lifecycle`).
+- A message from the agent that holds a NUL character is refused before it is logged
+  (`holds_nul`): PostgreSQL's JSONB cannot store one. The simulator answers 422, as for a
+  malformed body, and the gateway answers invalid params.
 
 What a fault does where it fires (0006):
 
@@ -80,6 +83,30 @@ WRITES = frozenset({str(ApiName.SUBMIT_PURCHASE_ORDER), str(ApiName.RESERVE_INVE
 
 Effect = Callable[[Fired, Envelope], None]
 """Applies a fault that changes the simulator's state (F6, F7) for the message it hit."""
+
+
+NUL_REFUSED = "it holds a NUL character (\\u0000), which the harness's log cannot store"
+"""Why a service refuses a message holding a NUL, before logging it."""
+
+
+def holds_nul(value: object) -> bool:
+    """Whether a JSON value holds a NUL character, in a string or a key. PostgreSQL's JSONB
+    cannot store one, so neither can the harness's log: a service refuses such a message
+    before it logs it, as it refuses a malformed one."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, Mapping):
+            for key, inner in item.items():
+                if isinstance(key, str) and "\x00" in key:
+                    return True
+                pending.append(inner)
+        elif isinstance(item, list | tuple):
+            pending.extend(item)
+    return False
 
 
 def answer_class(api: str | None, body: object) -> str | None:

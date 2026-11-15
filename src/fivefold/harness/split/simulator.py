@@ -11,7 +11,7 @@ other statuses, and are not logged:
 | --- | --- |
 | 401 | no token, or not a secret of this run; the body is the call's forbidden answer |
 | 404 | no such call |
-| 422 | a body that is not the call's request model, or a wait above `max_wait_ms` |
+| 422 | a body that is not the call's request model or holds a NUL; a wait over `max_wait_ms` |
 | 503 | the run has stopped, or, for anyone but the gateway, its agents' phase is over |
 
 A baseline's agent submits its final report the same way, to `/api/submit_final_report`:
@@ -73,7 +73,14 @@ from fivefold.harness.log import DropReason
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.sim_points import SimulatorPoints
 from fivefold.harness.split.credentials import GATEWAY, HARNESS
-from fivefold.harness.split.hops import SEQ_HEADER, WRITES, Hops, logged_message
+from fivefold.harness.split.hops import (
+    NUL_REFUSED,
+    SEQ_HEADER,
+    WRITES,
+    Hops,
+    holds_nul,
+    logged_message,
+)
 from fivefold.harness.split.rundir import SplitRun
 from fivefold.harness.split.service import OpenRun, open_run, unavailable, until_gone
 from fivefold.harness.transport import Envelope, Handler, Hop, Reply
@@ -231,6 +238,8 @@ class SimulatorService:
             body = json.loads(await request.body())
         except ValueError:
             return _invalid("the body is not JSON")
+        if holds_nul(body):
+            return _invalid(f"the body is refused: {NUL_REFUSED}")
         if serving.has_stopped():
             return unavailable("the run has stopped")
         receiver, handler = SIMULATOR, serving.api
