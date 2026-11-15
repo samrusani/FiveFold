@@ -5,10 +5,11 @@ FIVEFOLD_ADMIN_DSN ?= postgresql://postgres@127.0.0.1:5432/postgres
 export FIVEFOLD_ADMIN_DSN
 
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo clean
+.PHONY: help setup fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
+	viewer-build viewer viewer-e2e clean
 
 help: ## List the targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
 setup: ## Install the locked dependencies into .venv
 	$(UV) sync --locked
@@ -46,6 +47,15 @@ db-reset: ## Recreate the fivefold_dev database, then create roles and migrate
 
 demo: ## Run the demos of record 0006 (1, 2a, 2b, 3) for B0 and G2 from a seed (needs PostgreSQL)
 	$(UV) run python -m fivefold.harness.demo
+
+viewer-build: ## Install the viewer's locked npm packages and build its frontend (needs Node 26)
+	cd viewer && npm ci && npm run build
+
+viewer: ## Serve the viewer on http://127.0.0.1:8300 (run viewer-build first)
+	$(UV) run python -m fivefold.viewer
+
+viewer-e2e: ## Check the served viewer in Chromium and save a screenshot (needs a running viewer)
+	cd viewer && npm run e2e
 
 clean: ## Remove caches
 	rm -rf .mypy_cache .ruff_cache .pytest_cache .hypothesis

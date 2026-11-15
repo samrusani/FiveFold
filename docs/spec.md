@@ -82,6 +82,8 @@ Each component connects with its own role in the run's database:
 
 The gateway and the simulator cannot touch each other's tables, so they can never share a database transaction.
 
+The run registry (0009, 0012) is a database of its own, `fivefold_registry`, outside every run database. The harness writes its rows as `ff_registry`, which has no privilege in any run database; `ff_viewer` can only select from it, and no other role has any privilege there.
+
 ## Stack
 
 Detail: 0007.
@@ -98,7 +100,7 @@ Detail: 0007.
 | Models | Adapters: scripted (no network), live (Ollama through `langchain-ollama` now; one API provider to come, as one more entry in the live adapter's provider table), replay (cassettes). A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file, and always records a cassette |
 | Tests | pytest; Hypothesis rule-based state machines |
 | Packaging | Docker Compose; `make demo` runs the four demos of record 0006 (1, 2a, 2b and 3) for B0 and G2 with the scripted model, and needs no API key |
-| Viewer | React and TypeScript over a read-only API; tooling decided at M3 |
+| Viewer | React and TypeScript (Vite, Vitest, ESLint, npm) over a read-only Starlette API; see 0012 |
 | Formal model (v0.2) | TLA+ checked with TLC |
 
 This spec names no library functions. The decision records cite the library facts they rely on, with the versions where they were checked.
@@ -130,6 +132,7 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | harness | ModelCall | call_no, worker, asked_vt, answered_vt, model, input_tokens, output_tokens, refused, wall_ms | One row per model call once it is answered, numbered in the run in cassette order, outside the harness's event counter. Tokens come from the reply's usage and are null when it reports none, as scripted replies do. `refused` is `spend_cap` when the live adapter refused to send the call. Record 0004's token and cost metrics read it; `ff_eval` can select it |
 | eval | RunResult | run_id, verdict, evaluated, metrics, result | One row per run: the verdict over the five properties, the metrics, and the whole result as JSON, including the excused intents |
 | eval | Result | run_id, property, verdict, reason codes, metrics, failures | One row per run and property |
+| registry | Run, in `fivefold_registry` | database_name, run_id, scenario_id, config, contract, seed, created_wall_at | One row per run database, written as the run starts, for the viewer's run list (0009, 0012). Keyed by database name, since a recording and its replay share a run id. `created_wall_at` orders the list only |
 
 ## Action identity
 
@@ -373,11 +376,12 @@ fivefold/
     evaluator/       property checks, metrics, report
     agents/          LangGraph agent, model adapters, scripted policy, baselines
     recorder/        cassettes and playback
+    viewer/          the viewer's read-only API (0012)
   db/                bootstrap.sql (roles), migrations/
   tests/             unit/, pg/, property/, scenario/
   scenarios/dev/     development scenarios
   prices/            price files for live runs
-  viewer/            React and TypeScript
+  viewer/            the viewer's frontend, React and TypeScript (0012)
   tla/               formal model (v0.2)
   docker-compose.yml, Dockerfile, Makefile, pyproject.toml, uv.lock, .python-version
 ```

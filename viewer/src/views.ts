@@ -1,0 +1,151 @@
+// What each page shows, worked out from the API's data. Nothing here judges a run: the
+// verdicts come from the evaluator (record 0004). These functions only select and align.
+
+import type { Effect, FactVersion, Json, Ledger, RegistryRun, TimelineEvent } from "./types";
+
+export const HOPS = ["agent_gw", "gw_sim", "agent_sim"] as const;
+
+/** The hops a run's messages travel, in a fixed order. */
+export function hopsOf(events: TimelineEvent[]): string[] {
+  const seen = new Set(events.flatMap((e) => (e.kind === "message" ? [e.message.hop] : [])));
+  const known: string[] = HOPS.filter((hop) => seen.has(hop));
+  return [...known, ...[...seen].filter((hop) => !known.includes(hop)).sort()];
+}
+
+/** Messages on the chosen hops; every event that is not a message stays. */
+export function filterByHops(events: TimelineEvent[], hops: ReadonlySet<string>): TimelineEvent[] {
+  return events.filter((e) => e.kind !== "message" || hops.has(e.message.hop));
+}
+
+export function isAgent(component: string | null): boolean {
+  return component !== null && /^agent-\d+$/.test(component);
+}
+
+/** MCP's handshake messages: protocol, not the agent's work. */
+export function isHandshake(api: string | null): boolean {
+  return api === "initialize" || api === "tools/list" || (api?.startsWith("notifications/") ?? false);
+}
+
+/**
+ * The agent's view: what the agent sent and what was sent to it, with each message's fate,
+ * the faults that hit an agent or its hop, and its final reports. The gateway's and the
+ * simulator's own traffic, the scripted humans and the gateway's action events are not in it.
+ */
+export function agentView(events: TimelineEvent[], { handshakes = false } = {}): TimelineEvent[] {
+  return events.filter((e) => {
+    switch (e.kind) {
+      case "message":
+        return (
+          (isAgent(e.message.sender) || isAgent(e.message.receiver)) &&
+          (handshakes || !isHandshake(e.message.api))
+        );
+      case "fault":
+        return (
+          isAgent(e.fault.component) ||
+          e.fault.point.startsWith("agent.") ||
+          e.fault.point.startsWith("net.agent_")
+        );
+      case "report":
+        return true;
+      case "actor":
+      case "action_event":
+        return false;
+    }
+  });
+}
+
+export interface FieldChange {
+  field: string;
+  from: Json | undefined;
+  to: Json;
+}
+
+export type LedgerEntry =
+  | { kind: "effect"; vt: number; seq: number; effect: Effect }
+  | { kind: "fact"; vt: number; seq: number; fact: FactVersion; changes: FieldChange[] };
+
+/**
+ * The ledger as entries in time: each committed effect, and each fact version after the
+ * first with the fields that changed. The simulator's own counter orders entries within
+ * one virtual time.
+ */
+export function ledgerEntries(ledger: Ledger): LedgerEntry[] {
+  const latest = new Map<string, FactVersion>();
+  const entries: LedgerEntry[] = ledger.effects.map((effect) => ({
+    kind: "effect",
+    vt: effect.committed_vt,
+    seq: effect.commit_seq,
+    effect,
+  }));
+  for (const fact of ledger.facts) {
+    const before = latest.get(fact.key);
+    latest.set(fact.key, fact);
+    if (before === undefined) continue;
+    const fields = new Set([...Object.keys(before.value), ...Object.keys(fact.value)]);
+    const changes = [...fields]
+      .filter((field) => JSON.stringify(before.value[field]) !== JSON.stringify(fact.value[field]))
+      .sort()
+      .map((field) => ({ field, from: before.value[field], to: fact.value[field] ?? null }));
+    entries.push({ kind: "fact", vt: fact.valid_from_vt, seq: fact.valid_from_seq, fact, changes });
+  }
+  return entries.sort((a, b) => a.vt - b.vt || a.seq - b.seq || (a.kind === "effect" ? -1 : 1));
+}
+
+/** Whether a budget's committed amount is above its limit. */
+export function overdrawn(fact: FactVersion): boolean {
+  const { limit_minor: limit, committed_minor: committed } = fact.value;
+  return fact.key.startsWith("budget/") && typeof limit === "number" &&
+    typeof committed === "number" && committed > limit;
+}
+
+export interface Column<T> {
+  key: string;
+  items: T[];
+  vt: (item: T) => number;
+}
+
+export interface AlignedRow {
+  vt: number;
+  cells: unknown[][];
+}
+
+/**
+ * Rows by virtual time across columns: one row per virtual time at which any column has
+ * an item, and in each row, each column's items at that time, in their own order.
+ */
+export function alignByVt(columns: Column<unknown>[]): AlignedRow[] {
+  const times = [...new Set(columns.flatMap((c) => c.items.map((item) => c.vt(item))))].sort(
+    (a, b) => a - b,
+  );
+  return times.map((vt) => ({
+    vt,
+    cells: columns.map((c) => c.items.filter((item) => c.vt(item) === vt)),
+  }));
+}
+
+export interface Pair {
+  b0: RegistryRun;
+  g2: RegistryRun;
+}
+
+/**
+ * B0 and G2 runs of one scenario, contract level and seed: the runs a demo shows side by
+ * side (record 0006). When the G2 run's database is named as the B0 run's with g2 for b0,
+ * as the demos name theirs, that run is the only one paired; otherwise every G2 run that
+ * fits is.
+ */
+export function pairs(runs: RegistryRun[]): Pair[] {
+  const found: Pair[] = [];
+  for (const b0 of runs.filter((run) => run.config === "B0")) {
+    const fits = runs.filter(
+      (run) =>
+        run.config === "G2" &&
+        run.scenario_id === b0.scenario_id &&
+        run.contract === b0.contract &&
+        run.seed === b0.seed,
+    );
+    const twin = fits.filter((run) => run.database === b0.database.replace(/b0$/, "g2"));
+    for (const g2 of twin.length > 0 ? twin : fits) found.push({ b0, g2 });
+  }
+  return found;
+}

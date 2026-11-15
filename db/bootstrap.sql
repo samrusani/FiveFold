@@ -1,4 +1,5 @@
--- Component roles (decision record 0008).
+-- Component roles (decision record 0008), and ff_registry, which writes the run registry
+-- (0012, db/registry/). It has no privilege on the schemas of a run database.
 --
 -- Roles belong to the whole PostgreSQL server, so this script runs once per server, as a
 -- superuser, before any migration. It is safe to run again.
@@ -10,7 +11,9 @@ DO $$
 DECLARE
     role_name text;
 BEGIN
-    FOREACH role_name IN ARRAY ARRAY['ff_sim', 'ff_gw', 'ff_harness', 'ff_agent', 'ff_eval', 'ff_viewer']
+    FOREACH role_name IN ARRAY ARRAY[
+        'ff_sim', 'ff_gw', 'ff_harness', 'ff_agent', 'ff_eval', 'ff_viewer', 'ff_registry'
+    ]
     LOOP
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = role_name) THEN
             EXECUTE format('CREATE ROLE %I LOGIN', role_name);

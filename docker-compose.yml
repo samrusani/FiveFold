@@ -3,6 +3,7 @@
 #
 #   make db-up                    start PostgreSQL
 #   docker compose run --rm app   build the app image and run `make check` inside it
+#   docker compose up viewer      serve the viewer on http://127.0.0.1:8300 (0012)
 
 services:
   postgres:
@@ -25,3 +26,17 @@ services:
         condition: service_healthy
     environment:
       FIVEFOLD_ADMIN_DSN: postgresql://postgres@postgres:5432/postgres
+
+  # The read-only viewer (0012). It connects as ff_viewer, whatever user the DSN names.
+  viewer:
+    build:
+      context: .
+      dockerfile: viewer/Dockerfile
+    profiles: ["viewer"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FIVEFOLD_ADMIN_DSN: postgresql://postgres@postgres:5432/postgres
+    ports:
+      - "127.0.0.1:8300:8300"

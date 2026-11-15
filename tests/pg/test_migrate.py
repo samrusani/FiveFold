@@ -28,7 +28,7 @@ from fivefold.harness.migrations import (
 pytestmark = pytest.mark.pg
 
 DB_DIR = Path(__file__).resolve().parents[2] / "db"
-ROLES = ["ff_agent", "ff_eval", "ff_gw", "ff_harness", "ff_sim", "ff_viewer"]
+ROLES = ["ff_agent", "ff_eval", "ff_gw", "ff_harness", "ff_registry", "ff_sim", "ff_viewer"]
 
 
 def test_bootstrap_creates_the_roles_and_can_run_again(admin_dsn: str, empty_database: str) -> None:
