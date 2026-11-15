@@ -79,6 +79,7 @@ from fivefold.harness.run import CONFIGS, RunResult, RunSpec
 from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import (
     RECORDS,
+    VIEWER,
     PlaybackError,
     branch_spec,
     play,
@@ -146,7 +147,26 @@ def _branch_spec(args: argparse.Namespace, live: Live | None) -> tuple[Cassette,
     return parent, branch_spec(parent, scenario, args.at, SCRIPTED if live is None else live)
 
 
+def _holds_run(admin_dsn: str, name: str, run_id: str) -> bool:
+    """Whether the database `name` exists and holds the run `run_id`, read as `ff_viewer`.
+    A database that does not exist, or holds no run records, holds no run."""
+    try:
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=name, user=VIEWER)) as conn:
+            conn.read_only = True
+            found = conn.execute(
+                "SELECT 1 FROM harness.run WHERE run_id = %s", (run_id,)
+            ).fetchone()
+    except (psycopg.OperationalError, psycopg.errors.UndefinedTable):
+        return False
+    return found is not None
+
+
 def _branch(args: argparse.Namespace, parent: Cassette, spec: RunSpec, live: Live | None) -> int:
+    if _holds_run(args.dsn, args.database, parent.run.run_id):
+        raise ValueError(
+            f"the database {args.database} holds the parent run {parent.run.run_id};"
+            " give --database another name, so the branch does not replace its parent"
+        )
     dsn = _fresh_database(args.dsn, args.database)
     run, cassette = record(spec, dsn)
     evaluation = run.result.evaluation

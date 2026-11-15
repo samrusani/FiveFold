@@ -47,6 +47,13 @@ DATABASE_NAME: Final = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 """A database name the harness can make (`fivefold.harness.migrations`)."""
 
 CONNECT_TIMEOUT_S: Final = 5
+
+BRANCH_MARK: Final = ".branch-"
+"""The part every experimental branch's run id has: its parent's run id, `.branch-` and
+its branch point (`harness.models.branch_run_id`; the viewer may not import the harness,
+so a test checks that the two agree). The run list reads a run's own records only when
+its id has this part; a run that has it without being a branch costs one read and still
+lists no parent."""
 """Seconds to wait for the server before a request fails."""
 
 Connection = psycopg.Connection[DictRow]
@@ -120,7 +127,15 @@ class RunSource:
         row was written, which serves display only (0009). Each row also holds the run's
         parent and branch point, from its own `harness.run` (`branch_of`)."""
         rows = self._registry_rows("TRUE", ())
-        return [{**row, **self.branch_of(str(row["database"]))} for row in rows]
+        return [{**row, **self._branch_fields(row)} for row in rows]
+
+    def _branch_fields(self, row: dict[str, Any]) -> dict[str, Any]:
+        """A listed run's parent and branch point. Only a branch's run id has the
+        `.branch-` part (`harness.models.branch_run_id`), so only such a run's own
+        database is read; every other run is no branch, and costs no connection."""
+        if BRANCH_MARK not in str(row["run_id"]):
+            return {"parent_run_id": None, "branch_point": None}
+        return self.branch_of(str(row["database"]))
 
     def branch_of(self, database: str) -> dict[str, Any]:
         """`parent_run_id` and `branch_point` from the `harness.run` of the run database

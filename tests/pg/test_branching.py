@@ -526,6 +526,35 @@ def test_the_command_branches_a_run_and_play_replays_the_branch(
     assert "| G2, branch point 4 | C2 | 1/1 | 0/1 | 0/1 |" in lines
 
 
+def test_the_command_refuses_to_replace_the_database_that_holds_the_parent(
+    parents: dict[Config, Recorded],
+    admin_dsn: str,
+    cli: tuple[str, str],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A branch of a branch, into the database of the branch it comes from (as the
+    default `--database` does), would drop its own parent's records."""
+    branched, _ = cli
+    first, second = tmp_path / "first.json", tmp_path / "second.json"
+    to_db = ["--scenario", str(DEV_001), "--database", branched]
+    first_args = [str(parents["G2"].path), "--at", "4", "--cassette", str(first)]
+    first_args += ["--result", str(tmp_path / "first-result.json"), *to_db]
+    assert main(["--dsn", admin_dsn, "branch", *first_args]) == 0
+    capsys.readouterr()
+    second_args = [str(first), "--at", "5", "--cassette", str(second)]
+    second_args += ["--result", str(tmp_path / "second-result.json"), *to_db]
+    assert main(["--dsn", admin_dsn, "branch", *second_args]) == 1
+    assert capsys.readouterr().err == (
+        f"branch failed: the database {branched} holds the parent run {PARENT_ID}.branch-4;"
+        " give --database another name, so the branch does not replace its parent\n"
+    )
+    with psycopg.connect(make_conninfo(admin_dsn, dbname=branched)) as conn:
+        kept = conn.execute("SELECT run_id FROM harness.run").fetchall()
+    assert kept == [(f"{PARENT_ID}.branch-4",)], "the parent branch's records are kept"
+    assert not second.exists()
+
+
 def test_the_command_branches_to_a_live_model(
     parents: dict[Config, Recorded],
     admin_dsn: str,
