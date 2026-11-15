@@ -399,13 +399,24 @@ def test_a_request_delivered_twice_is_one_order_in_g2(split: Split, hop: str) ->
 ADMIN_TOKEN = "admin-api-token-for-the-tests"
 
 
-def test_a_humans_attestation_over_http_is_evidence(
-    split: Split, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Demo 3 in G2: at C0 the order's answer is lost and the gateway escalates. A human
-    checks the ledger and attests the order through the admin API, and the agent then
-    reports it done. The evaluator counts an attestation only from the harness's actor
-    log (0004), so the gateway logs it there, as the scripted resolver would."""
+@dataclass
+class Attested:
+    """A run whose escalation a human resolved over the admin API, attesting a commit."""
+
+    run: SplitRun
+    end: tuple[WorkerEnd, str]
+    escalation_id: str
+    first: httpx.Response
+    again: httpx.Response
+    """The same attestation, sent again."""
+
+
+def _attested_run(
+    split: Split, monkeypatch: pytest.MonkeyPatch, effect_of: Callable[[str], str]
+) -> Attested:
+    """Demo 3 in G2, over HTTP: at C0 the order's answer is lost and the gateway escalates.
+    A human attests through the admin API that the order committed, as the effect that
+    `effect_of` names for the approval the escalation cites, and the run ends."""
     monkeypatch.setenv(TOKEN_VARIABLE, ADMIN_TOKEN)
     factory: AdminFactory | None = admin_api()
     assert factory is not None
@@ -415,15 +426,6 @@ def test_a_humans_attestation_over_http_is_evidence(
     gateway = serve(
         GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url, admin=factory).app()
     )
-
-    def effect_citing(approval_id: str) -> str:
-        """The human's check of the world, out of band (0008)."""
-        with split.connect() as conn:
-            row = conn.execute(
-                "SELECT effect_id FROM sim.effect WHERE approval_id = %s", (approval_id,)
-            ).fetchone()
-        assert row is not None
-        return str(row[0])
 
     async def human() -> tuple[str, httpx.Response, httpx.Response]:
         headers = {"authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -435,7 +437,7 @@ def test_a_humans_attestation_over_http_is_evidence(
             (escalation,) = listed
             body = {
                 "resolution": "committed",
-                "effect_id": effect_citing(escalation["approval_id"]),
+                "effect_id": effect_of(escalation["approval_id"]),
                 "actor": "ops-1",
             }
             path = f"/escalations/{escalation['escalation_id']}/resolve"
@@ -464,6 +466,29 @@ def test_a_humans_attestation_over_http_is_evidence(
     finally:
         gateway.stop()
         simulator.stop()
+    return Attested(run, end, escalation_id, first, again)
+
+
+def _effect_citing(split: Split, approval_id: str) -> str:
+    """A human's check of the world, out of band (0008): the effect citing the approval."""
+    with split.connect() as conn:
+        row = conn.execute(
+            "SELECT effect_id FROM sim.effect WHERE approval_id = %s", (approval_id,)
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def test_a_humans_attestation_over_http_is_evidence(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Demo 3 in G2: a human checks the ledger and attests the order through the admin
+    API, and the agent then reports it done. The evaluator counts an attestation only from
+    the harness's actor log (0004), so the gateway logs it there, as the scripted resolver
+    would."""
+    attested = _attested_run(split, monkeypatch, partial(_effect_citing, split))
+    run, end, escalation_id = attested.run, attested.end, attested.escalation_id
+    first, again = attested.first, attested.again
     assert end[0] is WorkerEnd.FINISHED, end
     assert first.status_code == 200, first.text
     assert (first.json()["state"], first.json()["effect_id"]) == ("confirmed", "PO-0001")
@@ -486,6 +511,26 @@ def test_a_humans_attestation_over_http_is_evidence(
     assert attestations == [("resolver", "attest", escalation_id, details)]
     ((claims,),) = report
     assert [(c["status"], c["effect_ids"]) for c in claims["claims"]] == [("done", ["PO-0001"])]
+
+
+def test_score_refuses_an_attestation_of_an_effect_the_ledger_lacks_in_one_line(
+    split: Split, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The admin path takes the human's word: the real world offers the gateway no ground
+    truth to check it against. The evaluator refuses records whose attestation names an
+    effect the ledger lacks (`RecordsError`), and `score` says so as it says every other
+    refusal: in one line, with exit status 1."""
+    attested = _attested_run(split, monkeypatch, lambda _: "PO-0042")
+    assert attested.end[0] is WorkerEnd.FINISHED, attested.end
+    assert attested.first.status_code == 200, attested.first.text
+    assert attested.first.json()["effect_id"] == "PO-0042"
+    capsys.readouterr()
+    common = ["--run-dir", str(attested.run.directory), "--dsn", split.admin]
+    assert main([*common, "score"]) == 1
+    error = capsys.readouterr().err
+    assert error.count("\n") == 1, error
+    assert "the evaluator cannot score the run" in error
+    assert "names effect PO-0042, which the ledger lacks" in error
 
 
 # Trust boundaries and the run's end --------------------------------------------------------------

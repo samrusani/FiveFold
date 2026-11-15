@@ -29,7 +29,9 @@ server. The services' addresses come from `--gateway-url` and `--simulator-url`,
 `FIVEFOLD_GATEWAY_URL` and `FIVEFOLD_SIMULATOR_URL`.
 
 A refused input, such as a plan the split topology cannot run, ends the command with one
-line on standard error and exit status 1.
+line on standard error and exit status 1. So do records the evaluator cannot score, such
+as an attestation of an effect the ledger lacks: the admin path takes a human's word, as
+it must, since the real world offers the gateway no ground truth to check it against.
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ import yaml
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import ScenarioError
-from fivefold.evaluator import result_json
+from fivefold.evaluator import RecordsError, result_json
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, MigrationError
 from fivefold.harness.split.credentials import AGENT
 from fivefold.harness.split.gateway import DEFAULT_ALLOWED_HOSTS, GatewayService, admin_api
@@ -168,6 +170,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         psycopg.Error,
     ) as error:
         print(f"split: {error}", file=sys.stderr)
+        return 1
+    except RecordsError as error:
+        print(f"split: the evaluator cannot score the run: {error}", file=sys.stderr)
         return 1
 
 
