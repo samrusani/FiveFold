@@ -215,7 +215,7 @@ Tools the agent sees over MCP. 0008 lists the baseline tool surface.
 | submit_final_report | Report | Accepted, or, in G2, refused when a claim contradicts the gateway's records |
 
 - Write states the agent can see: `confirmed`, `rejected`, `failed`, `pending_approval` and `outcome_unknown`, plus `proposed`, `authorized` or `dispatched` when the tool's wait ends first. 0003 gives the exact result shapes and refusal reasons.
-- The admin API lists actions, grants and events, and resolves escalations. Approvals happen in the approvals service.
+- The admin API lists actions, grants, action events and open escalations, and resolves an escalation when a human attests that the action committed, naming the effect, or that it did not. Approvals happen in the approvals service.
 
 The final report (0004):
 
