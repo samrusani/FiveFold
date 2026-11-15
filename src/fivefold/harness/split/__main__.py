@@ -2,12 +2,27 @@
 
     python -m fivefold.harness.split start --scenario PATH --config G2 --contract C2 --seed 7
     python -m fivefold.harness.split serve simulator
+    python -m fivefold.harness.split serve gateway
     python -m fivefold.harness.split end
     python -m fivefold.harness.split score --out result.json
 
 `start` makes a run and its directory (`fivefold.harness.split.lifecycle`), and prints what
-the agent needs. `serve` runs the run's simulator until it is stopped. `end` ends the
-run after the drain window, and `score` scores it with the evaluator.
+the agent needs. `serve` runs one of the run's services until it is stopped. `end` ends the
+run after the drain window, and `score` scores it with the evaluator. Start each service
+once per run: a service started again mid-run would fire its faults again from their first
+occurrence (`fivefold.harness.split.service`). `serve` refuses a run that has ended.
+
+In G1 and G2 the agent must run in a container on the Docker network `fivefold-agent`,
+which joins the gateway and the agent only, and reach the gateway at
+`http://gateway:8000/mcp`. Record 0008's boundary holds only there: an agent on the host
+can reach the simulator, PostgreSQL and the run's directory, which holds the gateway's and
+the harness's tokens. A B0 agent runs on the host, and reaches the simulator's API with
+its own token.
+
+The gateway serves its admin API at `/admin` when `FIVEFOLD_ADMIN_API_TOKEN` holds the
+API's bearer token: a human resolves escalations there. The admin API shares the MCP
+endpoint's listener, so the agent's network reaches it too, and the token is its only
+guard: make it long and random.
 
 Every command reads the run's directory from `--run-dir`, or `FIVEFOLD_RUN_DIR`, or
 `split-run`. The database server comes from `FIVEFOLD_ADMIN_DSN`, a superuser connection
@@ -16,7 +31,9 @@ server. The services' addresses come from `--gateway-url` and `--simulator-url`,
 `FIVEFOLD_GATEWAY_URL` and `FIVEFOLD_SIMULATOR_URL`.
 
 A refused input, such as a plan the split topology cannot run, ends the command with one
-line on standard error and exit status 1.
+line on standard error and exit status 1. So do records the evaluator cannot score, such
+as an attestation of an effect the ledger lacks: the admin path takes a human's word, as
+it must, since the real world offers the gateway no ground truth to check it against.
 """
 
 from __future__ import annotations
@@ -35,9 +52,10 @@ import yaml
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import ScenarioError
-from fivefold.evaluator import result_json
+from fivefold.evaluator import RecordsError, result_json
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, MigrationError
 from fivefold.harness.split.credentials import AGENT
+from fivefold.harness.split.gateway import DEFAULT_ALLOWED_HOSTS, GatewayService, admin_api
 from fivefold.harness.split.lifecycle import (
     DEFAULT_MODEL,
     DEFAULT_TEMPLATE,
@@ -45,14 +63,21 @@ from fivefold.harness.split.lifecycle import (
     score_run,
     start_run,
 )
-from fivefold.harness.split.rundir import Config, RunDirError, read_run
-from fivefold.harness.split.service import serve
+from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
+from fivefold.harness.split.service import refuse_ended, serve
 from fivefold.harness.split.simulator import SimulatorService
 
 DEFAULT_RUN_DIR = "split-run"
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:8000"
 DEFAULT_SIMULATOR_URL = "http://127.0.0.1:8100"
+GATEWAY_PORT = 8000
 SIMULATOR_PORT = 8100
+
+AGENT_NETWORK = "fivefold-agent"
+"""The Compose network that joins the gateway and a G1 or G2 agent, and nothing else."""
+
+AGENT_GATEWAY_URL = "http://gateway:8000/mcp"
+"""The gateway's MCP endpoint, as an agent on `AGENT_NETWORK` reaches it."""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -101,9 +126,20 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     service = commands.add_parser("serve", help="run one of the run's services")
-    service.add_argument("service", choices=["simulator"])
+    service.add_argument("service", choices=["simulator", "gateway"])
     service.add_argument("--host", default="127.0.0.1", help="the address to listen on")
-    service.add_argument("--port", type=int, help="the port (default: 8100)")
+    service.add_argument("--port", type=int, help="the port (gateway 8000, simulator 8100)")
+    service.add_argument(
+        "--simulator-url",
+        default=os.environ.get("FIVEFOLD_SIMULATOR_URL", DEFAULT_SIMULATOR_URL),
+        help="where the gateway reaches the simulator",
+    )
+    service.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help="another Host header the gateway's MCP endpoint accepts, such as name:*",
+    )
 
     end = commands.add_parser("end", help="end the run after the drain window")
     end.add_argument(
@@ -137,6 +173,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as error:
         print(f"split: {error}", file=sys.stderr)
         return 1
+    except RecordsError as error:
+        print(f"split: the evaluator cannot score the run: {error}", file=sys.stderr)
+        return 1
 
 
 def _command(args: argparse.Namespace) -> int:
@@ -157,19 +196,25 @@ def _command(args: argparse.Namespace) -> int:
             replace=args.replace,
         )
         print(f"started {run.run_id} in database {run.database}; its directory is {run_dir}")
-        if run.has_gateway:
-            print("next: serve the simulator and the gateway, then point your agent at the")
-            print(f"gateway's MCP endpoint, {DEFAULT_GATEWAY_URL}/mcp. In {run.config} your agent")
-            print("holds no simulator credential (0008).")
-        else:
-            print("next: serve the simulator, then point your agent at its API,")
-            print(f"{DEFAULT_SIMULATOR_URL}/api/CALL, with the header")
-            print(f"Authorization: Bearer {run.secret(AGENT)}")
+        for line in _next_steps(run):
+            print(line)
         return 0
     run = read_run(run_dir)
     if args.command == "serve":
-        app: Any = SimulatorService(run, base_dsn=dsn).app()
-        port = SIMULATOR_PORT if args.port is None else args.port
+        refuse_ended(run, dsn)
+        if args.service == "simulator":
+            app: Any = SimulatorService(run, base_dsn=dsn).app()
+            port = SIMULATOR_PORT if args.port is None else args.port
+        else:
+            hosts = (*DEFAULT_ALLOWED_HOSTS, *args.allowed_host)
+            app = GatewayService(
+                run,
+                base_dsn=dsn,
+                simulator_url=args.simulator_url,
+                allowed_hosts=hosts,
+                admin=admin_api(),
+            ).app()
+            port = GATEWAY_PORT if args.port is None else args.port
         serve(app, host=args.host, port=port)
         return 0
     if args.command == "end":
@@ -190,6 +235,24 @@ def _command(args: argparse.Namespace) -> int:
     if args.out is not None:
         args.out.write_text(result_json(evaluation), encoding="utf-8")
     return 0
+
+
+def _next_steps(run: SplitRun) -> list[str]:
+    """What `start` tells the person to do next, and where their agent goes (0008)."""
+    if not run.has_gateway:
+        return [
+            "next: serve the simulator, then point your agent at its API,",
+            f"{DEFAULT_SIMULATOR_URL}/api/CALL, with the header",
+            f"Authorization: Bearer {run.secret(AGENT)}",
+        ]
+    return [
+        "next: serve the simulator and the gateway, then run your agent in a container on",
+        f"the Docker network {AGENT_NETWORK}, pointed at the gateway's MCP endpoint,",
+        f"{AGENT_GATEWAY_URL}. That network joins the gateway and your agent only, and in",
+        f"{run.config} your agent holds no simulator credential (0008). Record 0008's boundary",
+        "holds only there: an agent on this host can reach the simulator, PostgreSQL and",
+        "this run's directory, which holds the gateway's and the harness's tokens.",
+    ]
 
 
 def _plan(argument: str | None) -> list[dict[str, Any]] | None:

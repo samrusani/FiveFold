@@ -29,6 +29,7 @@ Checked in httpx 0.28.1: `AsyncClient(timeout=)` and `post(url, headers=)`, and
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -89,11 +90,27 @@ CONTROL_TIMEOUT_S = 30.0
 """How long `end` waits for a service to answer a control request, in wall-clock seconds."""
 
 
+MAX_NAME_BYTES = 63
+"""PostgreSQL keeps the first 63 bytes of a name (NAMEDATALEN - 1)."""
+
+
 def default_database(run_id: str) -> str:
     """A run database's name made from its run id: `fivefold_split_` and the id, in
-    lowercase letters, digits and underscores, at most 63 bytes."""
+    lowercase letters, digits and underscores.
+
+    A name longer than 63 bytes keeps its start, then an underscore and the first 8 hex
+    digits of the run id's SHA-256, as the tests' database names do (`tests/conftest.py`).
+    Cut short without the hash, the names of runs that differ only at the end, such as two
+    seeds of a scenario with a long id, were one, and `start` with replace dropped the
+    other run's database.
+    """
     slug = re.sub(r"[^a-z0-9]+", "_", run_id.lower()).strip("_")
-    return f"fivefold_split_{slug}"[:63]
+    name = f"fivefold_split_{slug}"
+    if len(name.encode()) <= MAX_NAME_BYTES:
+        return name
+    digest = hashlib.sha256(run_id.encode()).hexdigest()[:8]
+    head = name[: MAX_NAME_BYTES - len(digest) - 1].rstrip("_")
+    return f"{head}_{digest}"
 
 
 def run_id_of(scenario: Scenario, config: Config, contract: Contract, seed: int) -> str:

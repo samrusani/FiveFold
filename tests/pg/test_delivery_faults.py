@@ -463,3 +463,27 @@ def test_f10_stale_beyond_the_lag_hides_the_order_so_failed_is_wrong_and_the_rep
         for failure in result.failures
     ]
     assert reasons == [(5, "not_done_but_committed")]
+
+
+SENT_TIMES: LiteralString = (
+    "SELECT a.attempt_id, a.sent_vt, m.sent_vt FROM gw.attempt a"
+    " JOIN harness.message_log m ON m.body->>'client_ref' = a.attempt_id"
+    " WHERE m.hop = 'gw_sim' AND m.kind = 'request' AND m.copy_of IS NULL"
+    " ORDER BY a.attempt_id"
+)
+
+
+@pytest.mark.parametrize("contract", [Contract.C1, Contract.C2])
+def test_the_harness_logs_each_gateway_write_at_its_attempts_send_time(
+    run_database: Callable[[str], str], contract: Contract
+) -> None:
+    """The gateway's settle bounds start from its attempt's send time, and the evaluator's
+    from the harness's log of the request (0004, 0005), so the two must be one number. In
+    the inproc topology the request goes out in the step that records the attempt; the
+    split topology's link logs it at the attempt's time (`fivefold.harness.split.hops`).
+    F2 makes G2 probe at C1 and retry at C2."""
+    dsn = run_database(f"sent_times_{str(contract).lower()}")
+    run(dsn, "F2", None, contract, "G2")
+    times = rows(dsn, SENT_TIMES)
+    assert len(times) == (1 if contract is Contract.C1 else 2), times
+    assert all(attempt == logged for _, attempt, logged in times), times

@@ -2,25 +2,40 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
 import stat
 from pathlib import Path
 from typing import Any
 
+import httpx
+import mcp_types.jsonrpc as jsonrpc
 import pytest
 import yaml
+from mcp.server import streamable_http as mcp_streamable_http
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import scenario_from_data
 from fivefold.faults.catalog import Action
 from fivefold.faults.plan import FaultInjector, Fired, parse_plan
+from fivefold.gateway.records import Action as GatewayAction
+from fivefold.gateway.records import Answer, Attempt, CheckRecord
+from fivefold.gateway.sim_client import SimClient
+from fivefold.gateway.state_machine import ActionState, CheckKind, Reason
+from fivefold.harness.clock import HostClock
 from fivefold.harness.log import MemoryHarnessLog
-from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.migrations import check_database_name
+from fivefold.harness.scheduler import HostScheduler, Scheduler
+from fivefold.harness.split import SERVICE_STOPPED
+from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
+from fivefold.harness.split.gateway import SimulatorLink
 from fivefold.harness.split.hops import Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
+    Config,
     RunDirError,
     SplitRun,
     clear_run,
@@ -101,6 +116,20 @@ def test_default_database_names_are_safe_and_short() -> None:
     name = default_database("dev-001-single-po.G2.C2.7")
     assert name == "fivefold_split_dev_001_single_po_g2_c2_7"
     assert len(default_database("x" * 200)) == 63
+
+
+def test_a_long_default_database_name_keeps_its_start_and_a_hash_of_the_run_id() -> None:
+    """PostgreSQL keeps 63 bytes of a name. Cut short there, the names of seeds 7 and 8 of
+    a scenario with a 42-character id were one, and `start` with replace for one dropped
+    the other's database."""
+    scenario = "s" * 42
+    seven, eight = (default_database(f"{scenario}.G2.C2.{seed}") for seed in (7, 8))
+    assert seven != eight
+    for name in (seven, eight):
+        assert len(name.encode()) == 63
+        assert re.fullmatch(rf"fivefold_split_{'s' * 39}_[0-9a-f]{{8}}", name), name
+        check_database_name(name)
+    assert default_database(f"{scenario}.G2.C2.7") == seven
 
 
 # Faults the split topology runs -----------------------------------------------------------------
@@ -215,6 +244,59 @@ def test_the_command_line_refuses_such_a_plan_in_one_line(
     assert "cannot run F1 at gw.dispatch.after_record" in error
 
 
+def _started(
+    tmp_path: Path,
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[str, dict[str, str]]:
+    """What `start` prints for a run in `config`, made here without a database; and the
+    run's secrets."""
+    secrets = issue()
+    run = SplitRun(
+        tmp_path / "run",
+        f"dev-001-single-po.{config}.C2.7",
+        "fivefold_split_x",
+        config,
+        Contract.C2,
+        7,
+    )
+    write_run(run, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
+
+    def made(**_: object) -> SplitRun:
+        return run
+
+    monkeypatch.setattr(split_main, "start_run", made)
+    argv = ["--run-dir", str(run.directory), "--dsn", UNREACHABLE_DSN, "start"]
+    argv += ["--scenario", "unused.yaml", "--config", config, "--contract", "C2"]
+    assert main(argv) == 0
+    return " ".join(capsys.readouterr().out.split()), secrets
+
+
+@pytest.mark.parametrize("config", ["G1", "G2"])
+def test_start_sends_a_g_mode_agent_to_a_container_on_the_agents_network(
+    tmp_path: Path,
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Record 0008's boundary holds only for an agent in a container on `fivefold-agent`:
+    on the host, an agent can reach the simulator, PostgreSQL and the run's directory."""
+    out, _ = _started(tmp_path, config, monkeypatch, capsys)
+    assert "run your agent in a container on the Docker network fivefold-agent" in out
+    assert "pointed at the gateway's MCP endpoint, http://gateway:8000/mcp." in out
+    assert "127.0.0.1" not in out
+    assert "an agent on this host can reach the simulator, PostgreSQL and this run's" in out
+
+
+def test_start_points_a_b0_agent_at_the_simulators_api_on_the_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, secrets = _started(tmp_path, "B0", monkeypatch, capsys)
+    assert "point your agent at its API, http://127.0.0.1:8100/api/CALL" in out
+    assert f"Authorization: Bearer {secrets[AGENT]}" in out
+
+
 # The harness's view of a service's traffic -----------------------------------------------------
 
 
@@ -286,3 +368,114 @@ def test_only_a_writes_answer_has_an_answer_class() -> None:
     assert answer_class("reserve_inventory", {"answer": "in_progress"}) == "in_progress"
     assert answer_class("get_quote", {"answer": "fact"}) is None
     assert answer_class("submit_purchase_order", ["not", "a", "body"]) is None
+
+
+# The gateway's writes to the simulator -----------------------------------------------------------
+
+ORDER_ARGS: dict[str, str | int] = {
+    "supplier_id": "S-1",
+    "sku": "W-100",
+    "quantity": 100,
+    "unit_price_minor": 540,
+    "currency": "USD",
+    "cost_center": "CC-OPS",
+}
+
+
+def _dispatched_order(sent_vt: int) -> tuple[GatewayAction, Attempt]:
+    """A G2 order at C2, whose first attempt the gateway recorded at `sent_vt`."""
+    action = GatewayAction(
+        action_id="A-0001",
+        task_id="T-1",
+        intent_id="REQ-1",
+        operation="submit_purchase_order",
+        target="S-1",
+        args=ORDER_ARGS,
+        action_key="REQ-1",
+        identity=True,
+        contract=Contract.C2,
+        basis={"quote/S-1/W-100": 1, "budget/CC-OPS": 1},
+        state=ActionState.DISPATCHED,
+        grant_id="G-0001",
+        idempotency_key="A-0001",
+        effect_id=None,
+        created_vt=0,
+        updated_vt=sent_vt,
+    )
+    check = CheckRecord(
+        kind=CheckKind.EXEMPT, approval=None, basis=None, seen_seq=1, check_vt=sent_vt
+    )
+    attempt = Attempt(
+        attempt_id="A-0001/1",
+        action_id="A-0001",
+        attempt_no=1,
+        idempotency_key="A-0001",
+        grant_id="G-0001",
+        check=check,
+        sent_vt=sent_vt,
+        answer_class=None,
+        answer_ref=None,
+        answered_vt=None,
+    )
+    return action, attempt
+
+
+def test_the_gateway_logs_a_write_at_its_attempts_send_time() -> None:
+    """The gateway records a write's attempt, with its send time, in a transaction before
+    it sends the write (0003); on the host's clock milliseconds pass before the link logs
+    the request. The log takes the attempt's time, so the gateway's settle bounds and the
+    evaluator's start from one number (0004, 0005)."""
+    log = MemoryHarnessLog()
+    scheduler = HostScheduler(HostClock(HostClock.host_ms() - 1_000))
+    action, attempt = _dispatched_order(sent_vt=scheduler.now - 7)
+
+    def simulator(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    async def send() -> Answer:
+        transport = httpx.MockTransport(simulator)
+        async with httpx.AsyncClient(base_url="http://simulator", transport=transport) as client:
+            hops = Hops(scheduler, log, FaultInjector())
+            link = SimulatorLink(scheduler, hops, client, secret="the-gateway's-secret")
+            return await SimClient(link, timeout_ms=800).send(action, attempt, "APR-0001")
+
+    answer = asyncio.run(send())
+    (request,) = log.messages
+    assert isinstance(request.body, dict)
+    assert (request.hop, request.api, request.body["client_ref"]) == (
+        "gw_sim",
+        "submit_purchase_order",
+        "A-0001/1",
+    )
+    assert request.sent_vt == attempt.sent_vt
+    assert answer.reason is Reason.SERVER_ERROR
+
+
+def test_a_message_cannot_be_logged_as_sent_later_than_now() -> None:
+    hops, _ = _hops([], [])
+    with pytest.raises(ValueError, match="cannot be sent later"):
+        hops.sent(
+            hop="gw_sim",
+            kind="request",
+            sender="gateway",
+            receiver="simulator",
+            api="submit_purchase_order",
+            body={},
+            sent_vt=1,
+        )
+
+
+# The code that tells the agent its run is over ---------------------------------------------------
+
+
+def test_the_stopped_runs_error_code_is_none_the_mcp_sdk_uses() -> None:
+    """The gateway answered an agent once the agents' phase was over with -32000, which
+    mcp 2.3.0 calls `CONNECTION_CLOSED`, so the scripted agent read the run's end as a
+    closed connection and reconnected. Its code is now one the SDK does not use."""
+    defined = {
+        value for name, value in vars(jsonrpc).items() if name.isupper() and isinstance(value, int)
+    }
+    defined.add(mcp_streamable_http.REQUEST_CANCELLED)
+    assert jsonrpc.CONNECTION_CLOSED in defined, "the scan finds the SDK's codes"
+    assert SERVICE_STOPPED not in defined
+    assert -32019 <= SERVICE_STOPPED <= -32000, "an implementation-defined server error"

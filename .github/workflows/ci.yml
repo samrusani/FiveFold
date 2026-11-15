@@ -73,8 +73,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Validate the Compose file
-        run: docker compose config --quiet
+      - name: Validate the Compose file, with each profile
+        run: |
+          docker compose config --quiet
+          docker compose --profile app config --quiet
+          docker compose --profile viewer config --quiet
+          docker compose --profile split config --quiet
       - name: Build the app image
         run: docker build .
       - name: Build the viewer image

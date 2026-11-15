@@ -195,7 +195,7 @@ class Outbox:
         else:
             kind = "answer"
             correlation, api, intent_id = self._theirs.sent.get(message_id, (None, None, None))
-            answer_class = _answer_class(body)
+            answer_class = answer_label(body)
         wanted = self._link.wanted(self._sender, kind)
         if kind == "answer":
             answered = self._theirs.answering(message_id)
@@ -258,7 +258,7 @@ def _copy_id(seq: int) -> str:
     return f"copy-{seq}"
 
 
-def _answer_class(body: dict[str, object]) -> str | None:
+def answer_label(body: dict[str, object]) -> str | None:
     """A short label for an answer: `error`, or the tool result's `result` field."""
     if "error" in body:
         return "error"
