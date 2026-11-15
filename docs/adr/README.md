@@ -27,7 +27,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | [0010](0010-state-machine-corrections.md) | Corrections found while implementing 0003: four changes (T5 reasons, two dead reasons, answers after a crash, predictable expiry), reports and run closing, and eight readings | Accepted |
 | [0011](0011-policy-after-run-closed.md) | The scripted policy's next step after an action is rejected with `run_closed` (a row missing from 0008's table) | Accepted |
 | [0012](0012-viewer-tooling.md) | Viewer v1 tooling: a read-only Starlette API, a run registry, and a React and TypeScript frontend built with Vite | Proposed |
-| [0013](0013-f10-cells.md) | F10's delayed and stale-beyond-L cells: the delayed cell's `count`, and where the stale state is taken | Proposed |
+| [0013](0013-f10-cells.md) | F10's delayed and stale-beyond-L cells: the delayed cell's `count`, and where the stale state is taken | Accepted |
 | [0014](0014-recovery-latency.md) | Recovery latency: per affected intent, from the first fault that touched it until the stack's evidence settles the outcome found at the end; unresolved intents counted apart | Proposed |
 
 ## Suggested reading order

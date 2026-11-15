@@ -208,6 +208,7 @@ def cell_run(name: str) -> tuple[RunSpec, Scenario]:
         ("F5-in_contract-C2-G2", 0),
         ("F5-beyond_deadline-C1-G2", 0),
         ("F10-stale_within_lag-C1-G2", 0),
+        ("F10-stale_beyond_lag-C1-G2", 0),
     ],
 )
 def test_copies_and_the_simulator_s_faults_play_back_byte_for_byte(
@@ -216,7 +217,8 @@ def test_copies_and_the_simulator_s_faults_play_back_byte_for_byte(
     """F4's second delivery is a message of its own, a copy, and F5 and F10 act at the
     simulator's points: a playback reproduces them with everything else. F4's copy delay
     is drawn from the seed, and the cassette's plan keeps the value drawn. The F10 cell
-    runs dev-001 with a status lag of 3,000 ms, so its scenario is not the file's."""
+    within the lag runs dev-001 with a status lag of 3,000 ms, so its scenario is not the
+    file's. The F10 cell beyond the lag fires where the order reaches the simulator (0013)."""
     spec, scenario = cell_run(name)
     tag = name.lower().replace("-", "_")
     original, replay = run_database(f"{tag}_rec"), run_database(f"{tag}_play")

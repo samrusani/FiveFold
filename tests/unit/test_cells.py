@@ -7,6 +7,7 @@ import pytest
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
+from fivefold.faults.catalog import BUILT, FaultId
 from fivefold.faults.plan import check_configuration, check_run, parse_plan
 from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
@@ -152,17 +153,49 @@ def test_an_f5_cell_names_one_of_its_variants() -> None:
 
 # F10 ---------------------------------------------------------------------------------------
 
+STATUS_ANSWER = {
+    "point": "sim.status.answer",
+    "match": {"api": "get_order_status"},
+    "occurrence": 1,
+}
+ORDER_ARRIVES = {
+    "point": "sim.write.received",
+    "match": {"api": "submit_purchase_order"},
+    "occurrence": 1,
+}
 
-@pytest.mark.parametrize("variant", ["delayed", "stale_within_lag", "stale_beyond_lag"])
-def test_f10_cells_pair_it_with_f2_so_g2_probes(variant: str) -> None:
-    """0006, notes: F10 needs a status probe, so its cells pair it with F2."""
+
+@pytest.mark.parametrize(
+    ("variant", "at", "params"),
+    [
+        ("delayed", STATUS_ANSWER, {"count": 5}),
+        ("stale_within_lag", STATUS_ANSWER, None),
+        ("stale_beyond_lag", ORDER_ARRIVES, None),
+    ],
+)
+def test_f10_cells_pair_it_with_f2_so_g2_probes(
+    variant: str, at: dict[str, object], params: dict[str, int] | None
+) -> None:
+    """0006, notes: F10 needs a status probe, so its cells pair it with F2. Record 0013: the
+    delayed cells set `count` to 5, and stale beyond L fires as the order reaches the
+    simulator, so the state it freezes does not list the order."""
     lost, status = cell_plan(cell("F10", variant, "G2", Contract.C1))
     assert lost == cell_plan(cell("F2", None, "G2", Contract.C1))[0]
-    assert status == {
-        "fault": "F10",
-        "variant": variant,
-        "at": {"point": "sim.status.answer", "match": {"api": "get_order_status"}, "occurrence": 1},
-    }
+    expected: dict[str, object] = {"fault": "F10", "variant": variant, "at": at}
+    if params is not None:
+        expected["params"] = params
+    assert status == expected
+
+
+def test_the_delayed_cells_count_stays_below_max_probes_and_the_default_stays_20() -> None:
+    """0013: with `count` at C1's `max_probes`, every probe goes unanswered and G2
+    escalates. The delayed cells set 5; stale beyond L keeps the catalog's 20, so its
+    answers stay stale until an empty one is past the settle time."""
+    scenario = load_scenario_file(DEV_001)
+    delayed = parse_plan(cell_plan(cell("F10", "delayed", "G2", Contract.C1)))[1]
+    stale = parse_plan(cell_plan(cell("F10", "stale_beyond_lag", "G2", Contract.C1)))[1]
+    assert delayed.param("count") == 5 < scenario.params.max_probes == 20
+    assert stale.param("count") == BUILT[FaultId.F10].params["count"] == 20
 
 
 @pytest.mark.parametrize(
@@ -170,7 +203,9 @@ def test_f10_cells_pair_it_with_f2_so_g2_probes(variant: str) -> None:
     [
         ("stale", "G2", "no variant"),
         ("delayed", "B0", "never calls the status tool"),
+        ("stale_beyond_lag", "B0", "never calls the status tool"),
         ("stale_within_lag", "G1", "never asks for the destination's status"),
+        ("stale_beyond_lag", "G1", "never asks for the destination's status"),
     ],
 )
 def test_an_f10_cell_needs_a_variant_and_a_status_probe(
@@ -186,5 +221,10 @@ def test_only_the_stale_within_lag_cells_change_the_scenario() -> None:
     within = cell_scenario(cell("F10", "stale_within_lag", "G2", Contract.C1), scenario)
     assert within.params.status_lag_ms == 3_000
     assert within.model_dump(exclude={"params"}) == scenario.model_dump(exclude={"params"})
-    for other in (cell("F10", "delayed", "G2", Contract.C1), cell("F2", None, "G2")):
+    others = (
+        cell("F10", "delayed", "G2", Contract.C1),
+        cell("F10", "stale_beyond_lag", "G2", Contract.C1),
+        cell("F2", None, "G2"),
+    )
+    for other in others:
         assert cell_scenario(other, scenario) == scenario

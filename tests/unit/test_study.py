@@ -84,7 +84,11 @@ def test_a_fault_a_variant_or_a_cell_names_its_cells() -> None:
         "F11-after_tool_call-C3-G2",
     ]
     assert names(["F12-agent_sim-C1-B0", "F2-C2-G2"]) == ["F2-C2-G2", "F12-agent_sim-C1-B0"]
-    assert names(["F10"]) == ["F10-stale_within_lag-C1-G2"], "F10 has a G2 cell only"
+    assert names(["F10"]) == [
+        "F10-delayed-C1-G2",
+        "F10-stale_beyond_lag-C1-G2",
+        "F10-stale_within_lag-C1-G2",
+    ], "F10 has G2 cells only"
 
 
 def test_cells_come_in_one_order_whatever_the_order_they_are_named_in() -> None:
@@ -101,6 +105,8 @@ def test_cells_come_in_one_order_whatever_the_order_they_are_named_in() -> None:
         "F2-C1-B0",
         "F2-C1-G1",
         "F2-C1-G2",
+        "F10-delayed-C1-G2",
+        "F10-stale_beyond_lag-C1-G2",
         "F10-stale_within_lag-C1-G2",
     ]
     assert names(picked, contracts=(Contract.C1,)) == expected
@@ -167,7 +173,9 @@ def test_every_episode_of_every_cell_has_its_own_name() -> None:
 
 def test_an_episode_runs_its_cell_s_plan_and_scenario() -> None:
     (lost,) = select_cells(EXPECTED.cells, ["F2-C2-G2"], configs=["G2"], contracts=[Contract.C2])
-    (stale,) = select_cells(EXPECTED.cells, ["F10"], configs=["G2"], contracts=[Contract.C1])
+    (stale,) = select_cells(
+        EXPECTED.cells, ["F10-stale_within_lag"], configs=["G2"], contracts=[Contract.C1]
+    )
     plain = NoFault(Contract.C0, "B0")
     spec = Episode(1, plain, 9).spec(SCENARIO)
     assert (spec.config, spec.contract, spec.seed, spec.plan) == ("B0", Contract.C0, 9, [])

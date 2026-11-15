@@ -5,7 +5,7 @@ database, and the evaluator scores it. The test asserts the verdict and the fail
 properties, over all five properties. Record 0006 fixes some outcomes before any run, and
 the committed cells must agree with them. It fixes no G1 outcome: G1's cells come from
 G1's first run, and G1, which fires each fault where G2 does, has a cell for each of G2's
-but F10's, which never fires in G1.
+but F10's, which has no status answer to change in G1.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import pytest
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
+from fivefold.faults.catalog import BUILT, FaultId
 from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import InprocRun, RunSpec
@@ -53,7 +54,7 @@ B0_PASSES = frozenset({"F1", "F10", "F12"})
 
 NOT_IN_G1: dict[str, str] = {
     "F10": (
-        "F10 fires at a status answer, and G1 never asks for one: its gateway never probes,"
+        "F10 acts on status answers, and G1 never asks for one: its gateway never probes,"
         " and its agent has no status tool (0008), as in B0"
     ),
 }
@@ -83,6 +84,15 @@ def test_each_fault_but_f1_f10_and_f12_has_a_cell_where_b0_fails_and_g2_passes()
         b0_fails = {where(c) for c in cells if c.config == "B0" and c.verdict == "fail"}
         g2_passes = {where(c) for c in cells if c.config == "G2" and c.verdict == "pass"}
         assert b0_fails & g2_passes, fault
+
+
+def test_f10_has_a_cell_for_each_variant_at_c1_in_g2() -> None:
+    """0006: F10 applies at C1, and only G2 asks for status answers there (B0's scripted
+    agent never calls the status tool, and G1 never asks). Record 0013 settled the
+    delayed and stale-beyond-L cells, so each variant the catalog builds has its cell."""
+    cells = sorted((c.variant, c.contract, c.config) for c in EXPECTED.cells if c.fault == "F10")
+    variants = sorted(BUILT[FaultId.F10].variants)
+    assert cells == [(variant, Contract.C1, "G2") for variant in variants]
 
 
 def test_g1_has_a_cell_for_every_cell_of_g2() -> None:

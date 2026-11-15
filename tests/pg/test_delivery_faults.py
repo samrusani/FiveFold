@@ -5,7 +5,9 @@
 - F5 holds the order where it reaches the simulator and commits it later: 5,000 ms in
   contract, 20,000 ms beyond the deadline.
 - F10 delays the status answers past T, or makes them stale, at C1, with F2 on the
-  order's committed answer so that G2 probes.
+  order's committed answer so that G2 probes. The delayed cells delay five answers, and
+  stale beyond the lag freezes the state from just before the order reached the simulator
+  (0013).
 
 The assertions are ground truth: the simulator's ledger and writes, the harness's
 message fates and fault log, the gateway's events, and the report. Verdicts are in
@@ -321,25 +323,31 @@ STATUS_ANSWERS: LiteralString = (
 )
 
 
-def test_f10_delayed_every_probe_goes_unanswered_and_g2_escalates(
+def test_f10_delayed_five_probes_go_unanswered_and_the_sixth_confirms_the_order(
     run_database: Callable[[str], str],
 ) -> None:
-    """`count` 20 equals `max_probes` 20, so G2 never hears an answer, escalates, and the
-    report says unknown. Record 0006 expects this cell to pass; it is not in
-    `expected.yaml` until record 0013 (Proposed) is decided."""
+    """The cell sets `count` to 5, below `max_probes` (0013). The first five answers list
+    the order but arrive after T, so G2 counts each probe as unanswered and probes again.
+    The sixth arrives in time, and G2 confirms the order. With the catalog's `count` of 20,
+    every probe went unanswered and G2 escalated."""
     dsn = run_database("f10_delayed")
     run(dsn, "F10", "delayed", Contract.C1, "G2")
     answers = rows(dsn, STATUS_ANSWERS)
-    assert len(answers) == 20
-    assert {row[:2] for row in answers} == {("dropped", "caller_timed_out")}
+    assert [row[:2] for row in answers] == [("dropped", "caller_timed_out")] * 5 + [
+        ("delivered", None)
+    ]
     assert all(row[4] == ["PO-0001"] for row in answers), "the answers were right, but late"
-    assert rows(dsn, "SELECT action_id, resolution FROM gw.escalation") == [("A-0001", None)]
-    assert [row[:3] for row in faults(dsn)] == [
-        ("F2", None, "net.gw_sim.answer"),
-        ("F10", "delayed", "sim.status.answer"),
+    assert [event[1:] for event in rows(dsn, EVENTS)][-2:] == [
+        ("outcome_unknown", "timeout"),
+        ("confirmed", "status_found"),
+    ]
+    assert rows(dsn, "SELECT action_id FROM gw.escalation") == []
+    assert [(row[0], row[1], row[2], row[6]) for row in faults(dsn)] == [
+        ("F2", None, "net.gw_sim.answer", {}),
+        ("F10", "delayed", "sim.status.answer", {"count": 5}),
     ]
     assert effects(dsn) == [("PO-0001", "APR-0001")]
-    assert claim(dsn) == ("unknown", [])
+    assert claim(dsn) == ("done", ["PO-0001"])
 
 
 def test_f10_stale_within_the_lag_answers_lag_by_l_and_g2_confirms_the_order(
@@ -355,19 +363,57 @@ def test_f10_stale_within_the_lag_answers_lag_by_l_and_g2_confirms_the_order(
     assert claim(dsn) == ("done", ["PO-0001"])
 
 
-def test_f10_stale_beyond_the_lag_reflects_the_state_when_it_fired(
+def test_f10_stale_beyond_the_lag_hides_the_order_so_failed_is_wrong_and_the_report_too(
     run_database: Callable[[str], str],
 ) -> None:
-    """F10 fires at the first status answer. With F2, that answer comes after the order
-    committed, so the state it freezes already lists the order, and G2 confirms it.
-    Record 0006 expects Failed and a false not_done here (fail (5)); this cell is not in
-    `expected.yaml` until record 0013 (Proposed) is decided."""
+    """A documented G2 limit (0006, 0013). F10 fires as the order reaches the simulator, so
+    every status answer lists the state from just before it arrived, without the order,
+    while claiming to be current. The first empty answer past the settle time makes G2 mark
+    the action Failed. The scripted agent then finds the budget spent, orders nothing more,
+    and reports not done while the order exists. When F10 fired at the first status
+    answer, after the order committed, the answers listed the order and G2 confirmed it."""
     dsn = run_database("f10_stale_beyond")
-    run(dsn, "F10", "stale_beyond_lag", Contract.C1, "G2")
-    ((committed_vt,),) = rows(dsn, "SELECT committed_vt FROM sim.effect")
-    ((fired_vt,),) = rows(dsn, "SELECT vt FROM harness.fault_log WHERE fault = 'F10'")
-    assert committed_vt < fired_vt
-    ((fate, _, as_of, produced, listed),) = rows(dsn, STATUS_ANSWERS)
-    assert (fate, as_of, listed) == ("delivered", produced, ["PO-0001"])
-    assert ("A-0001", "confirmed", "status_found") in rows(dsn, EVENTS)
-    assert claim(dsn) == ("done", ["PO-0001"])
+    inproc = run(dsn, "F10", "stale_beyond_lag", Contract.C1, "G2")
+    ((arrived, state, outcome_vt, _, _, effect_id),) = rows(dsn, WRITES)
+    assert (state, outcome_vt, effect_id) == ("committed", arrived, "PO-0001")
+    ((order, _, _, _),) = rows(dsn, ORDERS_TO_SIM)
+    ((sent_vt,),) = rows(
+        dsn,
+        "SELECT sent_vt FROM harness.message_log WHERE kind = 'request'"
+        " AND api = 'submit_purchase_order' AND hop = 'gw_sim'",
+    )
+    stale = [(*row[:6], row[6]) for row in faults(dsn) if row[0] == "F10"]
+    assert stale == [
+        (
+            "F10",
+            "stale_beyond_lag",
+            "sim.write.received",
+            "degrade_status",
+            order,
+            "simulator",
+            {"count": 20},
+        )
+    ]
+    assert rows(dsn, "SELECT vt FROM harness.fault_log WHERE fault = 'F10'") == [(arrived,)]
+
+    answers = rows(dsn, STATUS_ANSWERS)
+    assert len(answers) > 1
+    assert [(fate, listed) for fate, _, _, _, listed in answers] == [("delivered", [])] * len(
+        answers
+    ), "every answer omits the order"
+    assert all(as_of == produced for _, _, as_of, produced, _ in answers), "they claim now"
+    settle_ms = 50 + 10_000
+    assert answers[-2][2] < sent_vt + settle_ms <= answers[-1][2], (
+        "G2 waited for an empty answer past the settle time, then stopped probing"
+    )
+    assert ("A-0001", "failed", "status_settled_empty") in rows(dsn, EVENTS)
+    assert effects(dsn) == [("PO-0001", "APR-0001")], "no second order"
+    assert claim(dsn) == ("not_done", [])
+    evaluation = inproc.result.evaluation
+    assert evaluation is not None
+    reasons = [
+        (result.property, failure.code)
+        for result in evaluation.properties
+        for failure in result.failures
+    ]
+    assert reasons == [(5, "not_done_but_committed")]

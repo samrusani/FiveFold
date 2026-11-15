@@ -75,7 +75,8 @@ class Action(StrEnum):
     DELAY_COMMIT = "delay_commit"
     """Hold the write that reached the simulator, and commit it `delay_ms` later (F5)."""
     DEGRADE_STATUS = "degrade_status"
-    """Delay the next `count` status answers past T, or make them stale (F10)."""
+    """Delay the next `count` status answers past T, or make them stale (F10). Stale
+    beyond L fires where a write arrives, and acts on the status answers after it."""
 
 
 @dataclass(frozen=True)
@@ -117,8 +118,15 @@ F10_STALE_WITHIN_LAG = "stale_within_lag"
 """F10: each answer is as stale as the status lag L allows, and says so."""
 
 F10_STALE_BEYOND_LAG = "stale_beyond_lag"
-"""F10: each answer lists the effects as they were when F10 fired, but claims to be
-accurate to the time it is produced: a contract violation (0006)."""
+"""F10: fires as a write reaches the destination. Each answer lists the effects as they
+were just before that write arrived, but claims to be accurate to the time it is
+produced: a contract violation (0006, 0013)."""
+
+F10_STATUS_POINTS = frozenset({"sim.status.answer"})
+"""Where F10 `delayed` and `stale_within_lag` fire: as a status answer is produced."""
+
+F10_WRITE_POINTS = frozenset({"sim.write.received"})
+"""Where F10 `stale_beyond_lag` fires: as a write reaches the destination (0013)."""
 
 EARLY_POINTS = frozenset({"gw.dispatch.before_check", "net.agent_sim.answer"})
 """F6 and F7 early: at the gateway's check, or as B0's approval answer reaches it."""
@@ -227,10 +235,14 @@ BUILT: Mapping[FaultId, FaultKind] = {
     FaultId.F10: FaultKind(
         FaultId.F10,
         "Status answer delayed or stale",
-        frozenset({"sim.status.answer"}),
+        F10_STATUS_POINTS | F10_WRITE_POINTS,
         Action.DEGRADE_STATUS,
         {"count": 20},
-        variants={F10_DELAYED: None, F10_STALE_WITHIN_LAG: None, F10_STALE_BEYOND_LAG: None},
+        variants={
+            F10_DELAYED: F10_STATUS_POINTS,
+            F10_STALE_WITHIN_LAG: F10_STATUS_POINTS,
+            F10_STALE_BEYOND_LAG: F10_WRITE_POINTS,
+        },
         minimums={"count": 1},
         variant_required=True,
     ),

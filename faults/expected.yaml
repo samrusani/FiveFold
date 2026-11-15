@@ -239,16 +239,18 @@ cells:
   - {fault: F5, variant: beyond_deadline, contract: C3, config: B0, verdict: pass, failing: []}
 
   # F10, status answer delayed or stale (properties 1 and 5), at C1 with F2 on the
-  # order's committed answer, so G2 probes. Stale within the lag (L 3,000): the first
-  # probe may miss the order, a later one lists it. B0 has no F10 cells: its scripted
-  # agent never calls the status tool (0008). The `delayed` and `stale_beyond_lag` cells
-  # are not listed yet: their first runs contradict 0006. With `count` 20 and
-  # `max_probes` 20, every delayed probe goes unanswered, G2 escalates and the report
-  # says unknown (pass_unresolved, where 0006 expects pass). F10 fires at the first
-  # status answer, after the order committed, so the stale answers list it and G2
-  # confirms it (pass, where 0006 expects fail (5)). Record 0013 (Proposed) proposes a fix
-# for each; they wait for the maintainer.
+  # order's committed answer, so G2 probes. B0 has no F10 cells: its scripted agent never
+  # calls the status tool (0008). Delayed, with `count` 5 (0013): the first five answers
+  # arrive after T and count as unanswered, the sixth arrives in time and lists the
+  # order. Stale within the lag (L 3,000): the first probe may miss the order, a later one
+  # lists it. Stale beyond the lag fires as the order reaches the simulator (0013), so
+  # every answer omits the order while claiming to be current. An empty answer past the
+  # settle time makes G2 mark the action Failed, a documented G2 limit (0006): the agent
+  # finds the budget spent, orders nothing more, and reports not done while the order
+  # exists.
+  - {fault: F10, variant: delayed, contract: C1, config: G2, verdict: pass, failing: []}
   - {fault: F10, variant: stale_within_lag, contract: C1, config: G2, verdict: pass, failing: []}
+  - {fault: F10, variant: stale_beyond_lag, contract: C1, config: G2, verdict: fail, failing: [5]}
 
   # G1, authorization only (0008). Record 0006 fixes no G1 outcome, so these cells come
   # from the first deterministic run of G1. G1 fires each fault where G2 does. Every write
@@ -386,5 +388,5 @@ cells:
   - {fault: F5, variant: beyond_deadline, contract: C2, config: G1, verdict: fail, failing: [1, 3]}
   - {fault: F5, variant: beyond_deadline, contract: C3, config: G1, verdict: pass, failing: []}
 
-  # F10 has no G1 cell: it fires at a status answer, and G1 never asks for one. Its
+  # F10 has no G1 cell: it acts on status answers, and G1 never asks for one. Its
   # gateway never probes and its agent has no status tool (0008), as in B0.
