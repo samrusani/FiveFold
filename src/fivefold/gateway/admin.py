@@ -52,9 +52,9 @@ class EscalationResolved(StepRefused):
 
 
 class BeforeSettleTime(StepRefused):
-    """ "Not committed" before S past the action's latest send (0010, reading 8).
+    """An attestation of "not committed" before S past the latest send (0010, reading 8).
 
-    `not_committed_from_vt` is the first virtual time at which it can be attested.
+    `not_committed_from_vt` is the first virtual time at which it can be made.
     """
 
     def __init__(self, message: str, not_committed_from_vt: int) -> None:
