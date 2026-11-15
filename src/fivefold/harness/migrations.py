@@ -70,6 +70,23 @@ class MigrationError(Exception):
     """The migration files or the database are in a state the runner refuses to touch."""
 
 
+class DatabaseExists(MigrationError):
+    """`create_database` found the name taken, and left that database as it was."""
+
+
+@dataclass(frozen=True)
+class CreatedDatabase:
+    """A database `create_database` made: its name, its OID and its DSN.
+
+    The OID tells it apart from any database made under the same name later, so cleanup
+    can drop only the database it made (`drop_database`).
+    """
+
+    name: str
+    oid: int
+    dsn: str
+
+
 @dataclass(frozen=True)
 class Migration:
     """One migration file, read once.
@@ -167,18 +184,39 @@ def migrate(conn: Connection, directory: Path) -> list[str]:
 def recreate_database(admin_dsn: str, name: str) -> str:
     """Drop the database `name` if it exists, create it empty, and return its DSN.
 
-    The database always uses UTF-8 with C collation, whatever the server's defaults. C
-    collation orders text by byte value, so query results do not depend on the host's
-    locale (0009).
+    The database always uses UTF-8 with C collation, as `create_database` makes it.
     """
     check_database_name(name)
     drop_database(admin_dsn, name)
+    return create_database(admin_dsn, name).dsn
+
+
+def create_database(admin_dsn: str, name: str) -> CreatedDatabase:
+    """Create the empty database `name`, and never drop anything to do it.
+
+    Raises `DatabaseExists` when the name is taken; that database is left as it was.
+
+    Checked in psycopg 3.3.9 (`psycopg/errors.py`): `CREATE DATABASE` of a taken name
+    raises `DuplicateDatabase`, SQLSTATE 42P04.
+    """
+    check_database_name(name)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        _create_database(conn, name)
-    return make_conninfo(admin_dsn, dbname=name)
+        try:
+            _create_database(conn, name)
+        except psycopg.errors.DuplicateDatabase:
+            raise DatabaseExists(f"the database {name} already exists") from None
+        row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
+    if row is None:
+        raise MigrationError(f"the database {name} was dropped as soon as it was created")
+    return CreatedDatabase(name=name, oid=int(row[0]), dsn=make_conninfo(admin_dsn, dbname=name))
 
 
 def _create_database(conn: Connection, name: str) -> None:
+    """Create the empty database `name` on the admin connection `conn`.
+
+    It always uses UTF-8 with C collation, whatever the server's defaults. C collation
+    orders text by byte value, so query results do not depend on the host's locale (0009).
+    """
     conn.execute(
         sql.SQL(
             "CREATE DATABASE {} ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
@@ -234,13 +272,23 @@ def bootstrap_server(admin_dsn: str, db_dir: Path) -> str:
     return name
 
 
-def drop_database(admin_dsn: str, name: str) -> None:
-    """Drop the database `name` if it exists, closing any open connections to it."""
+def drop_database(admin_dsn: str, name: str, *, oid: int | None = None) -> bool:
+    """Drop the database `name` if it exists, closing any open connections to it. Return
+    whether a database was dropped.
+
+    With `oid`, drop it only while `name` is still the database with that OID, as
+    `create_database` reported it: a database someone made under the same name since is
+    left alone.
+    """
     check_database_name(name)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
+        if row is None or (oid is not None and int(row[0]) != oid):
+            return False
         conn.execute(
             sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
         )
+    return True
 
 
 def check_database_name(name: str) -> None:

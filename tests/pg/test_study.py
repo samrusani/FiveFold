@@ -27,8 +27,11 @@ from psycopg.conninfo import make_conninfo
 from fivefold.evaluator import comparable_json, without_wall_clock
 from fivefold.evaluator.__main__ import main as report
 from fivefold.evaluator.report import load_result, planned_faults
+from fivefold.harness import study as study_module
 from fivefold.harness.cells import load_expected
 from fivefold.harness.migrations import drop_database, registry_database
+from fivefold.harness.registry import RegistryEntry, forget, register
+from fivefold.harness.study import Study
 from fivefold.harness.study import main as study_main
 
 pytestmark = pytest.mark.pg
@@ -225,6 +228,56 @@ def test_a_study_never_replaces_a_database_another_study_kept(
         assert not (tmp_path / "second").exists()
     finally:
         drop_database(admin_dsn, kept)
+
+
+def test_a_database_another_study_creates_after_the_check_is_neither_dropped_nor_replaced(
+    admin_dsn: str,
+    db_prefix: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two studies with one prefix can both find the names free. Here the other study
+    creates episode 2's database, and registers it, just after this one checked: episode
+    2 stops the study in one line that names the database, which keeps the other study's
+    table and registry row, and episode 1 keeps its result. The study drops only the
+    database it created, and removes only that database's registry row."""
+    prefix = f"{db_prefix}_study_race"
+    other = f"{prefix}_0002"
+    drop_database(admin_dsn, other)
+    checked = study_module.check_databases_free
+
+    def then_taken(admin: str, study: Study, prefix: str) -> None:
+        checked(admin, study, prefix)
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(f'CREATE DATABASE "{other}"')
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=other), autocommit=True) as conn:
+            conn.execute("CREATE TABLE other_study_run (seed integer)")
+        entry = RegistryEntry(
+            other, "dev-001-single-po.G2.C2.8", "dev-001-single-po", "G2", "C2", 8
+        )
+        register(admin_dsn, entry)
+
+    monkeypatch.setattr(study_module, "check_databases_free", then_taken)
+    out = tmp_path / "race"
+    argv = ["--dsn", admin_dsn, "--out", str(out), "--database-prefix", prefix]
+    argv += ["--cells", "F2-C2-G2", "--episodes", "2"]
+    try:
+        assert study_main(argv) == 1
+        error = capsys.readouterr().err
+        assert error == (
+            f"study failed: the database {other} already exists, perhaps an episode another"
+            " study ran or kept; give --database-prefix another prefix, or drop it"
+            " (in episode 2, F2-C2-G2-seed-8)\n"
+        )
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=other)) as conn:
+            assert conn.execute("SELECT count(*) FROM other_study_run").fetchone() == (0,)
+        assert databases(admin_dsn, prefix) == [other], "episode 1's own database was dropped"
+        assert registered(admin_dsn, prefix) == [other], "and only its registry row was removed"
+        assert [path.name for path in out.iterdir()] == ["F2-C2-G2-seed-7.json"]
+    finally:
+        drop_database(admin_dsn, other)
+        forget(admin_dsn, other)
 
 
 def test_the_study_keeps_each_episode_s_database_when_asked(

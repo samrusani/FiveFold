@@ -34,6 +34,13 @@ Its inputs:
   registry, so the viewer lists it (0012); a dropped one leaves it. The admin connection
   comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`.
 
+A study never drops a database it did not create. Before it starts, it refuses names that
+are taken. Each episode then creates its database without dropping anything first, and a
+name another study took since stops the study in one line, naming the database; the
+episodes already run keep their results. Cleanup drops only the database the episode
+created, the one with the OID PostgreSQL gave it, and removes only that database's row
+from the run registry.
+
 Episodes run in a fixed order: by seed, then by cell. Cells go by fault (no fault first,
 then F1 to F12), variant, contract level and configuration. So a study that stops partway
 has run every cell once before it runs any cell twice.
@@ -94,12 +101,13 @@ from fivefold.harness.demo import DB_DIR, DEV_001
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
+    DatabaseExists,
     MigrationError,
     bootstrap_server,
     check_database_name,
+    create_database,
     drop_database,
     migrate,
-    recreate_database,
 )
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.registry import forget
@@ -349,10 +357,15 @@ def check_databases_free(admin_dsn: str, study: Study, prefix: str) -> None:
             "SELECT datname FROM pg_database WHERE datname = ANY(%s) ORDER BY datname", (names,)
         ).fetchall()
     if rows:
-        raise ValueError(
-            f"the database {rows[0][0]} already exists, perhaps an episode another study kept;"
-            " give --database-prefix another prefix, or drop it"
-        )
+        raise ValueError(taken(str(rows[0][0])))
+
+
+def taken(name: str) -> str:
+    """Why a study refuses the episode database `name`: it already exists."""
+    return (
+        f"the database {name} already exists, perhaps an episode another study ran or kept;"
+        " give --database-prefix another prefix, or drop it"
+    )
 
 
 def check_out(out: Path) -> None:
@@ -400,17 +413,23 @@ def run_episode(
 ) -> Outcome:
     """Run `episode` in a fresh, migrated database `database`, and save its result, and
     its cassette when the model is live, in `out`. The database is dropped once the run
-    ends, unless `keep`; a dropped database leaves the run registry too."""
+    ends, unless `keep`; a database the episode dropped leaves the run registry too.
+
+    Raises `ValueError` when `database` already exists: it is someone else's, so it is
+    neither replaced nor dropped, and its registry row stays.
+    """
     spec = episode.spec(study.scenario, study.model)
-    dsn = recreate_database(admin_dsn, database)
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
+        created = create_database(admin_dsn, database)
+    except DatabaseExists:
+        raise ValueError(taken(database)) from None
+    try:
+        with psycopg.connect(created.dsn, autocommit=True) as conn:
             migrate(conn, DB_DIR / "migrations")
-        run = InprocRun(spec, dsn)
+        run = InprocRun(spec, created.dsn)
         asyncio.run(run.execute())
     finally:
-        if not keep:
-            drop_database(admin_dsn, database)
+        if not keep and drop_database(admin_dsn, database, oid=created.oid):
             forget(admin_dsn, database)
     evaluation = run.result.evaluation
     if evaluation is None:

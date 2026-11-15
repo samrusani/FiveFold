@@ -17,8 +17,10 @@ from psycopg.rows import TupleRow
 
 from fivefold.harness.migrations import (
     ADVISORY_LOCK_KEY,
+    DatabaseExists,
     MigrationError,
     bootstrap,
+    create_database,
     discover,
     drop_database,
     migrate,
@@ -266,3 +268,50 @@ def test_a_name_postgres_would_truncate_never_reaches_the_server(
         assert row == (1,)
     finally:
         drop_database(admin_dsn, victim)
+
+
+def database_count(admin_dsn: str, name: str) -> int:
+    with psycopg.connect(admin_dsn) as conn:
+        row = conn.execute(
+            "SELECT count(*) FROM pg_catalog.pg_database WHERE datname = %s", (name,)
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_create_database_never_drops_a_database_that_has_the_name(
+    admin_dsn: str, db_prefix: str
+) -> None:
+    name = f"{db_prefix}_taken"
+    drop_database(admin_dsn, name)
+    created = create_database(admin_dsn, name)
+    try:
+        with psycopg.connect(created.dsn, autocommit=True) as conn:
+            conn.execute("CREATE TABLE kept (n integer)")
+        with pytest.raises(DatabaseExists, match=f"^the database {name} already exists$"):
+            create_database(admin_dsn, name)
+        with psycopg.connect(created.dsn) as conn:
+            assert conn.execute("SELECT count(*) FROM kept").fetchone() == (0,)
+    finally:
+        drop_database(admin_dsn, name)
+
+
+def test_a_drop_by_oid_leaves_a_database_made_under_the_same_name_since(
+    admin_dsn: str, db_prefix: str
+) -> None:
+    """Cleanup that names the OID drops only the database it created, never one that
+    someone made under the same name after dropping it."""
+    name = f"{db_prefix}_owned"
+    drop_database(admin_dsn, name)
+    first = create_database(admin_dsn, name)
+    try:
+        drop_database(admin_dsn, name)
+        second = create_database(admin_dsn, name)
+        assert second.oid != first.oid
+        drop_database(admin_dsn, name, oid=first.oid)
+        assert database_count(admin_dsn, name) == 1, "the newer database stays"
+        drop_database(admin_dsn, name, oid=second.oid)
+        assert database_count(admin_dsn, name) == 0
+        drop_database(admin_dsn, name, oid=second.oid)
+    finally:
+        drop_database(admin_dsn, name)
