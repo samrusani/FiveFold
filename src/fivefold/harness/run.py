@@ -8,7 +8,8 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    simulator's API and, in B0, the report sink on the transport;
 2. in G2, starts the gateway: its store, its dispatcher after startup recovery, and its
    tools, one MCP server per agent connection;
-3. starts each agent worker with its own checkpoint thread;
+3. starts each agent worker with its own checkpoint thread, and the scripted approver,
+   which decides queued approval requests by the scenario's rules (0002, rule 7);
 4. fires the plan's faults: the transport fires those on its hops, and this module those
    at the agent's points (F11), with the restart from the worker's last checkpoint;
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
@@ -23,9 +24,10 @@ Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -41,7 +43,7 @@ from fivefold.agents.worker import WorkerEnd, WorkerSpec, build_graph, run_worke
 from fivefold.domain.contracts import Capability, Contract
 from fivefold.domain.scenario import Scenario
 from fivefold.faults.catalog import Action
-from fivefold.faults.plan import FaultInjector, parse_plan
+from fivefold.faults.plan import FaultInjector, Fired, parse_plan
 from fivefold.gateway.dispatcher import Dispatcher, Timing
 from fivefold.gateway.freshness import RuleFreshness
 from fivefold.gateway.pg_store import PgStore
@@ -49,13 +51,15 @@ from fivefold.gateway.server import serve
 from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.tools import GatewayTools, ToolTiming
+from fivefold.harness.actors import ScriptedApprover
 from fivefold.harness.clock import settle
+from fivefold.harness.fault_effects import SimulatorFaults, message_context
 from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
-from fivefold.harness.scheduler import Scheduler
-from fivefold.harness.transport import Envelope, Stage, Transport
+from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
+from fivefold.harness.transport import Envelope, Stage, Transport, TransportTimeout
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
@@ -191,9 +195,21 @@ class InprocRun:
         )
         self.simulator = Simulator.setup(self._conninfo("ff_sim"), scenario, config, vt=0)
         self._closing.append(self.simulator)
+        self.approver = ScriptedApprover(
+            self.scheduler, self.simulator.control, self.log, scenario.authority
+        )
+        self.effects = SimulatorFaults(self.scheduler, self.simulator.control, self.log, scenario)
+        self.transport.apply_faults_with(
+            lambda fired, envelope: self.effects.apply(fired, message_context(envelope.body))
+        )
         self.transport.serve(
             SIMULATOR,
-            endpoint(self.simulator, self.scheduler, poll_ms=params.approval_poll_interval_ms),
+            endpoint(
+                self.simulator,
+                self.scheduler,
+                poll_ms=params.approval_poll_interval_ms,
+                served=[self.approver.served],
+            ),
         )
         intents = {intent.id: str(intent.operation) for intent in scenario.intents}
         self.sink = ReportSink(self.scheduler, self.log, intents)
@@ -248,6 +264,7 @@ class InprocRun:
                 probe_interval_ms=params.status_probe_interval_ms,
             ),
             faults=self.faults,
+            on_fault=self._gateway_fault,
         )
         self.tools = GatewayTools(
             self.scheduler,
@@ -260,6 +277,23 @@ class InprocRun:
             timing=ToolTiming(tool_wait_ms=params.tool_wait_ms),
         )
         self.dispatcher.start()
+
+    def _gateway_fault(self, fired: Fired, point: str, context: Mapping[str, object]) -> None:
+        """A fault at a dispatch point: record it, then apply it (F6 and F7 early)."""
+        self.log.fault_fired(
+            FaultRecord(
+                seq=self.log.next_seq(),
+                fault=str(fired.fault),
+                variant=fired.planned.variant,
+                point=point,
+                occurrence=fired.occurrence,
+                action=str(fired.planned.kind.action),
+                vt=self.scheduler.now,
+                component=GATEWAY,
+                params=dict(fired.planned.params),
+            )
+        )
+        self.effects.apply(fired, context)
 
     # Agent workers ------------------------------------------------------------------------
 
@@ -291,15 +325,28 @@ class InprocRun:
         self.scheduler.spawn(GATEWAY, serve(self.tools, link), name=f"mcp server for {worker}")
         try:
             async with ClientSession(link.client_read, link.client_write) as session:
-                await session.initialize()
-                listed = await session.list_tools()
+                await self._within(session.initialize(), "initialize")
+                listed = await self._within(session.list_tools(), "tools/list")
                 tools = gateway_tools(session, listed, self.scheduler, self.timeouts)
                 graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
                 self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # A worker that cannot connect, or fails otherwise, ends without a report (0008).
+            self.result.ends[worker] = (WorkerEnd.ERROR, _describe(error))
         finally:
             # After a crash the link ends the connection itself, once in-flight requests
             # have reached the gateway; this closes it only when the worker finishes.
             link.close_after_flight(worker, link.server_read)
+
+    async def _within[T](self, call: Awaitable[T], what: str) -> T:
+        """Wait for an MCP call outside a tool for at most T, as for a tool call (0005)."""
+        timeout_ms = self.spec.scenario.params.dispatch_timeout_ms
+        try:
+            return await self.scheduler.wait_for(call, timeout_ms)
+        except SchedulerTimeout:
+            raise TransportTimeout(f"{what}: no answer within {timeout_ms} ms") from None
 
     # Fault points of the agent (0006) -----------------------------------------------------
 
@@ -357,6 +404,14 @@ class InprocRun:
         await settle()
         for resource in reversed(self._closing):
             resource.close()
+
+
+def _describe(error: BaseException) -> str:
+    """The error that ended a worker; the first one inside an exception group, as the
+    MCP session's task group wraps them."""
+    while isinstance(error, BaseExceptionGroup) and error.exceptions:
+        error = error.exceptions[0]
+    return f"{type(error).__name__}: {error}"
 
 
 def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:

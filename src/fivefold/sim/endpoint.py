@@ -18,6 +18,8 @@ asks again every `poll_ms` until it is decided or the wait ends.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+
 from fivefold.domain.api import REQUESTS, ApiName, ApprovalAnswer, GetApprovalStatus
 from fivefold.domain.authority import ApprovalStatus
 from fivefold.harness.scheduler import Scheduler
@@ -27,8 +29,22 @@ from fivefold.sim.service import Simulator
 WRITES = frozenset({ApiName.SUBMIT_PURCHASE_ORDER, ApiName.RESERVE_INVENTORY})
 
 
-def endpoint(simulator: Simulator, scheduler: Scheduler, *, poll_ms: int = 500) -> Handler:
-    """A transport handler that serves `simulator`'s API."""
+Served = Callable[[ApiName, object], None]
+"""Told of each answer the endpoint sends, with the call it answers."""
+
+
+def endpoint(
+    simulator: Simulator,
+    scheduler: Scheduler,
+    *,
+    poll_ms: int = 500,
+    served: Sequence[Served] = (),
+) -> Handler:
+    """A transport handler that serves `simulator`'s API.
+
+    Each of `served` is told of every answer, as the scripted approver needs to learn of
+    queued approval requests (0002, rule 7).
+    """
 
     async def handle(request: Envelope) -> Reply:
         if request.api is None:
@@ -46,6 +62,8 @@ def endpoint(simulator: Simulator, scheduler: Scheduler, *, poll_ms: int = 500) 
             ):
                 await scheduler.sleep(min(poll_ms, deadline - scheduler.now))
                 answer = method(parsed, caller=request.sender, vt=scheduler.now)
+        for listener in served:
+            listener(api, answer)
         body = answer.model_dump(mode="json")
         return Reply(body, answer_class=str(body["answer"]) if api in WRITES else None)
 
