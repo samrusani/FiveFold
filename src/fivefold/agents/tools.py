@@ -33,13 +33,12 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import mcp_types as types
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from fivefold.agents.connection import GatewayConnection
 from fivefold.domain.api import (
     GetApprovalStatus,
     GetBudget,
@@ -81,8 +80,19 @@ class Timeouts:
 # G modes: the gateway's tools over MCP ------------------------------------------------------
 
 
+class ToolCaller(Protocol):
+    """An agent worker's MCP connection to the gateway, as its tools use it: in-process
+    (`fivefold.agents.connection`) or over streamable HTTP (`fivefold.agents.remote`)."""
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], timeout_ms: int
+    ) -> types.CallToolResult:
+        """Call a tool, waiting at most `timeout_ms` for its result."""
+        ...
+
+
 def gateway_tools(
-    connection: GatewayConnection,
+    connection: ToolCaller,
     listed: types.ListToolsResult,
     timeouts: Timeouts,
 ) -> list[BaseTool]:
@@ -90,7 +100,7 @@ def gateway_tools(
     return [_gateway_tool(connection, tool, timeouts) for tool in listed.tools]
 
 
-def _gateway_tool(connection: GatewayConnection, tool: types.Tool, timeouts: Timeouts) -> BaseTool:
+def _gateway_tool(connection: ToolCaller, tool: types.Tool, timeouts: Timeouts) -> BaseTool:
     name = tool.name
 
     async def call(**arguments: Any) -> str:

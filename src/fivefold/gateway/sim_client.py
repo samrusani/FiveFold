@@ -2,7 +2,9 @@
 
 `SimClient` implements `Destination` for the dispatcher and serves the read tools. It
 sends each request through the harness transport, so every message is logged and can be
-faulted (0006), and waits at most T, the dispatch timeout, for the answer (0005). The
+faulted (0006), and waits at most T, the dispatch timeout, for the answer (0005). In the
+split topology the transport is HTTP, logged and faulted the same way
+(`fivefold.harness.split.hops`). The
 gateway is the only caller with a simulator credential in G modes (0008); requests name
 it as the sender, and the simulator checks that name.
 
@@ -55,7 +57,7 @@ from fivefold.domain.rules import FactKind, Operation, fact_kind
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
 from fivefold.gateway.records import Action, Answer, ApprovalStatus, Attempt, ProbeAnswer
 from fivefold.gateway.state_machine import AnswerClass, Reason
-from fivefold.harness.transport import Transport, TransportTimeout
+from fivefold.harness.transport import Calls, TransportTimeout
 
 ReadRequest = GetQuote | ListSuppliers | GetBudget | GetInventory
 
@@ -84,7 +86,7 @@ class SimClient:
 
     def __init__(
         self,
-        transport: Transport,
+        transport: Calls,
         *,
         timeout_ms: int,
         component: str = "gateway",

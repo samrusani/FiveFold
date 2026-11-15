@@ -11,15 +11,16 @@ A tool's result goes back as JSON text and as structured content. A `ToolError` 
 an MCP tool error (`is_error`), with the error code and message as JSON text.
 
 MCP SDK calls used (mcp 2.3.0): `mcp.server.lowlevel.server.Server(name, on_list_tools=,
-on_call_tool=)`, `Server.run(read, write, Server.create_initialization_options())`, the
-handler context's `request` (`mcp.server.context.ServerRequestContext`), and the
-`mcp_types` models `Tool`, `ListToolsResult`, `CallToolRequestParams`, `CallToolResult`
-and `TextContent`.
+on_call_tool=, get_tool_input_schema=)`, `Server.run(read, write,
+Server.create_initialization_options())`, the handler context's `request`
+(`mcp.server.context.ServerRequestContext`), and the `mcp_types` models `Tool`,
+`ListToolsResult`, `CallToolRequestParams`, `CallToolResult` and `TextContent`.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import mcp_types as types
@@ -42,16 +43,26 @@ def _tool_list() -> types.ListToolsResult:
 
 def server_for(tools: GatewayTools, link: Link) -> Server[Any]:
     """An MCP server that serves `tools` to the agent worker at the other end of `link`."""
+    return worker_server(lambda: tools, link.agent)
+
+
+def worker_server(tools: Callable[[], GatewayTools], worker: str) -> Server[Any]:
+    """An MCP server that serves the gateway's tools to the agent worker `worker`.
+
+    `tools` gives the tools of the gateway's current incarnation when a call arrives. The
+    split topology serves its one agent worker this way, over streamable HTTP
+    (`fivefold.harness.split.gateway`).
+    """
 
     async def list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
         return _tool_list()
 
     async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         try:
-            result = await tools.call(
+            result = await tools().call(
                 params.name,
                 params.arguments or {},
-                worker=link.agent,
+                worker=worker,
                 message_seq=delivered_seq(ctx.request),
             )
         except ToolError as error:
@@ -65,7 +76,24 @@ def server_for(tools: GatewayTools, link: Link) -> Server[Any]:
             structured_content=result,
         )
 
-    return Server(SERVER_NAME, on_list_tools=list_tools, on_call_tool=call_tool)
+    return Server(
+        SERVER_NAME,
+        on_list_tools=list_tools,
+        on_call_tool=call_tool,
+        get_tool_input_schema=tool_input_schema,
+    )
+
+
+def tool_input_schema(name: str) -> dict[str, object] | None:
+    """A tool's input schema by name, or None for a name that is no tool.
+
+    The SDK checks a 2026-07-28 request's `Mcp-Param-*` headers against it, instead of
+    asking the server for its tool list (mcp 2.3.0, `Server(get_tool_input_schema=)`).
+    """
+    for tool in TOOLS:
+        if tool.name == name:
+            return tool.input_schema()
+    return None
 
 
 async def serve(tools: GatewayTools, link: Link) -> None:

@@ -1,9 +1,10 @@
-"""The split topology's simulator as an HTTP service, end to end (0008, 0009).
+"""The split topology end to end: the simulator and the gateway as HTTP services (0009).
 
-Each test starts a split run and serves its simulator with uvicorn on 127.0.0.1, in a
-thread with its own event loop, as a separate process would run it. The scripted agent
-reaches it over the network in B0, with the agent's credential. Then the run ends after
-its drain window and the evaluator scores it.
+Each test starts a split run, serves the simulator, and in G modes the gateway, with
+uvicorn on 127.0.0.1, each in a thread with its own event loop, as separate processes
+would run. The scripted agent reaches them over the network: the gateway's MCP endpoint
+over streamable HTTP in G2, the simulator's API in B0. Then the run ends after its drain
+window and the evaluator scores it.
 
 The scenario is dev-001 with shorter timings, so a run takes seconds of wall time: T is
 800 ms and D 1,600 ms, so the drain window is 3,300 ms. Every wait has a deadline, and
@@ -22,6 +23,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,7 @@ from psycopg.conninfo import make_conninfo
 from fivefold.agents.remote import RemoteAgent, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
+from fivefold.gateway.admin_api import TOKEN_VARIABLE
 from fivefold.harness.migrations import (
     create_database,
     database_lock,
@@ -44,7 +47,8 @@ from fivefold.harness.migrations import (
 from fivefold.harness.registry import forget
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
-from fivefold.harness.split.lifecycle import start_run
+from fivefold.harness.split.gateway import AdminFactory, GatewayService, admin_api
+from fivefold.harness.split.lifecycle import end_run, score_run, start_run
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.simulator import SimulatorService
 
@@ -129,12 +133,14 @@ class Split:
         path.write_text(yaml.safe_dump(data), encoding="utf-8")
         return path
 
-    def start(self, config: Config, plan: list[dict[str, Any]]) -> SplitRun:
+    def start(
+        self, config: Config, plan: list[dict[str, Any]], contract: Contract = Contract.C2
+    ) -> SplitRun:
         return start_run(
             admin_dsn=self.admin,
             scenario_path=self.scenario(),
             config=config,
-            contract=Contract.C2,
+            contract=contract,
             seed=7,
             run_dir=self.root / "run",
             plan=plan,
@@ -174,6 +180,46 @@ def _registered(split: Split) -> list[tuple[Any, ...]]:
         ).fetchall()
 
 
+@dataclass
+class Ran:
+    """A whole split run: how the agent ended, and when the run stopped."""
+
+    run: SplitRun
+    end: tuple[WorkerEnd, str]
+    stopped_vt: int
+    health: list[dict[str, Any]]
+
+
+def run_split(split: Split, config: Config, plan: list[dict[str, Any]]) -> Ran:
+    """Start a run, serve it, run the scripted agent against it, and end it."""
+    run = split.start(config, plan)
+    services = [serve(SimulatorService(run, base_dsn=split.admin).app())]
+    simulator = services[0].url
+    gateway: str | None = None
+    try:
+        if run.has_gateway:
+            app = GatewayService(run, base_dsn=split.admin, simulator_url=simulator).app()
+            services.append(serve(app))
+            gateway = services[1].url
+        agent = RemoteAgent(
+            scenario=run.scenario(),
+            config=config,
+            contract=run.contract,
+            gateway_url=None if gateway is None else f"{gateway}/mcp",
+            simulator_url=simulator,
+            secret=run.secret(AGENT),
+        )
+        end = asyncio.run(asyncio.wait_for(run_remote_agent(agent), AGENT_S))
+        stopped_vt = asyncio.run(
+            end_run(run, admin_dsn=split.admin, simulator_url=simulator, gateway_url=gateway)
+        )
+        health = [httpx.get(f"{service.url}/health").json() for service in services]
+    finally:
+        for service in reversed(services):
+            service.stop()
+    return Ran(run, end, stopped_vt, health)
+
+
 def _order_plan(point: str, **extra: Any) -> list[dict[str, Any]]:
     match: dict[str, str] = {"api": ORDER}
     if point.endswith(".answer"):
@@ -181,7 +227,50 @@ def _order_plan(point: str, **extra: Any) -> list[dict[str, Any]]:
     return [{"at": {"point": point, "match": match, "occurrence": 1}, **extra}]
 
 
-# B0 over HTTP ------------------------------------------------------------------------------
+def _check_records(split: Split, ran: Ran) -> None:
+    """What every split run's records hold once it has ended."""
+    assert ran.end[0] is WorkerEnd.FINISHED, ran.end
+    assert all(health["failures"] == 0 for health in ran.health), ran.health
+    assert all(health["status"] == "stopped" for health in ran.health), ran.health
+    with split.connect() as conn:
+        row = conn.execute("SELECT topology, model_adapter, model FROM harness.run").fetchone()
+        stop = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone()
+        unfated = conn.execute(
+            "SELECT count(*) FROM harness.message_log WHERE fate IS NULL"
+        ).fetchone()
+        # Recovery latency reads each delivery's wall-clock time (0014).
+        unstamped = conn.execute(
+            "SELECT count(*) FROM harness.message_log"
+            " WHERE (fate = 'delivered') <> (delivered_wall_at IS NOT NULL)"
+        ).fetchone()
+    assert row == ("split", "external", "scripted")
+    assert stop == (ran.stopped_vt,)
+    assert unfated == (0,)
+    assert unstamped == (0,)
+    assert _registered(split) == [(ran.run.run_id, "dev-001-single-po", ran.run.config, "C2", 7)]
+
+
+# G2 and B0 over HTTP ------------------------------------------------------------------------------
+
+
+def test_g2_over_http_recovers_a_lost_reply_and_places_one_order(split: Split) -> None:
+    ran = run_split(split, "G2", [{"fault": "F2", **_order_plan("net.gw_sim.answer")[0]}])
+    _check_records(split, ran)
+    evaluation = score_run(ran.run, admin_dsn=split.admin)
+    assert str(evaluation.verdict) == "pass"
+    with split.connect() as conn:
+        effects = conn.execute("SELECT effect_id FROM sim.effect").fetchall()
+        fault = conn.execute(
+            "SELECT f.fault, f.point, f.occurrence, f.intent_id, m.api, m.answer_class, m.fate,"
+            " m.drop_reason FROM harness.fault_log f"
+            " JOIN harness.message_log m ON m.seq = f.target_seq"
+        ).fetchall()
+        report = conn.execute("SELECT accepted_by, valid FROM harness.final_report").fetchall()
+    assert effects == [("PO-0001",)]
+    assert fault == [
+        ("F2", "net.gw_sim.answer", 1, "REQ-1", ORDER, "committed", "dropped", "fault")
+    ]
+    assert report == [("gateway", True)]
 
 
 def test_b0_over_http_orders_twice_after_a_lost_reply(split: Split) -> None:
@@ -254,6 +343,149 @@ def test_b0_over_http_orders_twice_after_a_lost_reply(split: Split) -> None:
     assert report == [("sink", True)]
     assert unstamped == (0,)
     assert _registered(split) == [(run.run_id, "dev-001-single-po", "B0", "C2", 7)]
+
+
+# Faults on their counters ----------------------------------------------------------------------
+
+
+def test_a_fault_fires_on_its_counter(split: Split) -> None:
+    plan = [
+        {
+            "fault": "F12",
+            "at": {"point": "net.gw_sim.request", "match": {"api": "get_quote"}, "occurrence": 2},
+        }
+    ]
+    ran = run_split(split, "G2", plan)
+    _check_records(split, ran)
+    assert str(score_run(ran.run, admin_dsn=split.admin).verdict) == "pass"
+    with split.connect() as conn:
+        quotes = conn.execute(
+            "SELECT seq, fate, drop_reason FROM harness.message_log"
+            " WHERE hop = 'gw_sim' AND kind = 'request' AND api = 'get_quote' ORDER BY seq"
+        ).fetchall()
+        faults = conn.execute(
+            "SELECT fault, occurrence, target_seq, intent_id FROM harness.fault_log"
+        ).fetchall()
+    assert len(quotes) >= 3
+    assert [fate for _, fate, _ in quotes].count("dropped") == 1
+    assert quotes[1][1:] == ("dropped", "fault")
+    # A read names no intent, so the fault touched none (0014).
+    assert faults == [("F12", 2, quotes[1][0], None)]
+
+
+@pytest.mark.parametrize("hop", ["gw_sim", "agent_gw"])
+def test_a_request_delivered_twice_is_one_order_in_g2(split: Split, hop: str) -> None:
+    point = f"net.{hop}.request"
+    ran = run_split(split, "G2", [{"fault": "F4", **_order_plan(point)[0]}])
+    _check_records(split, ran)
+    assert str(score_run(ran.run, admin_dsn=split.admin).verdict) == "pass"
+    with split.connect() as conn:
+        effects = conn.execute("SELECT effect_id FROM sim.effect").fetchall()
+        copies = conn.execute(
+            "SELECT c.hop, c.api, c.fate, a.fate, a.drop_reason FROM harness.message_log c"
+            " LEFT JOIN harness.message_log a ON a.correlation = c.seq"
+            " WHERE c.copy_of IS NOT NULL"
+        ).fetchall()
+        fault = conn.execute(
+            "SELECT fault, point, params ? 'copy_seq', intent_id FROM harness.fault_log"
+        ).fetchall()
+    assert effects == [("PO-0001",)]
+    assert copies == [(hop, ORDER, "delivered", "dropped", "answer_to_copy")]
+    assert fault == [("F4", point, True, "REQ-1")]
+
+
+# A human's attestation over the admin API ---------------------------------------------------------
+
+ADMIN_TOKEN = "admin-api-token-for-the-tests"
+
+
+def test_a_humans_attestation_over_http_is_evidence(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Demo 3 in G2: at C0 the order's answer is lost and the gateway escalates. A human
+    checks the ledger and attests the order through the admin API, and the agent then
+    reports it done. The evaluator counts an attestation only from the harness's actor
+    log (0004), so the gateway logs it there, as the scripted resolver would."""
+    monkeypatch.setenv(TOKEN_VARIABLE, ADMIN_TOKEN)
+    factory: AdminFactory | None = admin_api()
+    assert factory is not None
+    plan = [{"fault": "F2", **_order_plan("net.gw_sim.answer")[0]}]
+    run = split.start("G2", plan, contract=Contract.C0)
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    gateway = serve(
+        GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url, admin=factory).app()
+    )
+
+    def effect_citing(approval_id: str) -> str:
+        """The human's check of the world, out of band (0008)."""
+        with split.connect() as conn:
+            row = conn.execute(
+                "SELECT effect_id FROM sim.effect WHERE approval_id = %s", (approval_id,)
+            ).fetchone()
+        assert row is not None
+        return str(row[0])
+
+    async def human() -> tuple[str, httpx.Response, httpx.Response]:
+        headers = {"authorization": f"Bearer {ADMIN_TOKEN}"}
+        async with httpx.AsyncClient(base_url=f"{gateway.url}/admin", headers=headers) as client:
+            deadline = time.monotonic() + AGENT_S
+            while not (listed := (await client.get("/escalations")).json()["escalations"]):
+                assert time.monotonic() < deadline, "no escalation opened"
+                await asyncio.sleep(0.05)
+            (escalation,) = listed
+            body = {
+                "resolution": "committed",
+                "effect_id": effect_citing(escalation["approval_id"]),
+                "actor": "ops-1",
+            }
+            path = f"/escalations/{escalation['escalation_id']}/resolve"
+            first = await client.post(path, json=body)
+            again = await client.post(path, json=body)
+        return str(escalation["escalation_id"]), first, again
+
+    async def both() -> tuple[tuple[WorkerEnd, str], tuple[str, httpx.Response, httpx.Response]]:
+        agent = RemoteAgent(
+            scenario=run.scenario(),
+            config="G2",
+            contract=run.contract,
+            gateway_url=f"{gateway.url}/mcp",
+        )
+        working = asyncio.ensure_future(run_remote_agent(agent))
+        attested = await human()
+        return await working, attested
+
+    try:
+        end, (escalation_id, first, again) = asyncio.run(asyncio.wait_for(both(), AGENT_S))
+        asyncio.run(
+            end_run(
+                run, admin_dsn=split.admin, simulator_url=simulator.url, gateway_url=gateway.url
+            )
+        )
+    finally:
+        gateway.stop()
+        simulator.stop()
+    assert end[0] is WorkerEnd.FINISHED, end
+    assert first.status_code == 200, first.text
+    assert (first.json()["state"], first.json()["effect_id"]) == ("confirmed", "PO-0001")
+    assert again.status_code == 409, again.text
+    evaluation = score_run(run, admin_dsn=split.admin)
+    verdicts = {result.property: str(result.verdict) for result in evaluation.properties}
+    assert str(evaluation.verdict) == "pass", verdicts
+    assert evaluation.metrics["human_interventions"] == 1
+    with split.connect() as conn:
+        attestations = conn.execute(
+            "SELECT actor, action, subject, details FROM harness.actor_log"
+        ).fetchall()
+        report = conn.execute("SELECT report FROM harness.final_report").fetchall()
+    details = {
+        "resolution": "committed",
+        "intent_id": "REQ-1",
+        "action_id": "A-0001",
+        "effect_id": "PO-0001",
+    }
+    assert attestations == [("resolver", "attest", escalation_id, details)]
+    ((claims,),) = report
+    assert [(c["status"], c["effect_ids"]) for c in claims["claims"]] == [("done", ["PO-0001"])]
 
 
 # Trust boundaries and the run's end --------------------------------------------------------------
@@ -424,12 +656,17 @@ def test_the_agents_phase_ends_then_the_run_stops(split: Split) -> None:
     assert stop == (stopped.json()["stopped_vt"],)
 
 
-def test_the_command_line_serves_a_service(split: Split) -> None:
-    run = split.start("B0", [])
+def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    command = [
+        port: int = sock.getsockname()[1]
+    return port
+
+
+def test_the_command_line_serves_both_services(split: Split) -> None:
+    run = split.start("G2", [])
+    simulator_port, gateway_port = _free_port(), _free_port()
+    common = [
         sys.executable,
         "-m",
         "fivefold.harness.split",
@@ -438,21 +675,37 @@ def test_the_command_line_serves_a_service(split: Split) -> None:
         "--dsn",
         split.admin,
         "serve",
-        "simulator",
-        "--port",
-        str(port),
     ]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    commands = [
+        [*common, "simulator", "--port", str(simulator_port)],
+        [
+            *common,
+            "gateway",
+            "--port",
+            str(gateway_port),
+            "--simulator-url",
+            f"http://127.0.0.1:{simulator_port}",
+        ],
+    ]
+    processes: list[subprocess.Popen[bytes]] = []
+    healths: list[dict[str, Any]] = []
     try:
-        health = _wait_for(lambda: _health(f"http://127.0.0.1:{port}"), START_S)
+        for command, port in zip(commands, (simulator_port, gateway_port), strict=True):
+            processes.append(
+                subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            )
+            healths.append(_wait_for(partial(_health, f"http://127.0.0.1:{port}"), START_S))
     finally:
-        process.terminate()
-        output, _ = process.communicate(timeout=START_S)
-    assert health == {"run_id": run.run_id, "status": "serving", "failures": 0}, output.decode()
-    # uvicorn shuts down gracefully, then raises the signal it caught again
-    # (`Server.capture_signals`), so the process ends by SIGTERM.
-    assert process.returncode == -signal.SIGTERM, output.decode()
-    assert "Application shutdown complete" in output.decode()
+        for process in reversed(processes):
+            process.terminate()
+        outputs = [process.communicate(timeout=START_S)[0].decode() for process in processes]
+    expected = {"run_id": run.run_id, "status": "serving", "failures": 0}
+    assert healths == [expected, expected], outputs
+    for process, output in zip(processes, outputs, strict=True):
+        # uvicorn shuts down gracefully, then raises the signal it caught again
+        # (`Server.capture_signals`), so the process ends by SIGTERM.
+        assert process.returncode == -signal.SIGTERM, output
+        assert "Application shutdown complete" in output, output
 
 
 def _health(url: str) -> dict[str, Any] | None:

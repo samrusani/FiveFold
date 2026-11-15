@@ -2,12 +2,16 @@
 
     python -m fivefold.harness.split start --scenario PATH --config G2 --contract C2 --seed 7
     python -m fivefold.harness.split serve simulator
+    python -m fivefold.harness.split serve gateway
     python -m fivefold.harness.split end
     python -m fivefold.harness.split score --out result.json
 
 `start` makes a run and its directory (`fivefold.harness.split.lifecycle`), and prints what
-the agent needs. `serve` runs the run's simulator until it is stopped. `end` ends the
+the agent needs. `serve` runs one of the run's services until it is stopped. `end` ends the
 run after the drain window, and `score` scores it with the evaluator.
+
+The gateway serves its admin API at `/admin` when `FIVEFOLD_ADMIN_API_TOKEN` holds the
+API's bearer token: a human resolves escalations there.
 
 Every command reads the run's directory from `--run-dir`, or `FIVEFOLD_RUN_DIR`, or
 `split-run`. The database server comes from `FIVEFOLD_ADMIN_DSN`, a superuser connection
@@ -38,6 +42,7 @@ from fivefold.domain.scenario import ScenarioError
 from fivefold.evaluator import result_json
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, MigrationError
 from fivefold.harness.split.credentials import AGENT
+from fivefold.harness.split.gateway import DEFAULT_ALLOWED_HOSTS, GatewayService, admin_api
 from fivefold.harness.split.lifecycle import (
     DEFAULT_MODEL,
     DEFAULT_TEMPLATE,
@@ -52,6 +57,7 @@ from fivefold.harness.split.simulator import SimulatorService
 DEFAULT_RUN_DIR = "split-run"
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:8000"
 DEFAULT_SIMULATOR_URL = "http://127.0.0.1:8100"
+GATEWAY_PORT = 8000
 SIMULATOR_PORT = 8100
 
 
@@ -101,9 +107,20 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     service = commands.add_parser("serve", help="run one of the run's services")
-    service.add_argument("service", choices=["simulator"])
+    service.add_argument("service", choices=["simulator", "gateway"])
     service.add_argument("--host", default="127.0.0.1", help="the address to listen on")
-    service.add_argument("--port", type=int, help="the port (default: 8100)")
+    service.add_argument("--port", type=int, help="the port (gateway 8000, simulator 8100)")
+    service.add_argument(
+        "--simulator-url",
+        default=os.environ.get("FIVEFOLD_SIMULATOR_URL", DEFAULT_SIMULATOR_URL),
+        help="where the gateway reaches the simulator",
+    )
+    service.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help="another Host header the gateway's MCP endpoint accepts, such as name:*",
+    )
 
     end = commands.add_parser("end", help="end the run after the drain window")
     end.add_argument(
@@ -168,8 +185,19 @@ def _command(args: argparse.Namespace) -> int:
         return 0
     run = read_run(run_dir)
     if args.command == "serve":
-        app: Any = SimulatorService(run, base_dsn=dsn).app()
-        port = SIMULATOR_PORT if args.port is None else args.port
+        if args.service == "simulator":
+            app: Any = SimulatorService(run, base_dsn=dsn).app()
+            port = SIMULATOR_PORT if args.port is None else args.port
+        else:
+            hosts = (*DEFAULT_ALLOWED_HOSTS, *args.allowed_host)
+            app = GatewayService(
+                run,
+                base_dsn=dsn,
+                simulator_url=args.simulator_url,
+                allowed_hosts=hosts,
+                admin=admin_api(),
+            ).app()
+            port = GATEWAY_PORT if args.port is None else args.port
         serve(app, host=args.host, port=port)
         return 0
     if args.command == "end":
