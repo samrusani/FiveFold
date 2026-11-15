@@ -15,7 +15,10 @@ loop's thread instead (`InlineExecutor`), so a run never has a second thread.
 
 Crashing a component cancels its tasks and discards their memory; it stays down until
 its restart event fires (0006). Each crash starts a new incarnation, so the transport can
-drop answers to requests sent before the crash (0010, change 3).
+drop answers to requests sent before the crash (0010, change 3). A restart belongs to the
+incarnation its crash started. When the component crashes again before that restart
+fires, as two crash faults at one event make it, the earlier restart does nothing, so a
+component never runs as two copies at once.
 
 A component that waits on the real world, as the live model adapter waits on its
 provider, awaits it through `hold`. Until the wait ends, the scheduler fires no event: it
@@ -243,12 +246,14 @@ class Scheduler:
 
         Its tasks are cancelled in the order they were spawned. `restart`, called when the
         restart event fires, rebuilds the component, for example through startup
-        recovery (0003) or from the agent's last checkpoint.
+        recovery (0003) or from the agent's last checkpoint. It is called only if this
+        crash is still the component's latest when the event fires.
         """
         if (restart_after_ms is None) != (restart is None):
             raise ValueError("give both restart_after_ms and restart, or neither")
         self._down.add(component)
-        self._incarnations[component] = self.incarnation(component) + 1
+        incarnation = self.incarnation(component) + 1
+        self._incarnations[component] = incarnation
         spawned = self._tasks.pop(component, {})
         for task in sorted(spawned, key=spawned.__getitem__):
             task.cancel()
@@ -257,11 +262,16 @@ class Scheduler:
         if restart_after_ms is not None and restart is not None:
             self.call_later(
                 restart_after_ms,
-                lambda: self._restart(component, restart),
+                lambda: self._restart(component, incarnation, restart),
                 label=f"restart {component}",
             )
 
-    def _restart(self, component: str, restart: Callable[[], None]) -> None:
+    def _restart(self, component: str, incarnation: int, restart: Callable[[], None]) -> None:
+        """Bring `component` back as `incarnation`, unless a later crash has started a
+        newer one: then that crash's own restart brings it back, and this one does
+        nothing."""
+        if self.incarnation(component) != incarnation:
+            return
         self._down.discard(component)
         restart()
 

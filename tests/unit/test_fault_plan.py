@@ -44,6 +44,61 @@ def test_demo_1s_plan_is_valid() -> None:
     assert f11.param("restart_delay_ms") == 10_000
 
 
+def kill(fault: str, point: str, match: dict[str, str | int], **at: int) -> dict[str, object]:
+    """A crash fault at `point`, as a plan writes it."""
+    return {"fault": fault, "at": {"point": point, "match": match, **at}}
+
+
+AFTER_CALL, AFTER_RESULT = "agent.after_tool_call", "agent.after_tool_result"
+ORDER_CALL: dict[str, str | int] = {"tool": "submit_purchase_order"}
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (kill("F11", AFTER_CALL, ORDER_CALL), kill("F11", AFTER_CALL, ORDER_CALL)),
+        (kill("F11", AFTER_CALL, ORDER_CALL), kill("F11", AFTER_CALL, ORDER_CALL, occurrence=1)),
+        (
+            kill("F11", AFTER_CALL, ORDER_CALL),
+            {**kill("F11", AFTER_CALL, ORDER_CALL), "params": {"restart_delay_ms": 5}},
+        ),
+        (kill("F11", AFTER_RESULT, ORDER_CALL), kill("F3", AFTER_RESULT, ORDER_CALL)),
+    ],
+)
+def test_two_crashes_with_the_same_trigger_are_refused(
+    first: dict[str, object], second: dict[str, object]
+) -> None:
+    """They fire at the same event on the same component, whatever their parameters.
+    F11 and F3's B0 equivalent share `agent.after_tool_result`."""
+    with pytest.raises(ValueError, match="crash the same component at the same event"):
+        parse_plan([first, second])
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        kill("F11", AFTER_CALL, ORDER_CALL, occurrence=2),
+        kill("F11", AFTER_CALL, {"tool": "get_quote"}),
+        kill("F11", AFTER_RESULT, ORDER_CALL),
+        kill("F11", AFTER_CALL, {"api": "submit_purchase_order"}),
+        {"fault": "F9", "variant": "same_args", "at": {"point": "agent.step"}},
+    ],
+)
+def test_crashes_with_different_triggers_are_accepted(second: dict[str, object]) -> None:
+    """A later occurrence, another call, another point or another field make another
+    trigger. The last one can still fire with the first at one event; the scheduler then
+    restarts the worker once."""
+    assert len(parse_plan([kill("F11", AFTER_CALL, ORDER_CALL), second])) == 2
+
+
+def test_matches_name_the_same_trigger_when_their_values_read_the_same_as_text() -> None:
+    """The injector compares match values as text, so 1 and "1" are one trigger."""
+    first = kill("F1", "gw.dispatch.after_check", {"attempt": 1}, occurrence=1)
+    second = kill("F1", "gw.dispatch.after_check", {"attempt": "1"})
+    with pytest.raises(ValueError, match="F1 and F1 crash the same component"):
+        parse_plan([first, second])
+
+
 def test_a_parameter_falls_back_to_the_catalog_default() -> None:
     (f11,) = parse_plan([{"fault": "F11", "at": {"point": "agent.after_tool_result"}}])
     assert f11.param("restart_delay_ms") == 1_000
