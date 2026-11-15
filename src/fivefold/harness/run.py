@@ -264,7 +264,11 @@ class InprocRun:
             self._start_worker(worker, resume=False)
         await self.scheduler.run(until=self._agents_done)
         self._close_run()
-        await self.scheduler.run(deadline_ms=self.scheduler.now + drain_window_ms(scenario))
+        drain_end = self.scheduler.now + drain_window_ms(scenario)
+        await self.scheduler.run(deadline_ms=drain_end)
+        # The drain lasts its whole window (0009). The scheduler returns as soon as nothing
+        # is queued and leaves the clock there, so a quiet drain moves it to the end here.
+        self.scheduler.clock.advance_to(max(self.scheduler.now, drain_end))
         self.result.stopped_vt = self.scheduler.now
         self.log.run_stopped(self.scheduler.now)
         await self._stop()
