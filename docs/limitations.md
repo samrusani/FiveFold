@@ -2,7 +2,7 @@
 
 What each of Fivefold's guarantees depends on, and the limits known so far. The guarantees are those of the gateway in configuration G2. Decision records are cited by number and live in [adr/](adr/README.md).
 
-Status: written for v0.1 on 15 Nov 2026. It states the accepted records 0001 to 0011 and 0013 as written. It draws nothing yet from records 0012 (viewer tooling) and 0014 (recovery latency), whose work is not merged.
+Status: written for v0.1 on 15 Nov 2026. It states the accepted records 0001 to 0011, 0013 and 0014 as written. It draws nothing yet from record 0012 (viewer tooling), whose work is not merged.
 
 ## How to read this page
 
@@ -138,6 +138,7 @@ When G2 cannot settle an outcome safely, it escalates to a human, and its automa
 - Every component, the gateway included, reads time only from the run's virtual clock, and randomness only from the run's seeded generators (0009). Timeouts, probes, polls, approver delays and restart delays are timer events in virtual time. Lint bans wall-clock calls and global randomness outside the clock and generator modules (0007).
 - Message latency is drawn from the seed, between 5 and 50 ms a hop (0009), and the simulator handles one request at a time ([spec](spec.md), Simulator). A virtual time in a result says when something happened in the run, not how fast a real system is.
 - Wall-clock time is recorded for metrics only, and never decides anything (0009).
+- Recovery latency is virtual time too: from the first fault that touched an intent until the stack's evidence settled its outcome (0014). It says how long the stack took to know, not how fast a real system recovers, and its wall-clock twin depends on the machine. An intent whose outcome the evidence never settles has no latency, and counts as unresolved. Latency alone does not rank configurations: with F2 at C2, B0 settles in 2,013 ms by placing a second order, which fails properties 1, 2 and 3.
 - One known source of nondeterminism remains: LangGraph's retry backoff sleeps in wall time, with jitter from the global random generator. It changes wall-clock metrics only (0008, 0009).
 - The determinism contract covers the inproc topology only. The split topology runs the gateway, the simulator and PostgreSQL as separate services, for people who bring their own agent. It is not deterministic: its virtual clock follows the host's monotonic clock, though faults still fire on counters (0009).
 
