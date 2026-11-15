@@ -172,6 +172,31 @@ def test_two_studies_with_the_same_inputs_save_the_same_bytes(
         assert (second / name).read_bytes() == (first / name).read_bytes(), name
 
 
+def test_a_study_never_replaces_a_database_another_study_kept(
+    admin_dsn: str, db_prefix: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An episode database that already exists, such as one an earlier study kept with
+    --keep-databases, is refused before anything runs, and keeps its run."""
+    prefix = f"{db_prefix}_study_taken"
+    kept = f"{prefix}_0001"
+    drop_database(admin_dsn, kept)
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{kept}"')
+    try:
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=kept), autocommit=True) as conn:
+            conn.execute("CREATE TABLE kept_run (seed integer)")
+        argv = ["--dsn", admin_dsn, "--out", str(tmp_path / "second"), "--database-prefix"]
+        argv += [prefix, "--cells", "F2-C2-G2"]
+        assert study_main(argv) == 1
+        error = capsys.readouterr().err
+        assert error.startswith(f"study failed: the database {kept} already exists"), error
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=kept)) as conn:
+            assert conn.execute("SELECT count(*) FROM kept_run").fetchone() == (0,)
+        assert not (tmp_path / "second").exists()
+    finally:
+        drop_database(admin_dsn, kept)
+
+
 def test_the_study_keeps_each_episode_s_database_when_asked(
     admin_dsn: str, db_prefix: str, tmp_path: Path
 ) -> None:

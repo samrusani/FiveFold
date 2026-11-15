@@ -18,7 +18,7 @@ import pytest
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file, scenario_from_data
 from fivefold.harness.cells import load_expected
-from fivefold.harness.demo import DEV_001
+from fivefold.harness.demo import DEV_001, DEV_002
 from fivefold.harness.models import SCRIPTED
 from fivefold.harness.run import CONFIGS
 from fivefold.harness.study import (
@@ -205,6 +205,16 @@ def test_a_study_must_fit_its_scenario_and_name_valid_databases(
     dev_data["params"] = {"commit_deadline_ms": 30_000}
     with pytest.raises(ValueError, match=r"episode F5-beyond_deadline-C0-G2-seed-7: .*above D"):
         check_study(study_of(["F5"], scenario_from_data(dev_data)), "fivefold_study")
+
+
+def test_a_cell_with_a_fault_runs_only_on_the_scenario_its_plan_is_written_for() -> None:
+    """The cells' plans target dev-001's order and quote; another scenario may have
+    neither, so a fault there could fail partway through the study."""
+    other = load_scenario_file(DEV_002)
+    check_study(study_of(["none"], other), "fivefold_study")
+    for selectors in (["F7"], ["all"], ["none", "F2"]):
+        with pytest.raises(ValueError, match="written for dev-001-single-po, not dev-002"):
+            check_study(study_of(selectors, other), "fivefold_study")
 
 
 def test_the_output_directory_must_be_new_or_empty(tmp_path: Path) -> None:

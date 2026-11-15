@@ -312,9 +312,18 @@ def check_study(study: Study, prefix: str) -> None:
 
     Each episode's contract level must be one the scenario lists, its fault plan must fit
     its configuration and timing as a run checks them (`fivefold.faults.plan`), and its
-    database name must be valid. Raises `ValueError`.
+    database name must be valid. A cell with a fault runs only on the scenario
+    `faults/expected.yaml` is written for: its plan targets that scenario's operation and
+    facts, and on another scenario it could fail partway through the study. Raises
+    `ValueError`.
     """
     scenario = study.scenario
+    faulted = [episode for episode in study.episodes if not isinstance(episode.cell, NoFault)]
+    if faulted and study.expected.scenario != scenario.id:
+        raise ValueError(
+            f"the cells of faults/expected.yaml are written for {study.expected.scenario},"
+            f" not {scenario.id}; with another scenario, give --cells {NO_FAULT}"
+        )
     for episode in study.episodes:
         spec = episode.spec(scenario)
         if spec.contract not in scenario.contracts:
@@ -327,6 +336,21 @@ def check_study(study: Study, prefix: str) -> None:
             check_database_name(database_name(prefix, episode))
         except (ValueError, MigrationError) as error:
             raise ValueError(f"episode {episode.name}: {error}") from None
+
+
+def check_databases_free(admin_dsn: str, study: Study, prefix: str) -> None:
+    """Refuse a study whose episode databases already exist, such as the episodes another
+    study kept, rather than drop them. Raises `ValueError`."""
+    names = [database_name(prefix, episode) for episode in study.episodes]
+    with psycopg.connect(admin_dsn) as conn:
+        rows = conn.execute(
+            "SELECT datname FROM pg_database WHERE datname = ANY(%s) ORDER BY datname", (names,)
+        ).fetchall()
+    if rows:
+        raise ValueError(
+            f"the database {rows[0][0]} already exists, perhaps an episode another study kept;"
+            " give --database-prefix another prefix, or drop it"
+        )
 
 
 def check_out(out: Path) -> None:
@@ -546,6 +570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         live = live_from_args(args, os.environ)
         study = plan_study(args, SCRIPTED if live is None else live)
         check_out(out)
+        check_databases_free(args.dsn, study, args.database_prefix)
         with psycopg.connect(args.dsn, autocommit=True) as conn:
             bootstrap(conn, DB_DIR / "bootstrap.sql")
         print(study.describe(), flush=True)
