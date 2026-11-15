@@ -23,10 +23,12 @@ What a crash means for a connection (0006, 0010 change 3):
   on it is dropped, as messages to a component that is down are.
 - A component that is down sends nothing (`Transport.post`).
 
-When the transport delivers a request twice (F4), the gateway gets the same JSON-RPC
-message twice and answers both, with the same id. Content cannot tell the two answers
-apart, so they pair with the deliveries in the order those arrived: the first answer
-goes to the agent, and the next one is the copy's, which the transport drops (0006).
+When the transport delivers a request twice (F4), the copy reaches the gateway with a
+JSON-RPC id of its own, `copy-<seq>`, made from its message seq. The gateway answers
+both, and each answer carries the id of the delivery it answers, so the agent always
+gets the answer to its own request and the transport drops the copy's (0006), whichever
+the gateway sends first. The logged copy keeps the request's body; only the delivered
+message carries the new id. The gateway never uses the JSON-RPC id itself.
 
 Each request delivered to the gateway carries its own message seq, as a transport
 attaches its per-request data: `ServerMessageMetadata(request_context=...)`, which the
@@ -197,16 +199,23 @@ class Outbox:
         wanted = self._link.wanted(self._sender, kind)
         if kind == "answer":
             answered = self._theirs.answering(message_id)
-            if answered is not None and answered.copy_of is not None:
-                correlation, wanted = answered.seq, answer_to_copy
+            if answered is not None:
+                correlation, api, intent_id = answered.seq, answered.api, answered.intent_id
+                if answered.copy_of is not None:
+                    wanted = answer_to_copy
 
         def arrive(envelope: Envelope) -> None:
             delivered = item
             if kind == "request":
-                self._own.arrived.setdefault(message_id, deque()).append(envelope)
+                key, message = message_id, item.message
+                if envelope.copy_of is not None:
+                    key = _copy_id(envelope.seq)
+                    message = message.model_copy(update={"id": key})
+                    delivered = SessionMessage(message, metadata=item.metadata)
+                self._own.arrived.setdefault(key, deque()).append(envelope)
                 if self._receiver == self._link.gateway:
                     metadata = ServerMessageMetadata(request_context=Delivery(envelope.seq))
-                    delivered = SessionMessage(item.message, metadata=metadata)
+                    delivered = SessionMessage(message, metadata=metadata)
             self._peer.deliver(delivered)
 
         envelope = self._transport.post(
@@ -242,6 +251,11 @@ class Outbox:
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+def _copy_id(seq: int) -> str:
+    """The JSON-RPC id a copy carries into the receiver: its own, never the request's."""
+    return f"copy-{seq}"
 
 
 def _answer_class(body: dict[str, object]) -> str | None:
