@@ -14,6 +14,16 @@ these readings of when a message is sent and delivered:
   arrives; the simulator logs each request as it arrives, and each answer as it sends it.
   A request carries the seq the gateway logged it under, and an answer the seq the
   simulator logged it under, in the header `fivefold-seq`.
+- A write request is sent at the time its attempt records, `gw.attempt.sent_vt` (0003),
+  the time the gateway's settle bounds start from (0005). The gateway records the
+  attempt in a transaction, then logs the request, and on the host's clock milliseconds
+  pass in between; the log takes the attempt's time, so the evaluator's bounds start from
+  the same number (0004). A message the simulator logs meanwhile can then have a lower
+  seq and a later `sent_vt`. Nothing reads the log as if virtual time grew with seq: the
+  evaluator compares times within one request's evidence, recovery latency compares a
+  fault's time with its evidence's deliveries and attestations, the viewer orders events
+  by time, and the log's own checks ask only that a message is delivered no earlier than
+  it is sent, and that a copy repeats its request's time.
 - A message whose fate nobody logged, because its receiver never took it, is dropped when
   the run ends (`fivefold.harness.split.lifecycle`).
 
@@ -114,11 +124,22 @@ class Hops:
         idempotency_key: str | None = None,
         correlation: int | None = None,
         answer_class: str | None = None,
+        sent_vt: int | None = None,
     ) -> Envelope:
-        """Log a message as sent now, with no fate yet; return it as its receiver gets it."""
+        """Log a message as sent, with no fate yet; return it as its receiver gets it.
+
+        It is sent now, unless `sent_vt` gives the earlier time at which its sender
+        recorded the send: the gateway's write attempt (`SimulatorLink`).
+        """
         kept = json.loads(json.dumps(body, sort_keys=True))
+        seq = self._log.next_seq()
+        now = self._scheduler.now
+        if sent_vt is None:
+            sent_vt = now
+        elif sent_vt > now:
+            raise ValueError(f"a message logged at {now} cannot be sent later, at {sent_vt}")
         envelope = Envelope(
-            seq=self._log.next_seq(),
+            seq=seq,
             hop=hop,
             kind=kind,
             sender=sender,
@@ -129,7 +150,7 @@ class Hops:
             idempotency_key=idempotency_key,
             answer_class=answer_class,
             body=kept,
-            sent_vt=self._scheduler.now,
+            sent_vt=sent_vt,
         )
         self._log.message_sent(_record(envelope))
         return envelope

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import stat
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import yaml
 
@@ -13,12 +15,18 @@ from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import scenario_from_data
 from fivefold.faults.catalog import Action
 from fivefold.faults.plan import FaultInjector, Fired, parse_plan
+from fivefold.gateway.records import Action as GatewayAction
+from fivefold.gateway.records import Answer, Attempt, CheckRecord
+from fivefold.gateway.sim_client import SimClient
+from fivefold.gateway.state_machine import ActionState, CheckKind, Reason
+from fivefold.harness.clock import HostClock
 from fivefold.harness.log import MemoryHarnessLog
-from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.scheduler import HostScheduler, Scheduler
 from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
+from fivefold.harness.split.gateway import SimulatorLink
 from fivefold.harness.split.hops import Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
@@ -341,3 +349,98 @@ def test_only_a_writes_answer_has_an_answer_class() -> None:
     assert answer_class("reserve_inventory", {"answer": "in_progress"}) == "in_progress"
     assert answer_class("get_quote", {"answer": "fact"}) is None
     assert answer_class("submit_purchase_order", ["not", "a", "body"]) is None
+
+
+# The gateway's writes to the simulator -----------------------------------------------------------
+
+ORDER_ARGS: dict[str, str | int] = {
+    "supplier_id": "S-1",
+    "sku": "W-100",
+    "quantity": 100,
+    "unit_price_minor": 540,
+    "currency": "USD",
+    "cost_center": "CC-OPS",
+}
+
+
+def _dispatched_order(sent_vt: int) -> tuple[GatewayAction, Attempt]:
+    """A G2 order at C2, whose first attempt the gateway recorded at `sent_vt`."""
+    action = GatewayAction(
+        action_id="A-0001",
+        task_id="T-1",
+        intent_id="REQ-1",
+        operation="submit_purchase_order",
+        target="S-1",
+        args=ORDER_ARGS,
+        action_key="REQ-1",
+        identity=True,
+        contract=Contract.C2,
+        basis={"quote/S-1/W-100": 1, "budget/CC-OPS": 1},
+        state=ActionState.DISPATCHED,
+        grant_id="G-0001",
+        idempotency_key="A-0001",
+        effect_id=None,
+        created_vt=0,
+        updated_vt=sent_vt,
+    )
+    check = CheckRecord(
+        kind=CheckKind.EXEMPT, approval=None, basis=None, seen_seq=1, check_vt=sent_vt
+    )
+    attempt = Attempt(
+        attempt_id="A-0001/1",
+        action_id="A-0001",
+        attempt_no=1,
+        idempotency_key="A-0001",
+        grant_id="G-0001",
+        check=check,
+        sent_vt=sent_vt,
+        answer_class=None,
+        answer_ref=None,
+        answered_vt=None,
+    )
+    return action, attempt
+
+
+def test_the_gateway_logs_a_write_at_its_attempts_send_time() -> None:
+    """The gateway records a write's attempt, with its send time, in a transaction before
+    it sends the write (0003); on the host's clock milliseconds pass before the link logs
+    the request. The log takes the attempt's time, so the gateway's settle bounds and the
+    evaluator's start from one number (0004, 0005)."""
+    log = MemoryHarnessLog()
+    scheduler = HostScheduler(HostClock(HostClock.host_ms() - 1_000))
+    action, attempt = _dispatched_order(sent_vt=scheduler.now - 7)
+
+    def simulator(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    async def send() -> Answer:
+        transport = httpx.MockTransport(simulator)
+        async with httpx.AsyncClient(base_url="http://simulator", transport=transport) as client:
+            hops = Hops(scheduler, log, FaultInjector())
+            link = SimulatorLink(scheduler, hops, client, secret="the-gateway's-secret")
+            return await SimClient(link, timeout_ms=800).send(action, attempt, "APR-0001")
+
+    answer = asyncio.run(send())
+    (request,) = log.messages
+    assert isinstance(request.body, dict)
+    assert (request.hop, request.api, request.body["client_ref"]) == (
+        "gw_sim",
+        "submit_purchase_order",
+        "A-0001/1",
+    )
+    assert request.sent_vt == attempt.sent_vt
+    assert answer.reason is Reason.SERVER_ERROR
+
+
+def test_a_message_cannot_be_logged_as_sent_later_than_now() -> None:
+    hops, _ = _hops([], [])
+    with pytest.raises(ValueError, match="cannot be sent later"):
+        hops.sent(
+            hop="gw_sim",
+            kind="request",
+            sender="gateway",
+            receiver="simulator",
+            api="submit_purchase_order",
+            body={},
+            sent_vt=1,
+        )

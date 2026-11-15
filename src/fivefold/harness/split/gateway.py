@@ -154,12 +154,14 @@ class SimulatorLink:
         timeout_ms: int,
         intent_id: str | None = None,
         idempotency_key: str | None = None,
+        sent_vt: int | None = None,
     ) -> Reply:
         """Send one request and wait at most `timeout_ms` for its answer.
 
         Raises `TransportTimeout` when none arrives in time, when the connection fails,
         or when F2 drops the answer; the last waits out the timeout first, as a lost
-        answer would.
+        answer would. A write is logged at `sent_vt`, its attempt's recorded send time
+        (`fivefold.harness.split.hops`).
         """
         request = self._hops.sent(
             hop=hop,
@@ -170,6 +172,7 @@ class SimulatorLink:
             body=body,
             intent_id=intent_id,
             idempotency_key=idempotency_key,
+            sent_vt=sent_vt,
         )
         deadline = self._scheduler.now + timeout_ms
         headers = {

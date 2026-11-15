@@ -243,10 +243,20 @@ def _check_records(split: Split, ran: Ran) -> None:
             "SELECT count(*) FROM harness.message_log"
             " WHERE (fate = 'delivered') <> (delivered_wall_at IS NOT NULL)"
         ).fetchone()
+        # The gateway's settle bounds start from each attempt's send time, the evaluator's
+        # from the logged request's (0004, 0005): they must be one number.
+        writes = conn.execute(
+            "SELECT a.attempt_id, a.sent_vt, m.sent_vt FROM gw.attempt a"
+            " JOIN harness.message_log m ON m.body->>'client_ref' = a.attempt_id"
+            " WHERE m.hop = 'gw_sim' AND m.kind = 'request' AND m.copy_of IS NULL"
+        ).fetchall()
     assert row == ("split", "external", "scripted")
     assert stop == (ran.stopped_vt,)
     assert unfated == (0,)
     assert unstamped == (0,)
+    if ran.run.has_gateway:
+        assert writes, "the gateway sent a write"
+        assert all(attempt == logged for _, attempt, logged in writes), writes
     assert _registered(split) == [(ran.run.run_id, "dev-001-single-po", ran.run.config, "C2", 7)]
 
 

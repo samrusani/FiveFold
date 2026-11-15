@@ -184,11 +184,14 @@ class HttpApi:
         timeout_ms: int,
         intent_id: str | None = None,
         idempotency_key: str | None = None,
+        sent_vt: int | None = None,
     ) -> Reply:
         """Send one call; wait at most `timeout_ms` for its answer.
 
         Raises `TransportTimeout` with no answer in time, `ConnectionError` when the
-        connection fails, and `ServerError` for a 5xx status.
+        connection fails, and `ServerError` for a 5xx status. `sent_vt` changes nothing:
+        the simulator logs the agent's calls as they arrive, and the agent's tools record
+        no send time.
         """
         headers = {"authorization": f"Bearer {self._secret}"}
         try:

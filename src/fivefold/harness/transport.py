@@ -114,9 +114,16 @@ class Calls(Protocol):
         timeout_ms: int,
         intent_id: str | None = None,
         idempotency_key: str | None = None,
+        sent_vt: int | None = None,
     ) -> Reply:
         """Send a request and return its answer. Raises `TransportTimeout` when no answer
-        arrives within `timeout_ms`."""
+        arrives within `timeout_ms`.
+
+        `sent_vt` is when the sender recorded the send, if it did: the gateway records
+        each write attempt with its send time before it sends it (0003). The harness's
+        log then gives the request that time, so that the gateway's settle bounds and the
+        evaluator's, which reads the log, start from one number (0004, 0005).
+        """
         ...
 
 
@@ -443,10 +450,14 @@ class Transport:
         timeout_ms: int,
         intent_id: str | None = None,
         idempotency_key: str | None = None,
+        sent_vt: int | None = None,
     ) -> Reply:
         """Send a request and wait for its answer, at most `timeout_ms` virtual ms.
 
         Raises `TransportTimeout` if no answer arrives in time. A later answer is dropped.
+        `sent_vt` changes nothing here: the request is sent in its sender's step, and the
+        scheduler moves virtual time only between steps, so a send the sender recorded in
+        that step is sent at the time it recorded.
         """
         if receiver not in self._handlers:
             raise ValueError(f"{receiver} serves no requests")

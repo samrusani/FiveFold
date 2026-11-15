@@ -104,8 +104,12 @@ class SimClient:
         *,
         intent_id: str | None = None,
         idempotency_key: str | None = None,
+        sent_vt: int | None = None,
     ) -> object:
-        """Send one request; return its answer's body. Raises `TransportTimeout`."""
+        """Send one request; return its answer's body. Raises `TransportTimeout`.
+
+        `sent_vt` is the send time the gateway recorded for a write's attempt.
+        """
         reply = await self._transport.call(
             hop="gw_sim",
             sender=self._component,
@@ -115,6 +119,7 @@ class SimClient:
             timeout_ms=self._timeout_ms,
             intent_id=intent_id,
             idempotency_key=idempotency_key,
+            sent_vt=sent_vt,
         )
         return reply.body
 
@@ -181,7 +186,9 @@ class SimClient:
 
         The request carries the action's idempotency key only where the contract takes
         keys (0005), and never in G1, which has none (0008). It carries the basis in
-        every configuration: G1 forwards the cited reads without checking them.
+        every configuration: G1 forwards the cited reads without checking them. It goes
+        out with the attempt's recorded send time, `attempt.sent_vt`, which the harness's
+        log gives the request too.
         """
         operation = Operation(action.operation)
         keyed = action.request_key is not None
@@ -204,6 +211,7 @@ class SimClient:
                 str(request.api),
                 intent_id=action.intent_id,
                 idempotency_key=request.idempotency_key,
+                sent_vt=attempt.sent_vt,
             )
         except TransportTimeout:
             return Answer(AnswerClass.UNKNOWN, Reason.TIMEOUT)
