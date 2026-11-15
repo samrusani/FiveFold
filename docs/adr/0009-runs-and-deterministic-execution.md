@@ -1,6 +1,7 @@
 # 0009: Runs, scenarios and deterministic execution
 
 Status: Accepted (2026-11-14)
+Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too
 Date: 2026-11-14
 Spec sections affected: Simulator (determinism, scenarios), Playback and branching, Stack (packaging, `make demo`), Testing, Data model (Run)
 Resolves M0 questions: 29, 31, 32, 33 (MCP transport), 41, 42 (scenario format); part of 38
@@ -60,7 +61,7 @@ Checked in the langchain-core 1.8.0 source: a base chat model class and several 
 
 ### Determinism contract
 
-The same scenario, configuration, contract level, seed and model outputs produce byte-identical message logs, effects ledgers, action events, approval events and evaluation JSON, ignoring wall-clock columns. CI runs every demo scenario twice and compares digests.
+The same scenario, configuration, contract level, seed and model outputs produce byte-identical message logs, effects ledgers, action events, approval events and evaluation JSON, ignoring wall-clock columns and fields. CI runs every demo scenario twice and compares digests.
 
 We accept one known source of nondeterminism: LangGraph's retry backoff sleeps in wall time with jitter from the global generator (0008). It changes wall-clock metrics only.
 

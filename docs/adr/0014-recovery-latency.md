@@ -1,6 +1,6 @@
 # 0014: Recovery latency
 
-Status: Proposed
+Status: Accepted (2026-11-15)
 Date: 2026-11-15
 Spec sections affected: Evaluator (Metrics), Data model (harness MessageLog and FaultLog, eval RunResult), Runs and determinism; records 0004 (Metrics) and 0009 (Determinism contract)
 
@@ -14,7 +14,7 @@ What the harness records, from its code and from runs of all 221 cells of `fault
 - `message_log.wall_at` is written at the send; a delivery gets `delivered_seq` and `delivered_vt` but no wall-clock time. LangGraph's retry backoff holds the run in wall time (`harness/clock.py`), so the two can be far apart.
 - Playback and the determinism check compare the evaluation JSON exactly, without columns ending in `wall_at`.
 
-## Decision (proposed)
+## Decision
 
 1. **Per intent.** One entry per affected task intent, not per write request or gateway action: intents are the same in B0, G1 and G2, and property 5 keeps its evidence per intent. The metric reads what the properties read, simulator and harness records and the scenario, never the gateway's tables.
 2. **Touched.** A fault touches the intent of each message, action or tool call it acted on; F9 touches every task intent. F10 acts on the next `count` status answers after it fires, which can concern several intents, so it touches the intent of each answer it changes. The harness records this in a new column, `harness.fault_log.intent_id`: one row when a fault fires, as today, and for F10 one more row for each status answer it changes, with that answer as `target_seq` and its intent. The column is null for F9 and for a fault on a message without an intent, such as a read. The start is the `vt` of the first fault, by `seq`, that touched the intent. Other intents a crash stalls do not count, since only gateway tables and agent checkpoints show all the work a component held.
