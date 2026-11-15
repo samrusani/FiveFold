@@ -55,6 +55,8 @@ class OpenRun:
     log: SharedPgHarnessLog
     scheduler: HostScheduler
     plan: tuple[PlannedFault, ...]
+    clock: HostClock
+    """The scheduler's clock, which still calls back once the scheduler has stopped."""
 
     def stop_records(self) -> None:
         """Write no more harness records: the run has stopped. Any later write fails."""
@@ -86,7 +88,7 @@ def open_run(run: SplitRun, base_dsn: str) -> OpenRun:
         clock = HostClock(clock_origin(conn))
         _ = clock.now
         scheduler = HostScheduler(clock)
-        return OpenRun(run, scenario, conn, SharedPgHarnessLog(conn), scheduler, plan)
+        return OpenRun(run, scenario, conn, SharedPgHarnessLog(conn), scheduler, plan, clock)
     except BaseException:
         conn.close()
         raise

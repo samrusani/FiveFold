@@ -29,7 +29,8 @@ message carried a report.
 phase (0009): G2 closes the run, as the inproc harness does once its agents are done
 (0003), and the service refuses further MCP requests; the dispatcher keeps recovering
 actions through the drain window. Stop ends the dispatcher's tasks and timers, and the
-service writes no harness record after it: a call still in flight then fails.
+service writes no harness record after it, except the actor-log row of an attestation
+already in flight: a call still in flight then fails.
 
 `/admin` serves the gateway's admin API, when the service is given one: a human resolves
 an escalation there by attesting what happened (0003). It shares the MCP endpoint's
@@ -39,7 +40,14 @@ attestation only from the harness's actor log (0004). The scripted resolver writ
 row in the inproc topology; here a human attests over HTTP, so the admin path the API
 calls is a `RecordedAdmin`, which writes the same row after the gateway has recorded the
 attestation. The two writes are separate transactions on separate connections: the
-gateway's as `ff_gw`, the harness's as `ff_harness`.
+gateway's as `ff_gw`, the harness's as `ff_harness`. Once stop has begun, no attestation
+is taken: none commits in the gateway's records, and the API answers 503. An attestation
+taken before keeps the harness's records open until its row is written (`Attestations`).
+
+Checked in starlette 1.10.0 (`applications.py`, `_exception_handler.py`):
+`add_exception_handler` adds a handler before the app builds its middleware, which it does
+at its first request; a handler for an exception class runs inside the routes, found by
+the exception's MRO, before the app's handler for `Exception`.
 
 Checked in mcp 2.3.0: `StreamableHTTPSessionManager(app=, security_settings=)`, its
 `run()` context, and `StreamableHTTPASGIApp(manager)`
@@ -60,8 +68,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -90,6 +98,7 @@ from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.store import ActionStore
 from fivefold.gateway.tools import GatewayTools, ToolTiming
 from fivefold.harness.actors import ATTEST
+from fivefold.harness.clock import HostClock
 from fivefold.harness.log import ActorRecord, HarnessLog, JsonValue
 from fivefold.harness.mcp_link import Delivery, answer_label
 from fivefold.harness.reports import ReportSink
@@ -124,9 +133,17 @@ def admin_api(environ: Mapping[str, str] | None = None) -> AdminFactory | None:
     token = token_from_environment(environment)
 
     def factory(admin: GatewayAdmin, records: ActionStore) -> ASGIApp:
-        return admin_app(admin, records, token=token)
+        app = admin_app(admin, records, token=token)
+        app.add_exception_handler(AttestationsClosed, _attestations_closed)
+        return app
 
     return factory
+
+
+async def _attestations_closed(request: Request, error: Exception) -> Response:
+    """503 for an attestation the gateway no longer takes: nothing was recorded. The body
+    has the admin API's error shape."""
+    return JSONResponse({"reason": "unavailable", "message": str(error)}, status_code=503)
 
 
 # The gateway's end of the gw_sim hop ---------------------------------------------------------
@@ -378,6 +395,69 @@ def _error_body(ctx: ServerRequestContext[Any, Any], error: Exception) -> dict[s
 # The admin path, with attestations in the harness's actor log ------------------------------------
 
 
+ATTESTATION_WAIT_MS = 5_000
+"""How long stop keeps the harness's records open, at most, for attestations in flight."""
+
+
+class AttestationsClosed(RuntimeError):
+    """The gateway takes no attestation: its run has begun to stop."""
+
+
+class Attestations:
+    """The admin path's attestations in flight, and whether the gateway still takes any.
+
+    An attestation is in flight from the check that the gateway takes it, before its
+    resolution commits in the gateway's records, to its row in the harness's actor log,
+    which the evaluator counts (0004). Stop closes the gate first, so that no resolution
+    commits once stop has begun, and closes the harness's records only once no
+    attestation is in flight, or `ATTESTATION_WAIT_MS` later at most.
+
+    A resolution runs on the gateway's event loop without a pause, so stop can begin
+    inside one only from within it; the count keeps the records open for it all the same,
+    and keeps them so if a resolution ever waits.
+    """
+
+    def __init__(self) -> None:
+        self._closed = False
+        self._in_flight = 0
+        self._then: Callable[[], None] | None = None
+        self._bound: asyncio.TimerHandle | None = None
+
+    @contextmanager
+    def attesting(self) -> Iterator[None]:
+        """Hold one attestation in flight. Raises `AttestationsClosed` once closed."""
+        if self._closed:
+            raise AttestationsClosed("the run is stopping: the gateway takes no attestation now")
+        self._in_flight += 1
+        try:
+            yield
+        finally:
+            self._in_flight -= 1
+            if self._in_flight == 0:
+                self._settled()
+
+    def close(self) -> None:
+        """Take no attestation from now on."""
+        self._closed = True
+
+    def when_settled(self, then: Callable[[], None], *, clock: HostClock, limit_ms: int) -> None:
+        """Call `then` once no attestation is in flight: now, when the last one has logged
+        its row, or `limit_ms` of the run's time later, whichever comes first."""
+        self._then = then
+        if self._in_flight == 0:
+            self._settled()
+        else:
+            self._bound = clock.call_at(clock.now + limit_ms, self._settled)
+
+    def _settled(self) -> None:
+        then, self._then = self._then, None
+        bound, self._bound = self._bound, None
+        if bound is not None:
+            bound.cancel()
+        if then is not None:
+            then()
+
+
 class RecordedAdmin(GatewayAdmin):
     """The gateway's admin path, which also logs each attestation as the evaluator reads
     it (0004): in `harness.actor_log`, exactly as the scripted resolver logs its own.
@@ -386,15 +466,22 @@ class RecordedAdmin(GatewayAdmin):
     details naming the resolution, the intent, the action and, for `committed`, the
     effect. Its `vt` is when the gateway recorded the attestation, and its seq is taken
     after that, when the stack has it (`fivefold.harness.actors`). A refused attestation
-    logs nothing.
+    logs nothing. Once the run has begun to stop, no attestation is taken: none commits,
+    and the admin API answers 503 (`Attestations`).
     """
 
     def __init__(
-        self, scheduler: Scheduler, store: ActionStore, dispatcher: Dispatcher, log: HarnessLog
+        self,
+        scheduler: Scheduler,
+        store: ActionStore,
+        dispatcher: Dispatcher,
+        log: HarnessLog,
+        attestations: Attestations,
     ) -> None:
         super().__init__(scheduler, store, dispatcher)
         self._records = store
         self._log = log
+        self._attestations = attestations
 
     def resolve(
         self,
@@ -404,7 +491,14 @@ class RecordedAdmin(GatewayAdmin):
         *,
         actor: str,
     ) -> ActionResult:
-        result = super().resolve(escalation_id, resolution, effect_id, actor=actor)
+        with self._attestations.attesting():
+            result = super().resolve(escalation_id, resolution, effect_id, actor=actor)
+            self._log_attestation(escalation_id, resolution, effect_id)
+        return result
+
+    def _log_attestation(
+        self, escalation_id: str, resolution: Resolution, effect_id: str | None
+    ) -> None:
         escalation = self._records.snapshot().escalations[escalation_id]
         if escalation.resolved_vt is None:
             raise RuntimeError(f"{escalation_id} was attested but is not resolved")
@@ -426,7 +520,6 @@ class RecordedAdmin(GatewayAdmin):
                 vt=escalation.resolved_vt,
             )
         )
-        return result
 
 
 # The service --------------------------------------------------------------------------------
@@ -442,6 +535,7 @@ class _Serving:
     hops: Hops
     dispatcher: Dispatcher
     tools: GatewayTools
+    attestations: Attestations
     admin: ASGIApp | None = None
     stopping: asyncio.Event = field(default_factory=asyncio.Event)
     draining: bool = False
@@ -511,6 +605,7 @@ class GatewayService:
                 yield
         finally:
             if self._serving is not None:
+                self._serving.attestations.close()
                 self._serving.stopping.set()
                 await self._serving.client.aclose()
                 self._serving.store.close()
@@ -563,11 +658,12 @@ class GatewayService:
             timing=ToolTiming(tool_wait_ms=params.tool_wait_ms, max_wait_ms=params.max_wait_ms),
         )
         dispatcher.start()
+        attestations = Attestations()
         admin: ASGIApp | None = None
         if self._admin is not None:
-            recorded = RecordedAdmin(scheduler, store, dispatcher, opened.log)
+            recorded = RecordedAdmin(scheduler, store, dispatcher, opened.log, attestations)
             admin = self._admin(recorded, store)
-        return _Serving(opened, store, client, hops, dispatcher, tools, admin)
+        return _Serving(opened, store, client, hops, dispatcher, tools, attestations, admin)
 
     def drain(self) -> None:
         """The agents' phase is over: in G2, close the run if no report did (0003), and
@@ -578,12 +674,17 @@ class GatewayService:
             serving.store.close_run(serving.opened.scheduler.now)
 
     def stop(self) -> None:
-        """The run has stopped: end the gateway's tasks and timers."""
+        """The run has stopped: take no attestation from now on, end the gateway's tasks
+        and timers, and write no more harness records once the attestations in flight
+        have logged theirs (`Attestations`)."""
         serving = self.serving
         serving.draining = serving.stopped = True
+        serving.attestations.close()
         serving.opened.scheduler.stop()
-        serving.opened.stop_records()
         serving.stopping.set()
+        serving.attestations.when_settled(
+            serving.opened.stop_records, clock=serving.opened.clock, limit_ms=ATTESTATION_WAIT_MS
+        )
 
     # Routes -------------------------------------------------------------------------------
 

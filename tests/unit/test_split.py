@@ -31,7 +31,7 @@ from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
-from fivefold.harness.split.gateway import SimulatorLink
+from fivefold.harness.split.gateway import Attestations, AttestationsClosed, SimulatorLink
 from fivefold.harness.split.hops import Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
@@ -43,6 +43,9 @@ from fivefold.harness.split.rundir import (
     write_run,
 )
 from fivefold.harness.transport import Envelope
+
+START_S = 30.0
+"""How long a wait in these tests may take at most, in wall-clock seconds."""
 
 UNREACHABLE_DSN = "postgresql://nobody@127.0.0.1:1/none"
 """A server nothing listens on: a command that reached it would fail to connect."""
@@ -479,3 +482,43 @@ def test_the_stopped_runs_error_code_is_none_the_mcp_sdk_uses() -> None:
     assert jsonrpc.CONNECTION_CLOSED in defined, "the scan finds the SDK's codes"
     assert SERVICE_STOPPED not in defined
     assert -32019 <= SERVICE_STOPPED <= -32000, "an implementation-defined server error"
+
+
+# The gateway's gate for attestations ------------------------------------------------------------
+
+
+def test_the_attestation_gate_settles_once_the_last_attestation_in_flight_has_logged() -> None:
+    """Stop closes the gate, so no resolution commits after it, and closes the harness's
+    records only once no attestation is in flight."""
+
+    async def gated() -> list[str]:
+        gate, settled = Attestations(), list[str]()
+        clock = HostClock(HostClock.host_ms())
+        gate.when_settled(lambda: settled.append("open, none in flight"), clock=clock, limit_ms=1)
+        with gate.attesting():
+            gate.close()
+            with pytest.raises(AttestationsClosed), gate.attesting():
+                pass
+            gate.when_settled(lambda: settled.append("closed"), clock=clock, limit_ms=60_000)
+            assert settled == ["open, none in flight"]
+        return settled
+
+    assert asyncio.run(gated()) == ["open, none in flight", "closed"]
+
+
+def test_the_attestation_gate_settles_after_its_bound_if_one_never_logs() -> None:
+    async def stuck() -> list[str]:
+        gate, settled, done = Attestations(), list[str](), asyncio.Event()
+        clock = HostClock(HostClock.host_ms())
+
+        def close_records() -> None:
+            settled.append("closed")
+            done.set()
+
+        with gate.attesting():
+            gate.close()
+            gate.when_settled(close_records, clock=clock, limit_ms=20)
+            await asyncio.wait_for(done.wait(), START_S)
+        return settled
+
+    assert asyncio.run(stuck()) == ["closed"]

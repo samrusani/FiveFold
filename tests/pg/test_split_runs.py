@@ -14,6 +14,7 @@ the checks ask what happened, never how long it took.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import signal
 import socket
@@ -21,7 +22,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -34,11 +35,14 @@ import uvicorn
 import yaml
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from starlette.types import Receive, Scope, Send
 
 from fivefold.agents.remote import HttpGatewayConnection, RemoteAgent, RunOver, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
+from fivefold.gateway.admin import GatewayAdmin
 from fivefold.gateway.admin_api import TOKEN_VARIABLE
+from fivefold.gateway.records import ActionResult
 from fivefold.harness.clock import HostClock
 from fivefold.harness.log import SharedPgHarnessLog
 from fivefold.harness.migrations import (
@@ -551,6 +555,157 @@ def test_score_refuses_an_attestation_of_an_effect_the_ledger_lacks_in_one_line(
     assert error.count("\n") == 1, error
     assert "the evaluator cannot score the run" in error
     assert "names effect PO-0042, which the ledger lacks" in error
+
+
+@dataclass
+class Resolved:
+    """An escalation of demo 3 that a human resolved while the gateway stopped: the admin
+    API's answer, and what the gateway's and the harness's records hold afterwards."""
+
+    answer: httpx.Response
+    resolved_vt: int | None
+    """The gateway's record of the escalation's resolution."""
+    attestations: int
+    """The harness's actor-log rows, which the evaluator counts (0004)."""
+    records_closed: bool
+    """Whether the gateway's connection for harness records closed."""
+
+
+Human = Callable[
+    [GatewayService, httpx.AsyncClient, str, dict[str, Any]], Awaitable[httpx.Response]
+]
+"""What the human does at the escalation: given the gateway, an admin API client, the
+gateway's address and the escalation, it resolves it and returns the admin API's answer."""
+
+
+def _resolve_while_stopping(
+    split: Split, monkeypatch: pytest.MonkeyPatch, human: Human
+) -> Resolved:
+    """Demo 3 in G2: at C0 the order's answer is lost and the gateway escalates; `human`
+    resolves the escalation as the gateway stops."""
+    monkeypatch.setenv(TOKEN_VARIABLE, ADMIN_TOKEN)
+    factory = admin_api()
+    plan = [{"fault": "F2", **_order_plan("net.gw_sim.answer")[0]}]
+    run = split.start("G2", plan, contract=Contract.C0)
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    service = GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url, admin=factory)
+    gateway = serve(service.app())
+
+    async def acts() -> httpx.Response:
+        agent = RemoteAgent(
+            scenario=run.scenario(),
+            config="G2",
+            contract=run.contract,
+            gateway_url=f"{gateway.url}/mcp",
+        )
+        working = asyncio.ensure_future(run_remote_agent(agent))
+        headers = {"authorization": f"Bearer {ADMIN_TOKEN}"}
+        async with httpx.AsyncClient(base_url=f"{gateway.url}/admin", headers=headers) as client:
+            deadline = time.monotonic() + AGENT_S
+            while not (listed := (await client.get("/escalations")).json()["escalations"]):
+                assert time.monotonic() < deadline, "no escalation opened"
+                await asyncio.sleep(0.05)
+            (escalation,) = listed
+            answer = await human(service, client, gateway.url, escalation)
+        # The gateway has stopped. A status call the agent still waits on would end only
+        # at the agent's own timeout, so the agent is cancelled.
+        working.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await working
+        return answer
+
+    try:
+        answer = asyncio.run(asyncio.wait_for(acts(), AGENT_S))
+        records_closed = service.serving.opened.conn.closed
+    finally:
+        gateway.stop()
+        simulator.stop()
+    with split.connect() as conn:
+        (resolved_vt,) = conn.execute("SELECT resolved_vt FROM gw.escalation").fetchone() or (None,)
+        (attestations,) = conn.execute("SELECT count(*) FROM harness.actor_log").fetchone() or (0,)
+    return Resolved(answer, resolved_vt, attestations, records_closed)
+
+
+def _attestation(split: Split, escalation: dict[str, Any]) -> dict[str, str]:
+    return {
+        "resolution": "committed",
+        "effect_id": _effect_citing(split, escalation["approval_id"]),
+        "actor": "ops-1",
+    }
+
+
+def test_no_attestation_commits_once_the_gateway_has_begun_to_stop(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolution whose body arrives once stop has begun committed in the gateway's
+    records; then its actor-log row failed, since stop had closed the harness's
+    connection, so the admin API answered 500 and the evaluator never saw the
+    attestation. Now no resolution commits once stop has begun: 503, and nothing
+    recorded."""
+
+    async def human(
+        service: GatewayService, client: httpx.AsyncClient, url: str, escalation: dict[str, Any]
+    ) -> httpx.Response:
+        admin = service.serving.admin
+        assert admin is not None
+        inside = threading.Event()
+
+        async def holding(scope: Scope, receive: Receive, send: Send) -> None:
+            inside.set()  # past the gateway's own check that the run has not stopped
+            await admin(scope, receive, send)
+
+        service.serving.admin = holding
+        released = asyncio.Event()
+        body = json.dumps(_attestation(split, escalation)).encode()
+
+        async def sent_late() -> AsyncIterator[bytes]:
+            await released.wait()
+            yield body
+
+        path = f"/escalations/{escalation['escalation_id']}/resolve"
+        headers = {"content-type": "application/json"}
+        resolving = asyncio.ensure_future(client.post(path, content=sent_late(), headers=headers))
+        assert await asyncio.to_thread(inside.wait, START_S), "the request never reached the API"
+        harness = {"authorization": f"Bearer {service.run.secret(HARNESS)}"}
+        async with httpx.AsyncClient() as control:
+            stopped = await control.post(f"{url}/harness/stop", headers=harness)
+        assert stopped.json() == {"status": "stopped"}
+        released.set()
+        return await resolving
+
+    resolved = _resolve_while_stopping(split, monkeypatch, human)
+    assert resolved.answer.status_code == 503, resolved.answer.text
+    assert resolved.answer.json()["reason"] == "unavailable"
+    assert (resolved.resolved_vt, resolved.attestations) == (None, 0)
+    assert resolved.records_closed
+
+
+def test_stop_lets_a_resolution_log_its_attestation_before_closing_the_records(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop closes the harness's records only once every resolution in flight has logged
+    its attestation. The test begins stop inside the resolution, between its commit in the
+    gateway's records and its actor-log row."""
+
+    async def human(
+        service: GatewayService, client: httpx.AsyncClient, url: str, escalation: dict[str, Any]
+    ) -> httpx.Response:
+        commit = GatewayAdmin.resolve
+
+        def commit_then_stop(admin: GatewayAdmin, *args: Any, **kwargs: Any) -> ActionResult:
+            result = commit(admin, *args, **kwargs)
+            service.stop()
+            return result
+
+        monkeypatch.setattr(GatewayAdmin, "resolve", commit_then_stop)
+        path = f"/escalations/{escalation['escalation_id']}/resolve"
+        return await client.post(path, json=_attestation(split, escalation))
+
+    resolved = _resolve_while_stopping(split, monkeypatch, human)
+    assert resolved.answer.status_code == 200, resolved.answer.text
+    assert resolved.resolved_vt is not None
+    assert resolved.attestations == 1
+    assert resolved.records_closed
 
 
 # Trust boundaries and the run's end --------------------------------------------------------------
