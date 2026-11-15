@@ -42,11 +42,14 @@ touches any database, `branch` refuses a K beyond the parent's cassette, a scena
 than the one the parent was recorded on, a live run without the flag, the spend cap or the
 price file, and outputs that name the parent's cassette or each other.
 
-Each command drops and recreates the database it runs in, as the demos do. The admin
-connection comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`. Only a live model's provider can
-need a key, and it reads the key from the environment, never from this command. A
-refused input, such as a scenario that changed or a fault plan the configuration does
-not have, ends the command with one line on standard error and exit status 1.
+Each command drops the database it runs in, if it exists, and makes it again as a copy of
+the migrated template database (`fivefold.harness.migrations.create_run_database`), as the
+demos do; a database named as the template is refused. The admin connection comes from
+`--dsn`, or `FIVEFOLD_ADMIN_DSN`. Only a live model's provider can need a key, and it
+reads the key from the environment, never from this command. A refused input, such as a
+scenario that changed or a fault plan the configuration does not have, ends the command
+with one line on standard error and exit status 1. So does a template that cannot be
+copied.
 """
 
 from __future__ import annotations
@@ -70,9 +73,9 @@ from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
+    MigrationError,
     bootstrap_server,
-    migrate,
-    recreate_database,
+    create_run_database,
 )
 from fivefold.harness.models import SCRIPTED, Live
 from fivefold.harness.run import CONFIGS, RunResult, RunSpec
@@ -93,11 +96,9 @@ BRANCHED = "fivefold_branched"
 
 
 def _fresh_database(admin_dsn: str, name: str) -> str:
-    """Drop and recreate the database `name`, migrate it, and return its DSN."""
-    dsn = recreate_database(admin_dsn, name)
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        migrate(conn, DB_DIR / "migrations")
-    return dsn
+    """Drop the database `name` if it exists, make it again as a copy of the migrated
+    template database, and return its DSN."""
+    return create_run_database(admin_dsn, name, DB_DIR / "migrations", replace=True).dsn
 
 
 def _record(args: argparse.Namespace, live: Live | None) -> int:
@@ -297,7 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if branch is not None:
             return _branch(args, *branch, live)
         return _record(args, live) if args.command == "record" else _play(args)
-    except (OSError, PlaybackError, ReplayError, ValueError) as error:
+    except (OSError, MigrationError, PlaybackError, ReplayError, ValueError) as error:
         print(f"{args.command} failed: {error}", file=sys.stderr)
         return 1
 

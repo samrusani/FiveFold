@@ -415,6 +415,8 @@ make help       # every target
 
 The demos, the tests and every command that runs an episode connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose database, `postgresql://postgres@127.0.0.1:5432/postgres`. Any PostgreSQL 16 server works if that connection is a superuser and the component roles can log in. `db/bootstrap.sql` creates those roles without a password; the Compose database and CI trust local connections, so the roles need none there. Test runs that share one server at the same time need different `FIVEFOLD_TEST_DB_PREFIX` values.
 
+Every run database is a copy of one migrated template database, `fivefold_template` (set `FIVEFOLD_TEMPLATE_DB` for another; the tests use their own). The demo, the study, the recorder and the split topology's `start` make the template if it is missing, migrate it forward if it is behind, and copy it; commands that copy at once take turns. PostgreSQL copies a database only while no other session is connected to it, so keep no session open on the template: a copy waits up to 5 seconds for one to end, then is refused. A template whose applied migrations no longer match `db/migrations`, such as one an edited migration was applied to, is refused too; drop it, and the next run makes it again.
+
 ## Maintainer
 
 [samrusani](https://github.com/samrusani)

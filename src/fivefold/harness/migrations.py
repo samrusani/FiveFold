@@ -22,6 +22,13 @@ Every run database this module creates or drops changes under one advisory lock
 check and its change. `DROP DATABASE` cannot run in a transaction, so the check and the
 drop are two statements, and the lock is what joins them.
 
+Run databases are copies of one migrated template database (0007, 0009),
+`fivefold_template` unless FIVEFOLD_TEMPLATE_DB names another; the tests name their own.
+`create_run_database` makes the template if it is missing, migrates it forward if it is
+behind, and copies it with `CREATE DATABASE ... TEMPLATE`, all under the database lock. A
+copy keeps the template's rows in `public.schema_migration`, so `migrate` on it applies
+nothing.
+
 Command line, from the repository root:
 
     python -m fivefold.harness.migrations bootstrap
@@ -36,7 +43,7 @@ import contextlib
 import hashlib
 import os
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,6 +78,14 @@ REGISTRY_DATABASE = "fivefold_registry"
 REGISTRY_ENV = "FIVEFOLD_REGISTRY_DB"
 """The environment variable that names another registry database. Tests set it, so a test
 run never writes to the registry a person's runs are in."""
+
+TEMPLATE_DATABASE = "fivefold_template"
+"""The migrated template that run databases are copied from (0009), unless
+FIVEFOLD_TEMPLATE_DB names another."""
+
+TEMPLATE_ENV = "FIVEFOLD_TEMPLATE_DB"
+"""The environment variable that names another template database. Tests set it, so a test
+run never migrates, copies or drops the template a person's runs are made from."""
 
 Connection = psycopg.Connection[TupleRow]
 
@@ -253,6 +268,116 @@ def _create_database(conn: Connection, name: str) -> None:
             "CREATE DATABASE {} ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
         ).format(sql.Identifier(name))
     )
+
+
+def template_database(environ: Mapping[str, str] | None = None) -> str:
+    """The template database's name: FIVEFOLD_TEMPLATE_DB if set, else `fivefold_template`.
+
+    `environ` defaults to the process environment.
+    """
+    env = os.environ if environ is None else environ
+    name = env.get(TEMPLATE_ENV) or TEMPLATE_DATABASE
+    check_database_name(name)
+    return name
+
+
+def prepare_template(admin_dsn: str, migrations: Path, name: str | None = None) -> str:
+    """Make the template database unless it exists, migrate it forward with the files in
+    `migrations`, and return its name. `name` defaults to `template_database()`.
+
+    It holds the database lock (`database_lock`), so no copy of the template starts while
+    this connects to it.
+    """
+    name = template_database() if name is None else name
+    check_database_name(name)
+    with database_lock(admin_dsn) as conn:
+        _prepare_template(conn, admin_dsn, name, migrations)
+    return name
+
+
+def create_run_database(
+    admin_dsn: str,
+    name: str,
+    migrations: Path,
+    *,
+    template: str | None = None,
+    replace: bool = False,
+    before_copy: Callable[[Connection], None] | None = None,
+) -> CreatedDatabase:
+    """Make the run database `name` as a copy of the migrated template database, and
+    return it. `template` defaults to `template_database()`.
+
+    Everything happens in one hold of the database lock (`database_lock`):
+
+    1. The template is made if it is missing and migrated forward with the files in
+       `migrations` if it is behind (`prepare_template`). Its connection is closed before
+       the copy: PostgreSQL copies a database only while no other session is connected
+       to it.
+    2. With `replace`, a database named `name` is dropped. `before_copy`, if given, runs
+       next, on the lock's connection: the split topology drops only its own run's
+       database there.
+    3. `CREATE DATABASE name TEMPLATE template` copies the template.
+
+    Without `replace`, a taken name raises `DatabaseExists`, and that database is left as
+    it was. The result's OID lets cleanup drop only the database made here
+    (`drop_database`).
+
+    Two processes that copy at once take turns on the lock, and both copies work. Another
+    session connected to the template, one that does not go through this module, makes
+    the copy wait up to 5 seconds for it to end, then fail: that raises `MigrationError`.
+    So does a run database named as the template, and a template whose applied
+    migrations do not match `migrations`.
+
+    Checked in the PostgreSQL 16 source: `createdb` (`src/backend/commands/dbcommands.c`)
+    reports a taken name before it checks the source database for other sessions, and
+    `CountOtherDBBackends` (`src/backend/storage/ipc/procarray.c`) waits for them up to
+    5 seconds. Checked in psycopg 3.3.9 (`psycopg/errors.py`): SQLSTATE 55006 raises
+    `ObjectInUse`, and 42P04 raises `DuplicateDatabase`.
+    """
+    template = template_database() if template is None else template
+    check_database_name(name)
+    check_database_name(template)
+    if name == template:
+        raise MigrationError(f"the database {name} is the template run databases are copied from")
+    with database_lock(admin_dsn) as conn:
+        _prepare_template(conn, admin_dsn, template, migrations)
+        if replace:
+            drop_database_locked(conn, name)
+        if before_copy is not None:
+            before_copy(conn)
+        try:
+            conn.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(name), sql.Identifier(template)
+                )
+            )
+        except psycopg.errors.DuplicateDatabase:
+            raise DatabaseExists(f"the database {name} already exists") from None
+        except psycopg.errors.ObjectInUse:
+            raise MigrationError(
+                f"the template database {template} is in use by another session, so it cannot"
+                " be copied; close that session and try again"
+            ) from None
+        row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
+    if row is None:
+        raise MigrationError(f"the database {name} was dropped as soon as it was created")
+    return CreatedDatabase(name=name, oid=int(row[0]), dsn=make_conninfo(admin_dsn, dbname=name))
+
+
+def _prepare_template(conn: Connection, admin_dsn: str, template: str, migrations: Path) -> None:
+    """`prepare_template` on `conn`, an admin connection that holds the database lock."""
+    discover(migrations)  # check the files first, so their errors are not the template's
+    found = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (template,)).fetchone()
+    if found is None:
+        _create_database(conn, template)
+    try:
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=template), autocommit=True) as tpl:
+            migrate(tpl, migrations)
+    except MigrationError as error:
+        raise MigrationError(
+            f"the template database {template} cannot be used: {error}; drop it, and the"
+            " next run makes it again"
+        ) from None
 
 
 def registry_database(environ: Mapping[str, str] | None = None) -> str:
