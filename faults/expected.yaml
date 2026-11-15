@@ -107,31 +107,40 @@ cells:
   # the agent re-reads and orders at the new price on a new approval; B0 orders at the old
   # price, except at C3, where the destination refuses the stale order and the agent
   # re-reads. Late, price up: the order commits on the old price, a documented G2 limit at
-  # C0 to C2 (0006). Harmless (the lead time only): every configuration passes.
+  # C0 to C2 (0006). Harmless (the lead time only), early or late: a control, which every
+  # configuration passes (0006).
   - {fault: F7, variant: early_price_up, contract: C0, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: late_price_up, contract: C0, config: G2, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C0, config: G2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C0, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C0, config: B0, verdict: fail, failing: [3]}
   - {fault: F7, variant: late_price_up, contract: C0, config: B0, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C0, config: B0, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C0, config: B0, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C1, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: late_price_up, contract: C1, config: G2, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C1, config: G2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C1, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C1, config: B0, verdict: fail, failing: [3]}
   - {fault: F7, variant: late_price_up, contract: C1, config: B0, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C1, config: B0, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C1, config: B0, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C2, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: late_price_up, contract: C2, config: G2, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C2, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C2, config: B0, verdict: fail, failing: [3]}
   - {fault: F7, variant: late_price_up, contract: C2, config: B0, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C2, config: B0, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C2, config: B0, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C3, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: late_price_up, contract: C3, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: early_harmless, contract: C3, config: G2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C3, config: G2, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C3, config: B0, verdict: pass, failing: []}
   - {fault: F7, variant: late_price_up, contract: C3, config: B0, verdict: pass, failing: []}
   - {fault: F7, variant: early_harmless, contract: C3, config: B0, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C3, config: B0, verdict: pass, failing: []}
 
   # F9, a second worker on the same task (properties 1 and 2). G2 places one order: the
   # second worker's proposal matches the first action or is refused as done. In B0 each
@@ -306,19 +315,24 @@ cells:
 
   # F7 in G1: G1 checks no fact, so the order goes out on the old price, early or late,
   # and commits at C0 to C2. At C3 the destination refuses it, and the agent re-reads and
-  # orders at the new price on a new approval. The harmless change passes everywhere.
+  # orders at the new price on a new approval. The harmless change, early or late, passes
+  # everywhere.
   - {fault: F7, variant: early_price_up, contract: C0, config: G1, verdict: fail, failing: [3]}
   - {fault: F7, variant: late_price_up, contract: C0, config: G1, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C0, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C0, config: G1, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C1, config: G1, verdict: fail, failing: [3]}
   - {fault: F7, variant: late_price_up, contract: C1, config: G1, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C1, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C1, config: G1, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C2, config: G1, verdict: fail, failing: [3]}
   - {fault: F7, variant: late_price_up, contract: C2, config: G1, verdict: fail, failing: [3]}
   - {fault: F7, variant: early_harmless, contract: C2, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C2, config: G1, verdict: pass, failing: []}
   - {fault: F7, variant: early_price_up, contract: C3, config: G1, verdict: pass, failing: []}
   - {fault: F7, variant: late_price_up, contract: C3, config: G1, verdict: pass, failing: []}
   - {fault: F7, variant: early_harmless, contract: C3, config: G1, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C3, config: G1, verdict: pass, failing: []}
 
   # F9 in G1: each worker places its own order on its own approval, and the last report
   # names one of the two while the stack knew both. At C3 the second order is refused, and
