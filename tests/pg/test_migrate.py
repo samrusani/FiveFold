@@ -202,16 +202,48 @@ def test_a_failing_migration_leaves_no_trace(empty_database: str, tmp_path: Path
     assert partial == (None,)
 
 
-def _wait_until_a_runner_waits_for_the_lock(conn: psycopg.Connection[TupleRow]) -> None:
-    deadline = time.monotonic() + BARRIER_TIMEOUT_S
+def _wait_until_a_runner_waits_for_the_lock(
+    conn: psycopg.Connection[TupleRow], timeout_s: float = BARRIER_TIMEOUT_S
+) -> None:
+    """Until a session waits for an advisory lock in `conn`'s own database. Other suites on
+    the server take the same key in their own databases, so they must not count."""
+    deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         row = conn.execute(
             "SELECT count(*) FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted"
+            " AND database = (SELECT oid FROM pg_catalog.pg_database"
+            " WHERE datname = current_database())"
         ).fetchone()
         if row is not None and row[0] > 0:
             return
         time.sleep(0.01)
     raise AssertionError("the runner never waited for the advisory lock")
+
+
+def test_a_session_waiting_in_another_database_does_not_count(
+    empty_database: str, admin_dsn: str
+) -> None:
+    """Another suite's runner, waiting for the same key in its own database, is not ours."""
+    with (
+        psycopg.connect(admin_dsn, autocommit=True) as holder,
+        psycopg.connect(admin_dsn, autocommit=True) as waiter,
+    ):
+        holder.execute("SELECT pg_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+        thread = threading.Thread(
+            target=lambda: waiter.execute("SELECT pg_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+        )
+        thread.start()
+        try:
+            _wait_until_a_runner_waits_for_the_lock(holder)  # it waits in the admin database
+            with (
+                psycopg.connect(empty_database, autocommit=True) as ours,
+                pytest.raises(AssertionError, match="never waited"),
+            ):
+                _wait_until_a_runner_waits_for_the_lock(ours, timeout_s=0.5)
+        finally:
+            holder.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+            thread.join(timeout=BARRIER_TIMEOUT_S)
+            waiter.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
 
 
 def test_the_runner_executes_the_bytes_it_hashed(empty_database: str, tmp_path: Path) -> None:
