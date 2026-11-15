@@ -65,7 +65,12 @@ def outcome(result: ActionResult | Refusal) -> Json:
 
 def report(result: ReportAccepted | Refusal) -> Json:
     """`submit_final_report`'s result."""
-    return {"result": "accepted"} if isinstance(result, ReportAccepted) else refusal(result)
+    return accepted() if isinstance(result, ReportAccepted) else refusal(result)
+
+
+def accepted() -> Json:
+    """`submit_final_report`'s result for a report that was accepted, or, in G1, forwarded."""
+    return {"result": "accepted"}
 
 
 def read(record: ReadRecord) -> Json:

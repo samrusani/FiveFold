@@ -1,7 +1,15 @@
 """The gateway's tools, as an agent worker calls them over MCP (0001, 0003, 0008).
 
-This is G2's behaviour. G1 exposes the same tools with the same schemas (0008) and is
-not built yet.
+G1 and G2 expose the same tools with the same schemas; only their behaviour differs
+(0008). The list below is G2's. G1, authorization only, is the store with identity off:
+
+- Every write call is a new action with its own approval request, and no fact is
+  checked. When the send's outcome is unknown at the end of the call's wait (a timeout
+  or a server error), the call fails with the tool error `gateway_timeout`, as a proxy
+  returns 504, so the agent's framework retries it. The action stays OutcomeUnknown.
+- `submit_final_report` hands the report to the harness's report sink as it came and
+  checks nothing. The sink records it and says what breaks the schema, as it does for
+  B0's reports, and the agent is told the same.
 
 - Reads (`get_quote`, `list_suppliers`, `get_budget`, `get_inventory`) take the
   simulator's own arguments, read through the gateway's simulator client, record the
@@ -56,7 +64,7 @@ from fivefold.gateway.records import (
     WriteCall,
 )
 from fivefold.gateway.sim_client import ReadRefused, ReadRequest
-from fivefold.gateway.state_machine import FINAL_STATES, ActionState
+from fivefold.gateway.state_machine import FINAL_STATES, ActionState, EventKind
 from fivefold.gateway.store import ActionStore, UnknownAction
 from fivefold.harness.scheduler import Scheduler
 
@@ -310,10 +318,30 @@ class GatewayTools:
             await self._dispatcher.wait(
                 outcome.action_id, ANSWERED_STATES.__contains__, self._timing.tool_wait_ms
             )
+            if self._store.authorization_only:
+                self._fail_unknown_outcome(outcome.action_id)
             result = self._store.status(outcome.action_id, self._now, tool=str(operation))
             return wire.action(result)
 
         return write
+
+    def _fail_unknown_outcome(self, action_id: str) -> None:
+        """G1: a send with no usable answer ends the call as a proxy's 504 does (0008).
+
+        Raises `ToolError("gateway_timeout")` when the action's outcome is unknown. The
+        records keep the action OutcomeUnknown; the response holds no action state, so,
+        like every tool error, it is not logged as a response (I5).
+        """
+        view = self._store.view(action_id)
+        action = view.action
+        if action.state is not _S.OUTCOME_UNKNOWN:
+            return
+        reason = next(e.reason for e in reversed(view.events) if e.kind is EventKind.TRANSITION)
+        raise ToolError(
+            "gateway_timeout",
+            f"{action.operation} for {action.intent_id}: no usable answer from the simulator"
+            f" ({reason})",
+        )
 
     def _invalid(self, operation: Operation, arguments: Mapping[str, object], why: str) -> Json:
         refusal = self._store.refuse_invalid(str(operation), dict(arguments), why, self._now)
@@ -337,6 +365,8 @@ class GatewayTools:
     # The final report --------------------------------------------------------------------------
 
     async def _report(self, arguments: Mapping[str, object], call: Call) -> Json:
+        if self._store.authorization_only:
+            return self._forward_report(arguments, call)
         try:
             report = parse_report(dict(arguments), self._intents)
         except InvalidReport as invalid:
@@ -355,3 +385,17 @@ class GatewayTools:
                 message_seq=call.message_seq,
             )
         return wire.report(outcome)
+
+    def _forward_report(self, arguments: Mapping[str, object], call: Call) -> Json:
+        """G1: hand the report to the report sink unchanged, and check nothing (0008).
+
+        The sink records every report with whether it is valid, and returns what breaks
+        the report schema; the agent is told that, as B0's sink tells it, so it can fix the
+        report and resubmit. G1 keeps no record of reports.
+        """
+        errors = self._reports.submit(
+            call.worker, dict(arguments), accepted_by="gateway", message_seq=call.message_seq
+        )
+        if errors:
+            return wire.refusal(Refusal(RefusalReason.INVALID_ARGS, message="; ".join(errors)))
+        return wire.accepted()
