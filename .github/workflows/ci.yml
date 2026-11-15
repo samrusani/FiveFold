@@ -45,6 +45,29 @@ jobs:
       - name: Test
         run: make test
 
+  viewer:
+    name: Viewer build, lint and test
+    # The viewer's frontend (0012) on Node's current LTS line; the Python jobs never need Node.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: viewer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.1"
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Type check and build
+        run: npm run build
+
   container:
     name: Compose file and app image
     runs-on: ubuntu-24.04
@@ -54,3 +77,5 @@ jobs:
         run: docker compose config --quiet
       - name: Build the app image
         run: docker build .
+      - name: Build the viewer image
+        run: docker build --file viewer/Dockerfile .
