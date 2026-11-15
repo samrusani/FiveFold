@@ -8,7 +8,8 @@ runs, the Markdown report, or both (record 0004, Metrics; `fivefold.evaluator.re
 The same results give the same bytes whatever order they are given in.
 
 A refused input, such as a file that is not a valid run result, ends the command with one
-line on standard error and exit status 1, and nothing is written.
+line on standard error and exit status 1, and nothing is written. So does an output that
+names a result file the command reads, or the other output, through any path or link.
 """
 
 from __future__ import annotations
@@ -18,7 +19,33 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from fivefold.evaluator.report import ReportError, load_results, markdown_report, runs_csv
+from fivefold.evaluator.report import (
+    ReportError,
+    load_results,
+    markdown_report,
+    result_files,
+    runs_csv,
+)
+
+
+def same_file(path: Path, other: Path) -> bool:
+    """Whether `path` and `other` name one file: the same path once resolved, or one file
+    through a hard link when both exist."""
+    if path.resolve() == other.resolve():
+        return True
+    return path.exists() and other.exists() and path.samefile(other)
+
+
+def check_outputs(outputs: Sequence[Path], inputs: Sequence[Path]) -> None:
+    """Refuse an output that names one of the result files `inputs`, or another output, so
+    that writing a report never replaces a saved result or the other output."""
+    for number, output in enumerate(outputs):
+        for other in outputs[number + 1 :]:
+            if same_file(output, other):
+                raise ReportError(f"{output} and {other} name the same file")
+        for source in inputs:
+            if same_file(output, source):
+                raise ReportError(f"{output} would replace the result file {source}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -53,6 +80,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if csv_path is not None and markdown_path is not None and csv_path == markdown_path:
         report.error("--csv and --markdown name the same file")
     try:
+        targets = [path for path in (csv_path, markdown_path) if path is not None]
+        check_outputs(targets, result_files(args.results))
         results = load_results(args.results)
         outputs: list[tuple[Path, str]] = []
         if csv_path is not None:

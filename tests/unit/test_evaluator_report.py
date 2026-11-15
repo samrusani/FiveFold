@@ -755,6 +755,43 @@ def test_the_command_refuses_a_bad_file_in_one_line_and_writes_nothing(
     assert not csv_path.exists()
 
 
+@pytest.mark.parametrize("how", ["same path", "dotted path", "hard link", "symbolic link"])
+def test_the_command_never_replaces_a_result_it_reads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], how: str
+) -> None:
+    saved = save(tmp_path / "results", "run.json", g2_demo_1())
+    before = saved.read_bytes()
+    output = {
+        "same path": saved,
+        "dotted path": tmp_path / "results" / "new" / ".." / "run.json",
+        "hard link": tmp_path / "hard.csv",
+        "symbolic link": tmp_path / "soft.csv",
+    }[how]
+    if how == "hard link":
+        output.hardlink_to(saved)
+    if how == "symbolic link":
+        output.symlink_to(saved)
+    assert main(["report", str(tmp_path / "results"), "--csv", str(output)]) == 1
+    assert "would replace the result file" in capsys.readouterr().err
+    assert saved.read_bytes() == before
+
+
+@pytest.mark.parametrize("how", ["dotted path", "symbolic link"])
+def test_the_command_refuses_two_outputs_that_name_one_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], how: str
+) -> None:
+    saved = save(tmp_path / "results", "run.json", g2_demo_1())
+    csv_path = tmp_path / "out" / "runs.csv"
+    markdown_path = tmp_path / "out" / "new" / ".." / "runs.csv"
+    if how == "symbolic link":
+        markdown_path = tmp_path / "report.md"
+        markdown_path.symlink_to(csv_path)
+    status = main(["report", str(saved), "--csv", str(csv_path), "--markdown", str(markdown_path)])
+    assert status == 1
+    assert "name the same file" in capsys.readouterr().err
+    assert not csv_path.exists()
+
+
 def test_the_command_needs_somewhere_to_write(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as stopped:
         main(["report", str(tmp_path)])
