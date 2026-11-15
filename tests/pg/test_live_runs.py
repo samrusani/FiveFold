@@ -8,10 +8,11 @@ time, through I/O the event loop cannot see. The run must fire every event at th
 time the scripted run does, record every call into its cassette, and play back byte for
 byte with no provider at all. The token budget and the spend cap end a worker as `budget`,
 and their replays end it at the same call. The record command refuses a live run without
-the flag, the spend cap and the price file, before it touches any database. A live study
-saves each episode's result and cassette, and the cassettes play back; the spend cap stops
-a study partway, and the study keeps what it ran. The evaluator counts a live run's tokens,
-and its report prices them as the spend cap charged them (0004).
+the flag, the spend cap and the price file, or without an API provider's key, before it
+touches any database. A live study saves each episode's result and cassette, and the
+cassettes play back; the spend cap stops a study partway, and the study keeps what it ran.
+The evaluator counts a live run's tokens, and its report prices them as the spend cap
+charged them (0004).
 """
 
 from __future__ import annotations
@@ -552,6 +553,76 @@ def test_the_command_checks_a_parameter_s_value_before_it_touches_a_database(
     assert error.count("\n") == 1
     assert not cassette.exists()
     assert not _exists(admin_dsn, f"{db_prefix}_cli_live")
+
+
+DUMMY_KEY = "fivefold-dummy-key-never-sent"
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_the_command_refuses_a_live_run_of_an_api_provider_before_it_touches_a_database(
+    admin_dsn: str,
+    db_prefix: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+) -> None:
+    """No flag, no key or an empty one, an unpriced model, a key, a base URL or a header as
+    a parameter, and a value the provider's model refuses: each is refused in one line,
+    which never shows the key, before the run's database exists and with the network
+    closed; so is a run without a spend cap. Only the last check builds the provider's
+    model, with a dummy key, and nothing invokes it."""
+    (key,) = PROVIDERS[provider].keys
+    database = f"{db_prefix}_cli_{provider}"
+    prices = tmp_path / "prices.yaml"
+    prices.write_text(
+        f"price_date: 2026-11-15\nprices:\n  {provider}:\n    m:\n"
+        "      input_usd_per_million_tokens: 1\n      output_usd_per_million_tokens: 2\n",
+        encoding="utf-8",
+    )
+    cassette = tmp_path / "live.json"
+    args = ["--dsn", admin_dsn, "record", "--demo", "1", "--config", "G2"]
+    args += ["--cassette", str(cassette), "--database", database, "--live", f"{provider}:m"]
+    args += ["--spend-cap-usd", "0.50", "--prices", str(prices), "--param", "temperature=0"]
+
+    def no_network(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("a refused live run reaches no network")
+
+    for name in ("socket.socket.connect", "socket.create_connection", "socket.getaddrinfo"):
+        monkeypatch.setattr(name, no_network)
+
+    def changed(old: str, new: str) -> list[str]:
+        return [new if arg == old else arg for arg in args]
+
+    refusals: list[tuple[dict[str, str | None], list[str], str]] = [
+        ({"FIVEFOLD_LIVE": None}, args, "live runs are off: set FIVEFOLD_LIVE=1"),
+        ({key: None}, args, f"a live run of {provider} needs its API key in {key}"),
+        ({key: ""}, args, f"a live run of {provider} needs its API key in {key}"),
+        ({}, changed(f"{provider}:m", f"{provider}:other"), f"no price for {provider}:other"),
+        ({}, changed("temperature=0", f"api_key={DUMMY_KEY}"), "not api_key"),
+        ({}, changed("temperature=0", "base_url=http://x"), "not base_url"),
+        ({}, changed("temperature=0", 'default_headers={"x": "y"}'), "not default_headers"),
+        ({}, changed("temperature=0", 'temperature="hot"'), f"{provider} refuses temperature"),
+    ]
+    for environ, argv, message in refusals:
+        monkeypatch.setenv("FIVEFOLD_LIVE", "1")
+        monkeypatch.setenv(key, DUMMY_KEY)
+        for name, value in environ.items():
+            if value is None:
+                monkeypatch.delenv(name)
+            else:
+                monkeypatch.setenv(name, value)
+        assert main(argv) == 1
+        error = capsys.readouterr().err
+        assert error.startswith("record failed: ") and message in error, error
+        assert error.count("\n") == 1 and DUMMY_KEY not in error
+    at = args.index("--spend-cap-usd")
+    with pytest.raises(SystemExit) as exit_:
+        main([*args[:at], *args[at + 2 :]])
+    assert exit_.value.code == 2
+    assert "--live needs --spend-cap-usd and --prices" in capsys.readouterr().err
+    assert not cassette.exists()
+    assert not _exists(admin_dsn, database)
 
 
 class StalledProvider(BaseChatModel):

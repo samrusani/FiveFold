@@ -14,9 +14,9 @@ options:
 Live runs sit behind an explicit flag and a spend cap (CLAUDE.md). `live_from_args` checks
 everything before a command runs anything, so a refused live run never touches a
 database: the flag (`FIVEFOLD_LIVE=1`), the provider, its parameters' names and their form
-in the cassette, the cap, the call limit, the model's price, and last the parameters'
-values, by building the model, which sends nothing. It builds one spend meter, which
-every run of the command shares, so the cap holds across them
+in the cassette, the cap, the call limit, the model's price, the provider's API key, and
+last the parameters' values, by building the model, which sends nothing. It builds one
+spend meter, which every run of the command shares, so the cap holds across them
 (`fivefold.agents.live.SpendMeter`).
 """
 
@@ -121,8 +121,9 @@ def live_model(
     """The live model `name`, `PROVIDER:MODEL`, with the parameters `params` and one spend
     meter and a call limit of `limit_s` seconds, checked in this order before anything
     runs: the flag in `environ`, the provider, its parameters' names and their form in the
-    cassette, the cap, the call limit, the model's price in the price file at `prices`, and
-    last the parameters' values, by building the model, which sends nothing.
+    cassette, the cap, the call limit, the model's price in the price file at `prices`, the
+    provider's API key in `environ`, and last the parameters' values, by building the
+    model, which sends nothing.
 
     Raises `ValueError` (`LiveRefused`, `LiveError` or `PriceFileError`) for a refusal,
     and `OSError` when the price file cannot be read.

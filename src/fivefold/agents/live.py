@@ -15,9 +15,10 @@ The cost of the call in flight is bounded. Calls run one at a time: while one is
 flight, no event fires, so no other worker's think can end and send another. Each call
 is checked just before it is sent, once every earlier call has been charged. So the
 spend passes the cap by at most one call's cost: its input tokens at the input price plus
-its output tokens at the output price. The provider's output limit (`num_predict` for
-Ollama) bounds the output. A reply that reports no usage, from a model that is not free,
-makes the spend unknown, and the cap then counts as reached.
+its output tokens at the output price. The provider's output limit bounds the output:
+`num_predict` for Ollama, `max_tokens` for Anthropic and OpenAI. A reply that reports no
+usage, from a model that is not free, makes the spend unknown, and the cap then counts as
+reached.
 
 The harness records every live call into the run's cassette (0009), a refused one too, so
 the replay adapter serves the same replies and the run plays back with no network. A call
@@ -25,14 +26,40 @@ the provider fails, for example because no server answers, raises: the worker en
 error, as for any exception in its graph (0008), and nothing is charged or recorded. Its
 cassette then ends before that call, so a replay of the run stops there with `ReplayError`.
 
-Ollama is the one provider (spec, Stack). Its chat model reads its base URL from
-`OLLAMA_HOST` and, for a server that needs one, a key from `OLLAMA_API_KEY`, through the
-`ollama` package. Nothing here reads, passes or records either. To add an API provider:
+The providers (`PROVIDERS`), each through its LangChain package, which reads the key and
+the base URL from its own environment variables:
 
-1. add its LangChain chat model package as a dependency, in a pull request of its own;
+- `ollama`, through langchain-ollama and the `ollama` package: no key, or
+  `OLLAMA_API_KEY` for a server that needs one; the base URL from `OLLAMA_HOST`;
+- `anthropic`, through langchain-anthropic: the key from `ANTHROPIC_API_KEY`; the base URL
+  from `ANTHROPIC_API_URL` or `ANTHROPIC_BASE_URL`, or else Anthropic's API;
+- `openai`, through langchain-openai: the key from `OPENAI_API_KEY`; the base URL from
+  `OPENAI_API_BASE` or `OPENAI_BASE_URL`, or else OpenAI's API.
+
+Nothing here passes, prints or records a key or a base URL. A live run of a provider that
+needs a key is refused unless one of its key variables is set, which is all that the
+check reads (`fivefold.harness.models.check_live`).
+
+Each run executes on an event loop of its own (`asyncio.run`), but langchain-anthropic
+1.7.10 and langchain-openai 1.8.0 keep one async HTTP client for the whole process: each
+caches it with `functools.lru_cache` (`_client_utils.py`). A connection that client keeps
+open after a reply belongs to the loop that opened it, and a later run's call on it fails.
+Observed with each package against a local server, one `asyncio.run` per call: the
+second call failed, with Anthropic's `APIConnectionError` after its request had reached
+the server, so the package's retry would send it again, or with OpenAI's `RuntimeError:
+Event loop is closed`. So both models send `Connection: close` with every request
+(`CLOSE_AFTER_REPLY`), and each connection ends with its reply, on the loop that opened
+it. Checked in h11 0.16.0 (`_connection.py`, `_keep_alive`): a request with that header
+turns keep-alive off; and in httpcore2 2.16.0 (`_async/http11.py`, `_response_closed`):
+the client then closes the connection once the reply ends, whatever the server does.
+
+To add a provider:
+
+1. add its LangChain chat model package as an exact dependency, in a commit of its own
+   that changes no other locked version;
 2. add an entry to `PROVIDERS`: a function that builds the chat model from the model's
-   name and parameters, and the names of the parameters it accepts. The package reads its
-   key and base URL from its own environment variables;
+   name and parameters, the names of the generation parameters it accepts, and the
+   variables its package reads its key from;
 3. add the provider's prices, with their date, to the price file the runs use.
 
 Checked in langchain-ollama 1.1.0 (`chat_models.py`): `ChatOllama(model=...)` takes
@@ -43,8 +70,39 @@ sends nothing; `bind_tools` binds the tools' schemas (`convert_to_openai_tool`) 
 `tools`; a reply's `usage_metadata` holds `input_tokens` (Ollama's `prompt_eval_count`)
 and `output_tokens` (`eval_count`), and is None unless Ollama reported both. Checked in
 ollama 0.6.3 (`_client.py`, `BaseClient`): it reads `OLLAMA_HOST` when given no host and
-sends `OLLAMA_API_KEY` as a bearer token; its httpx timeout defaults to None. Checked in
-langchain-core 1.8.0: `UsageMetadata` (`messages/ai.py`).
+sends `OLLAMA_API_KEY` as a bearer token; its httpx timeout defaults to None.
+
+Checked in langchain-anthropic 1.7.10 (`chat_models.py`): `ChatAnthropic(model=...)` takes
+`max_tokens`, `temperature`, `top_k`, `top_p`, `thinking` and `reasoning_effort`, and puts
+any argument it does not know into `model_kwargs`, which every request carries
+(`build_extra`); a validator reads the key and the base URL from the environment through
+langchain-core 1.8.0's `_apply_gateway_config` (`utils/_gateway.py`), which can route the
+requests through LangSmith's gateway when `LANGSMITH_GATEWAY` is set; the clients are
+built at the first call (`cached_property`), so building one sends nothing; `max_tokens`
+defaults to the model's maximum output in the package's own profiles, or 4,096;
+`bind_tools` converts each tool with `convert_to_anthropic_tool`, and drops with a warning
+any tool whose `input_schema` has a top-level `anyOf` or `oneOf`; `_agenerate` sends one
+`messages.create`, and the reply's `usage_metadata` holds `input_tokens` (the input, cache
+reads and cache writes) and `output_tokens` (`_create_usage_metadata`).
+
+Checked in langchain-openai 1.8.0 (`chat_models/base.py`): `ChatOpenAI(model_name=...)`
+takes `max_tokens` (sent as `max_completion_tokens`), `temperature`, `top_p`, `seed`,
+`presence_penalty`, `frequency_penalty` and `reasoning_effort`, and puts any argument it
+does not know into `model_kwargs` (`build_extra`); `validate_environment` reads the key
+and the base URL through `_resolve_gateway_config`, and builds the `openai` clients, which
+send nothing; openai 3.51.0 refuses to build a client without a key
+(`lib/_client_auth.py`); `bind_tools` converts each tool with `convert_to_openai_tool`;
+`_agenerate` sends one request, to Chat Completions or, for the models and settings that
+need it, to the Responses API (`_use_responses_api`), and the reply's `usage_metadata`
+holds `input_tokens` and `output_tokens` from either (`_create_usage_metadata`,
+`_create_usage_metadata_responses`).
+
+Checked in langchain-core 1.8.0: `UsageMetadata` (`messages/ai.py`); `ainvoke` streams
+only when asked to, or when a streaming callback is attached (`_should_stream`,
+`language_models/chat_models.py`). Checked in langgraph 1.2.22 (`pregel/main.py`): a graph
+attaches its message streaming callback only for the stream mode `messages`, and the
+agent's graph runs with `ainvoke`, whose mode is `values`. So each live call is one
+request and one reply.
 """
 
 from __future__ import annotations
@@ -54,6 +112,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Final
 
+from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -61,6 +120,7 @@ from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from pydantic import JsonValue, PrivateAttr, ValidationError
 
 from fivefold.agents.worker import SPEND_CAP_TEXT
@@ -96,20 +156,40 @@ class LiveError(ValueError):
 
 @dataclass(frozen=True)
 class Provider:
-    """A live provider: how to build its chat model, and the parameters it accepts.
+    """A live provider: how to build its chat model, the parameters it accepts, and where
+    its package reads its API key.
 
-    Only generation parameters are accepted. A base URL, a key or client settings never
-    are: they come from the provider's own environment variables, so no parameter can put
-    one in the repository or in a cassette, which records every parameter.
+    Only generation parameters are accepted. A key, a base URL, a header or a client
+    setting never is: each comes from the provider's own environment variables, so no
+    parameter can put one in the repository, in a cassette, which records every
+    parameter, or in `harness.run`.
     """
 
     build: Callable[[str, Mapping[str, JsonValue]], BaseChatModel]
     params: frozenset[str]
+    keys: tuple[str, ...] = ()
+    """The environment variables the provider's package reads its API key from, any one of
+    which is enough; none for a provider that needs no key."""
 
 
 def _ollama(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
     arguments: dict[str, Any] = dict(params)
     return ChatOllama(model=model, **arguments)
+
+
+CLOSE_AFTER_REPLY: Final = {"Connection": "close"}
+"""The header the API providers' models send with every request, so that no connection
+outlives the run's event loop (see the module)."""
+
+
+def _anthropic(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    arguments: dict[str, Any] = dict(params)
+    return ChatAnthropic(model=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
+
+
+def _openai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    arguments: dict[str, Any] = dict(params)
+    return ChatOpenAI(model_name=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
 
 
 OLLAMA_PARAMS: Final = frozenset(
@@ -126,7 +206,30 @@ OLLAMA_PARAMS: Final = frozenset(
 )
 """The `ChatOllama` parameters a live run may set; each changes what the model generates."""
 
-PROVIDERS: dict[str, Provider] = {"ollama": Provider(_ollama, OLLAMA_PARAMS)}
+ANTHROPIC_PARAMS: Final = frozenset(
+    {"max_tokens", "temperature", "top_k", "top_p", "thinking", "reasoning_effort"}
+)
+"""The `ChatAnthropic` parameters a live run may set; each changes what the model
+generates."""
+
+OPENAI_PARAMS: Final = frozenset(
+    {
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "seed",
+        "presence_penalty",
+        "frequency_penalty",
+        "reasoning_effort",
+    }
+)
+"""The `ChatOpenAI` parameters a live run may set; each changes what the model generates."""
+
+PROVIDERS: dict[str, Provider] = {
+    "ollama": Provider(_ollama, OLLAMA_PARAMS),
+    "anthropic": Provider(_anthropic, ANTHROPIC_PARAMS, ("ANTHROPIC_API_KEY",)),
+    "openai": Provider(_openai, OPENAI_PARAMS, ("OPENAI_API_KEY",)),
+}
 """The live providers, by name."""
 
 

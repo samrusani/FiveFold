@@ -31,8 +31,10 @@ branch's cassette records the same.
 
 Live runs sit behind an explicit flag and a spend cap (CLAUDE.md). A live run is refused,
 before anything runs, unless the environment sets `FIVEFOLD_LIVE=1`, the run has a spend
-cap in USD with a price file (`Live.spend`), and the price file prices the model, so the
-cap can always be enforced (`check_live`).
+cap in USD with a price file (`Live.spend`), the price file prices the model, so the cap
+can always be enforced, and the environment sets the provider's API key, for a provider
+that needs one (`check_live`). The key's variable is checked for being set and nothing
+more: the provider's package reads the key itself (`fivefold.agents.live.PROVIDERS`).
 """
 
 from __future__ import annotations
@@ -49,6 +51,7 @@ from pydantic import JsonValue
 from fivefold.agents.branch import BranchModel, BranchPlayer, check_branch_point
 from fivefold.agents.live import (
     CALL_LIMIT_S,
+    PROVIDERS,
     Hold,
     LiveModel,
     SpendMeter,
@@ -163,8 +166,8 @@ def parent_of(spec: ModelSpec) -> Parent | None:
 
 
 class LiveRefused(ValueError):
-    """A live run that must not start: the flag, the spend cap or the model's price is
-    missing."""
+    """A live run that must not start: the flag, the spend cap, the model's price or the
+    provider's API key is missing."""
 
 
 def check_live_flag(environ: Mapping[str, str]) -> None:
@@ -176,14 +179,25 @@ def check_live_flag(environ: Mapping[str, str]) -> None:
 
 
 def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, ModelPrice]:
-    """Refuse a live run unless `environ` sets `FIVEFOLD_LIVE=1` and the run has a spend
-    cap with a price file that prices its model; return the meter and the price."""
+    """Refuse a live run unless `environ` sets `FIVEFOLD_LIVE=1`, the run has a spend cap
+    with a price file that prices its model, and `environ` sets the provider's API key;
+    return the meter and the price.
+
+    The key is checked last, and only for being set; a provider this build does not have
+    is refused when its model is built (`fivefold.agents.live.check_provider`).
+    """
     check_live_flag(environ)
     if spec.spend is None:
         raise LiveRefused("a live run needs a spend cap in USD and a price file")
     if not (math.isfinite(spec.limit_s) and spec.limit_s > 0):
         raise LiveRefused(f"a live call's time limit must be above 0 seconds, not {spec.limit_s}")
-    return spec.spend, spec.spend.prices.price(spec.provider, spec.model)
+    price = spec.spend.prices.price(spec.provider, spec.model)
+    entry = PROVIDERS.get(spec.provider)
+    if entry is not None and entry.keys and not any(environ.get(key) for key in entry.keys):
+        raise LiveRefused(
+            f"a live run of {spec.provider} needs its API key in {' or '.join(entry.keys)}"
+        )
+    return spec.spend, price
 
 
 def run_header(record: RunRecord) -> RunHeader:
