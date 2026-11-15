@@ -1,9 +1,11 @@
-"""F4 and F5 in whole runs of dev-001 (0006; M3).
+"""F4, F5 and F10 in whole runs of dev-001 (0006; M3).
 
 - F4 delivers the order's request twice, on the gateway's hop to the simulator, the
   agent's hop to the gateway, or B0's hop to the simulator.
 - F5 holds the order where it reaches the simulator and commits it later: 5,000 ms in
   contract, 20,000 ms beyond the deadline.
+- F10 delays the status answers past T, or makes them stale, at C1, with F2 on the
+  order's committed answer so that G2 probes.
 
 The assertions are ground truth: the simulator's ledger and writes, the harness's
 message fates and fault log, the gateway's events, and the report. Verdicts are in
@@ -21,8 +23,8 @@ import psycopg
 import pytest
 
 from fivefold.domain.contracts import Contract
-from fivefold.domain.scenario import load_scenario_file
-from fivefold.harness.cells import Cell, cell_plan
+from fivefold.domain.scenario import Scenario, load_scenario_file
+from fivefold.harness.cells import Cell, cell_plan, cell_scenario
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import InprocRun, RunSpec
 
@@ -36,7 +38,7 @@ def run(dsn: str, fault: str, variant: str | None, contract: Contract, config: s
     cell = Cell(
         fault=fault, variant=variant, contract=contract, config=config, verdict="", failing=()
     )
-    scenario = load_scenario_file(DEV_001)
+    scenario: Scenario = cell_scenario(cell, load_scenario_file(DEV_001))
     spec = RunSpec(scenario, config, contract, SEED, plan=cell_plan(cell))  # type: ignore[arg-type]
     inproc = InprocRun(spec, dsn)
     asyncio.run(inproc.execute())
@@ -306,4 +308,66 @@ def test_f5_in_b0_the_framework_retry_orders_again_without_a_key(
     assert (first[1], first[2], first[5]) == ("committed", first[0] + 5_000, "PO-0002")
     assert (retry[1], retry[5]) == ("committed", "PO-0001")
     assert effects(dsn) == [("PO-0001", "APR-0001"), ("PO-0002", "APR-0001")]
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+# F10: status answers delayed or stale ---------------------------------------------------
+
+STATUS_ANSWERS: LiteralString = (
+    "SELECT a.fate, a.drop_reason, (a.body->>'as_of_vt')::bigint, r.delivered_vt,"
+    " jsonb_path_query_array(a.body, '$.effects[*].effect_id')"
+    " FROM harness.message_log a JOIN harness.message_log r ON r.seq = a.correlation"
+    " WHERE a.kind = 'answer' AND a.api = 'get_order_status' ORDER BY a.seq"
+)
+
+
+def test_f10_delayed_every_probe_goes_unanswered_and_g2_escalates(
+    run_database: Callable[[str], str],
+) -> None:
+    """`count` 20 equals `max_probes` 20, so G2 never hears an answer, escalates, and the
+    report says unknown. Record 0006 expects this cell to pass; it is not in
+    `expected.yaml` until record 0013 (Proposed) is decided."""
+    dsn = run_database("f10_delayed")
+    run(dsn, "F10", "delayed", Contract.C1, "G2")
+    answers = rows(dsn, STATUS_ANSWERS)
+    assert len(answers) == 20
+    assert {row[:2] for row in answers} == {("dropped", "caller_timed_out")}
+    assert all(row[4] == ["PO-0001"] for row in answers), "the answers were right, but late"
+    assert rows(dsn, "SELECT action_id, resolution FROM gw.escalation") == [("A-0001", None)]
+    assert [row[:3] for row in faults(dsn)] == [
+        ("F2", None, "net.gw_sim.answer"),
+        ("F10", "delayed", "sim.status.answer"),
+    ]
+    assert effects(dsn) == [("PO-0001", "APR-0001")]
+    assert claim(dsn) == ("unknown", [])
+
+
+def test_f10_stale_within_the_lag_answers_lag_by_l_and_g2_confirms_the_order(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f10_stale_within")
+    run(dsn, "F10", "stale_within_lag", Contract.C1, "G2")
+    answers = rows(dsn, STATUS_ANSWERS)
+    assert all(fate == "delivered" for fate, *_ in answers)
+    assert all(as_of == produced - 3_000 for _, _, as_of, produced, _ in answers)
+    assert answers[-1][4] == ["PO-0001"]
+    assert ("A-0001", "confirmed", "status_found") in rows(dsn, EVENTS)
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+def test_f10_stale_beyond_the_lag_reflects_the_state_when_it_fired(
+    run_database: Callable[[str], str],
+) -> None:
+    """F10 fires at the first status answer. With F2, that answer comes after the order
+    committed, so the state it freezes already lists the order, and G2 confirms it.
+    Record 0006 expects Failed and a false not_done here (fail (5)); this cell is not in
+    `expected.yaml` until record 0013 (Proposed) is decided."""
+    dsn = run_database("f10_stale_beyond")
+    run(dsn, "F10", "stale_beyond_lag", Contract.C1, "G2")
+    ((committed_vt,),) = rows(dsn, "SELECT committed_vt FROM sim.effect")
+    ((fired_vt,),) = rows(dsn, "SELECT vt FROM harness.fault_log WHERE fault = 'F10'")
+    assert committed_vt < fired_vt
+    ((fate, _, as_of, produced, listed),) = rows(dsn, STATUS_ANSWERS)
+    assert (fate, as_of, listed) == ("delivered", produced, ["PO-0001"])
+    assert ("A-0001", "confirmed", "status_found") in rows(dsn, EVENTS)
     assert claim(dsn) == ("done", ["PO-0001"])

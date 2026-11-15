@@ -16,7 +16,7 @@ import pytest
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
-from fivefold.harness.cells import Cell, cell_plan, load_expected
+from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import InprocRun, RunSpec
 
@@ -37,6 +37,7 @@ G2_LIMITS: dict[tuple[str, str | None, Contract], tuple[str, tuple[int, ...]]] =
     ("F5", "beyond_deadline", Contract.C1): ("fail", (1, 3)),
     ("F5", "in_contract", Contract.C0): ("pass_unresolved", ()),
     ("F5", "beyond_deadline", Contract.C0): ("pass_unresolved", ()),
+    ("F10", "stale_beyond_lag", Contract.C1): ("fail", (5,)),
 }
 """0006's documented G2 limits, by fault, variant and contract level: the cells that fail or
 stay unresolved by design. Every other G2 cell is expected to pass."""
@@ -95,7 +96,7 @@ def test_the_cell_gets_its_expected_verdict(run_database: Callable[[str], str], 
     dsn = run_database(cell.name.lower().replace("-", "_"))
     plan = cell_plan(cell)
     spec = RunSpec(
-        load_scenario_file(DEV_001),
+        cell_scenario(cell, load_scenario_file(DEV_001)),
         cell.config,  # type: ignore[arg-type]
         cell.contract,
         EXPECTED.seed,

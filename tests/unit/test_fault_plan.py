@@ -429,3 +429,86 @@ def test_f5_fires_with_and_without_a_gateway() -> None:
     plan = parse_plan([{"fault": "F5", "at": {"point": "sim.write.received"}}])
     check_configuration(plan, gateway=True)
     check_configuration(plan, gateway=False)
+
+
+# F10: status answer delayed or stale -----------------------------------------------------
+
+
+@pytest.mark.parametrize("variant", ["delayed", "stale_within_lag", "stale_beyond_lag"])
+def test_f10_is_built_where_status_answers_are_produced(variant: str) -> None:
+    point = "sim.status.answer"
+    (planned,) = parse_plan([{"fault": "F10", "variant": variant, "at": {"point": point}}])
+    assert point in planned.kind.points
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ({"fault": "F10", "at": {"point": "sim.status.answer"}}, "F10 needs a variant"),
+        (
+            {"fault": "F10", "variant": "stale", "at": {"point": "sim.status.answer"}},
+            "no variant 'stale'",
+        ),
+        (
+            {"fault": "F10", "variant": "delayed", "at": {"point": "sim.write.received"}},
+            "F10 does not fire at",
+        ),
+        (
+            {
+                "fault": "F10",
+                "variant": "delayed",
+                "at": {"point": "sim.status.answer"},
+                "params": {"count": 0},
+            },
+            "count must be at least 1",
+        ),
+    ],
+)
+def test_f10_where_or_how_the_catalog_does_not_allow_is_refused(
+    entry: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        parse_plan([entry])
+
+
+def test_f10_shapes_20_answers_unless_the_plan_says_otherwise() -> None:
+    default, chosen = parse_plan(
+        [
+            {"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}},
+            {
+                "fault": "F10",
+                "variant": "delayed",
+                "at": {"point": "sim.status.answer"},
+                "params": {"count": 3},
+            },
+        ]
+    )
+    assert (default.param("count"), chosen.param("count")) == (20, 3)
+
+
+@pytest.mark.parametrize("contract", [Contract.C0, Contract.C2, Contract.C3])
+def test_f10_runs_only_where_the_destination_answers_status(contract: Contract) -> None:
+    plan = parse_plan(
+        [{"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}}]
+    )
+    check_run(plan, params=params(), contract=Contract.C1)
+    with pytest.raises(ValueError, match=f"F10 needs a status lookup, which {contract}"):
+        check_run(plan, params=params(), contract=contract)
+
+
+def test_f10_stale_within_the_lag_needs_a_lag() -> None:
+    """0006, notes: the default L is 0, so these cells set `status_lag_ms` to 3,000."""
+    plan = parse_plan(
+        [{"fault": "F10", "variant": "stale_within_lag", "at": {"point": "sim.status.answer"}}]
+    )
+    with pytest.raises(ValueError, match="needs status_lag_ms above 0"):
+        check_run(plan, params=params(), contract=Contract.C1)
+    check_run(plan, params=params(status_lag_ms=3_000), contract=Contract.C1)
+
+
+def test_f10_fires_with_and_without_a_gateway() -> None:
+    plan = parse_plan(
+        [{"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}}]
+    )
+    check_configuration(plan, gateway=True)
+    check_configuration(plan, gateway=False)

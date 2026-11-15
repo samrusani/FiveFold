@@ -18,11 +18,12 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fivefold.domain.contracts import Contract
+from fivefold.domain.contracts import Capability, Contract
 from fivefold.domain.scenario import Params
 from fivefold.faults.catalog import (
     BUILT,
     F5_BEYOND_DEADLINE,
+    F10_STALE_WITHIN_LAG,
     POINTS,
     FaultId,
     FaultKind,
@@ -68,6 +69,8 @@ class PlannedFault(BaseModel):
                 continue
             if not isinstance(value, int) or value < least:
                 raise ValueError(f"{self.fault} parameter {name} must be at least {least}")
+        if self.variant is None and kind.variant_required:
+            raise ValueError(f"{self.fault} needs a variant: {sorted(kind.variants)}")
         if self.variant is not None:
             if self.variant not in kind.variants:
                 allowed = sorted(kind.variants) or "none"
@@ -155,6 +158,8 @@ def check_run(plan: Sequence[PlannedFault], *, params: Params, contract: Contrac
     - F5 in contract holds a write past the caller's timeout and commits it before the
       deadline: T < `delay_ms` < D. Beyond the deadline it commits after D: `delay_ms` > D,
       and the plan must set it, since 0006 gives that variant no default.
+    - F10 acts on status answers, which only C1 gives. Its `stale_within_lag` variant needs
+      a status lag L above 0, or it changes nothing (0006, notes).
     """
     t_ms, d_ms = params.dispatch_timeout_ms, params.commit_deadline_ms
     wrong: list[str] = []
@@ -168,6 +173,11 @@ def check_run(plan: Sequence[PlannedFault], *, params: Params, contract: Contrac
                     wrong.append(f"F5 {planned.variant} needs delay_ms above D ({d_ms})")
             elif not t_ms < delay < d_ms:
                 wrong.append(f"F5 in contract needs delay_ms between T ({t_ms}) and D ({d_ms})")
+        elif planned.fault is FaultId.F10:
+            if not contract.has(Capability.STATUS):
+                wrong.append(f"F10 needs a status lookup, which {contract} does not offer")
+            if planned.variant == F10_STALE_WITHIN_LAG and params.status_lag_ms == 0:
+                wrong.append(f"F10 {planned.variant} needs status_lag_ms above 0")
     if wrong:
         raise ValueError(f"the plan does not fit the run: {'; '.join(wrong)} (0005, 0006)")
 

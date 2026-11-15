@@ -1,4 +1,4 @@
-"""F5 at the simulator's endpoint, against the real simulator (0005, 0006).
+"""F5 and F10 at the simulator's endpoint, against the real simulator (0005, 0006).
 
 A caller sends requests through the transport to the simulator's endpoint, which asks
 `SimulatorPoints` what fires. The simulator's own records show what happened: when a
@@ -41,12 +41,13 @@ ORDER: dict[str, Any] = {
     "currency": "USD",
     "cost_center": "CC-OPS",
 }
+STATUS = {"intent_id": "REQ-1"}
 
 
 class Caller:
     """The gateway's side: requests at chosen virtual times, each waiting at most T."""
 
-    def __init__(self, sim: Simulator, plan: list[dict[str, Any]]) -> None:
+    def __init__(self, sim: Simulator, plan: list[dict[str, Any]], *, lag_ms: int = 0) -> None:
         self.scheduler = Scheduler()
         self.log = MemoryHarnessLog()
         faults = FaultInjector(parse_plan(plan))
@@ -57,7 +58,9 @@ class Caller:
             max_hop_latency_ms=50,
             faults=faults,
         )
-        points = SimulatorPoints(self.scheduler, faults, self.log)
+        points = SimulatorPoints(
+            self.scheduler, faults, self.log, dispatch_timeout_ms=T_MS, status_lag_ms=lag_ms
+        )
         self.transport.serve("simulator", endpoint(sim, self.scheduler, points=points))
         self.outcomes: dict[str, Reply | None] = {}
         self._calls: list[tuple[int, str, str, dict[str, Any]]] = []
@@ -109,6 +112,15 @@ def f5(variant: str, delay_ms: int) -> dict[str, Any]:
         "variant": variant,
         "at": {"point": "sim.write.received", "match": {"api": "submit_purchase_order"}},
         "params": {"delay_ms": delay_ms},
+    }
+
+
+def f10(variant: str, count: int) -> dict[str, Any]:
+    return {
+        "fault": "F10",
+        "variant": variant,
+        "at": {"point": "sim.status.answer"},
+        "params": {"count": count},
     }
 
 
@@ -168,3 +180,74 @@ def test_f5_beyond_the_deadline_commits_after_d_and_is_never_aborted(
     )
     assert outcome_vt > deadline_vt == arrived + 10_000
     assert rows(sim_database, "SELECT kind FROM sim.event WHERE kind = 'write_aborted'") == []
+
+
+def test_f10_delayed_answers_arrive_after_the_callers_timeout(make_sim: SimFactory) -> None:
+    caller = Caller(make_sim(Contract.C1), [f10("delayed", 2)])
+    for n, vt in enumerate((0, 3_000, 6_000)):
+        caller.at(vt, f"probe {n}", "get_order_status", STATUS)
+    caller.run()
+    assert [caller.outcomes[f"probe {n}"] is None for n in range(3)] == [True, True, False]
+    answers = caller.answers("get_order_status")
+    assert [(m.fate, m.drop_reason) for m in answers] == [
+        ("dropped", "caller_timed_out"),
+        ("dropped", "caller_timed_out"),
+        ("delivered", None),
+    ]
+    requests = [m for m in caller.log.messages if m.kind == "request"]
+    for request, answer in zip(requests[:2], answers[:2], strict=True):
+        assert request.delivered_vt is not None
+        assert answer.sent_vt == request.delivered_vt + T_MS, "held for T after it arrived"
+
+
+def test_f10_stale_within_the_lag_is_accurate_to_l_before_it_is_produced(
+    make_sim: SimFactory, dev_data: dict[str, Any]
+) -> None:
+    dev_data["params"]["status_lag_ms"] = 3_000
+    caller = Caller(make_sim(Contract.C1), [f10("stale_within_lag", 2)], lag_ms=3_000)
+    caller.at(5_000, "order", "submit_purchase_order", ORDER)
+    caller.at(7_000, "early", "get_order_status", STATUS)
+    caller.at(10_000, "late", "get_order_status", STATUS)
+    caller.run()
+    answers = {
+        label: reply.body
+        for label, reply in caller.outcomes.items()
+        if reply is not None and label != "order"
+    }
+    early, late = answers["early"], answers["late"]
+    assert isinstance(early, dict) and isinstance(late, dict)
+    assert early["effects"] == [], "the order committed less than L before the answer"
+    assert [e["effect_id"] for e in late["effects"]] == ["PO-0001"]
+    requests = {m.seq: m for m in caller.log.messages if m.kind == "request"}
+    for answer in caller.answers("get_order_status"):
+        assert answer.correlation is not None and isinstance(answer.body, dict)
+        produced = requests[answer.correlation].delivered_vt
+        assert produced is not None
+        assert answer.body["as_of_vt"] == produced - 3_000
+
+
+def test_f10_stale_beyond_the_lag_lists_the_state_when_it_fired_but_claims_now(
+    make_sim: SimFactory,
+) -> None:
+    """A contract violation (0006): F10 fires before the order commits, so its answers
+    keep listing nothing while claiming to be accurate to the moment each is produced."""
+    caller = Caller(make_sim(Contract.C1), [f10("stale_beyond_lag", 2)])
+    caller.at(0, "first", "get_order_status", STATUS)
+    caller.at(1_000, "order", "submit_purchase_order", ORDER)
+    caller.at(3_000, "stale", "get_order_status", STATUS)
+    caller.at(6_000, "fresh", "get_order_status", STATUS)
+    caller.run()
+    bodies: dict[str, Any] = {}
+    for label in ("first", "stale", "fresh"):
+        reply = caller.outcomes[label]
+        assert reply is not None
+        bodies[label] = reply.body
+    requests = {m.seq: m for m in caller.log.messages if m.kind == "request"}
+    stale_request = next(
+        requests[m.correlation]
+        for m in caller.answers("get_order_status")
+        if m.correlation is not None and m.body == bodies["stale"]
+    )
+    assert bodies["stale"]["effects"] == []
+    assert bodies["stale"]["as_of_vt"] == stale_request.delivered_vt
+    assert [e["effect_id"] for e in bodies["fresh"]["effects"]] == ["PO-0001"]
