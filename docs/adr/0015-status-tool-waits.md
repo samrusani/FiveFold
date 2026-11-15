@@ -12,7 +12,7 @@ Three accepted texts bear on how long a status tool waits, and they stop agreein
 - **Record 0008** pins the scripted policy's waits: B0 waits for an approval with `get_approval_status(wait_ms = 60,000)`, at most 3 times, and G1 and G2 wait on an action with `get_action_status(wait_ms = 60,000)`, at most 3 times. Changing the policy needs a decision record.
 - **The gateway's published schema** for `get_action_status` allows `wait_ms` from 0 to 60,000 (record 0003; `docs/spec.md`, Gateway). B0's `get_approval_status` has no maximum in its schema.
 
-Until now no code read `max_wait_ms`. An external audit of 7329d7a found that a B0 model could therefore make the simulator poll a pending approval for as long as it asked: one call with `wait_ms` 3,600,000 made 7,201 approval lookups. The fix, on branch `audit-wait` and not yet merged, enforces the run's value everywhere a status wait is checked:
+Until the fix described next, no code read `max_wait_ms`. An external audit of 7329d7a found that a B0 model could therefore make the simulator poll a pending approval for as long as it asked: one call with `wait_ms` 3,600,000 made 7,201 approval lookups. The fix, merged in 7a4fd1f, enforces the run's value everywhere a status wait is checked:
 
 - B0's `get_approval_status` refuses a longer wait before anything is sent, with the validation error it gives for any invalid argument;
 - the simulator's endpoint refuses one as a request that does not parse, so one wait makes at most 121 lookups with the defaults;
@@ -72,7 +72,7 @@ Recommended: options A and B together.
 
 1. The scripted policy asks for `min(60,000, max_wait_ms)` ms in each wait: `get_approval_status` in B0, and `get_action_status` in G1 and G2, including the wait on another worker's action after `intent_busy`. Each still waits at most 3 times.
 2. The scenario file accepts `params.max_wait_ms` from 0 to 60,000 ms. A larger value is refused when the scenario loads.
-3. The status tools keep their published schemas: no maximum in B0's `get_approval_status`, and at most 60,000 in the gateway's `get_action_status`. Each refuses a wait above the run's `max_wait_ms` when it validates the call, as branch `audit-wait` does.
+3. The status tools keep their published schemas: no maximum in B0's `get_approval_status`, and at most 60,000 in the gateway's `get_action_status`. Each refuses a wait above the run's `max_wait_ms` when it validates the call, as it has since 7a4fd1f.
 
 A test can check each rule:
 
@@ -94,7 +94,7 @@ A and B together close both gaps and change nothing that runs with the default. 
 
 - The scripted policy takes the run's `max_wait_ms` (`src/fivefold/agents/policy.py`, built in `src/fivefold/harness/run.py`). With the default the waits do not change, so the demos, the expected outcomes and their digests do not change.
 - `Params.max_wait_ms` (`src/fivefold/domain/scenario.py`) and `scenarios/scenario.schema.json` gain a maximum of 60,000.
-- Tests: dev-002 at C2 with `max_wait_ms` 5,000 passes in B0 and G2, and the loader refuses 60,001. On branch `audit-wait`, the tests of the tools stay as they are; the whole-run test that pins the B0 policy's refused waits at a 5,000 ms limit changes to expect waits of 5,000 ms.
+- Tests: dev-002 at C2 with `max_wait_ms` 5,000 passes in B0 and G2, and the loader refuses 60,001. The tests of the tools that 7a4fd1f added stay as they are; the whole-run test that pins the B0 policy's refused waits at a 5,000 ms limit changes to expect waits of 5,000 ms.
 - A study or report that compares runs across scenarios sees the same tool schemas in every run.
 
 ## Spec changes on acceptance
