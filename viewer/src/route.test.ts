@@ -13,6 +13,8 @@ describe("routes in the URL's fragment", () => {
   it("names a fragment it cannot read", () => {
     expect(parseRoute("#/runs")).toEqual({ page: "missing", hash: "#/runs" });
     expect(parseRoute("#/elsewhere/x")).toEqual({ page: "missing", hash: "#/elsewhere/x" });
+    expect(parseRoute("#/runs/%")).toEqual({ page: "missing", hash: "#/runs/%" });
+    expect(parseRoute("#/compare/a/%E0%A4%A")).toEqual({ page: "missing", hash: "#/compare/a/%E0%A4%A" });
   });
 
   it("writes what it reads", () => {

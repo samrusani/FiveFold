@@ -11,7 +11,13 @@ export type Route =
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter((part) => part !== "");
-  const names = parts.map((part) => decodeURIComponent(part));
+  let names: string[];
+  try {
+    names = parts.map((part) => decodeURIComponent(part));
+  } catch (error) {
+    if (error instanceof URIError) return { page: "missing", hash };
+    throw error;
+  }
   if (names.length === 0) return { page: "runs" };
   if (names[0] === "runs" && names.length === 2) return { page: "run", database: names[1]! };
   if (names[0] === "compare" && names.length === 3) {

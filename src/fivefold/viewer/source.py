@@ -100,9 +100,9 @@ class RunSource:
             for key, value in conninfo_to_dict(self.server).items()
             if key not in ("user", "password", "dbname")
         }
-        return make_conninfo(
-            "", **params, user=VIEWER_ROLE, dbname=database, connect_timeout=CONNECT_TIMEOUT_S
-        )
+        # A connect_timeout in the server string wins; it must not be passed twice.
+        params.setdefault("connect_timeout", CONNECT_TIMEOUT_S)
+        return make_conninfo("", **params, user=VIEWER_ROLE, dbname=database)
 
     @contextmanager
     def _read(self, database: str) -> Iterator[Connection]:

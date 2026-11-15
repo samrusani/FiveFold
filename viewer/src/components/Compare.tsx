@@ -22,9 +22,11 @@ function Heading({ data }: { data: RunData }) {
       </a>{" "}
       <Verdict verdict={scorecard?.verdict ?? null} />
       <div className="muted small">
-        {failing.length === 0
-          ? "every property holds"
-          : failing.map((prop) => `${prop.property} fails (${prop.reason_codes.join(", ")})`).join("; ")}
+        {scorecard === null
+          ? "not scored yet"
+          : failing.length === 0
+            ? "every property holds"
+            : failing.map((prop) => `${prop.property} fails (${prop.reason_codes.join(", ")})`).join("; ")}
       </div>
       <div className="muted small">faults: {faults.join("; ") || "none"}</div>
     </th>

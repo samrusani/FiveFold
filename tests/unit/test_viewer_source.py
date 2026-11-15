@@ -10,6 +10,7 @@ from psycopg.conninfo import conninfo_to_dict
 
 from fivefold.harness import migrations
 from fivefold.viewer.source import (
+    CONNECT_TIMEOUT_S,
     DEFAULT_REGISTRY,
     REGISTRY_ENV,
     VIEWER_ROLE,
@@ -38,6 +39,17 @@ def test_the_viewer_connects_as_ff_viewer_whatever_user_the_server_string_names(
     assert params["dbname"] == "fivefold_demo_1_g2"
     assert "password" not in params, "the server string's password is not ff_viewer's"
     assert (params["host"], params["port"], params["sslmode"]) == ("db.example", "6543", "require")
+
+
+def test_a_connect_timeout_in_the_server_string_is_kept_and_passed_once() -> None:
+    source = RunSource("postgresql://postgres@db.example/postgres?connect_timeout=3")
+    params = conninfo_to_dict(source._conninfo("fivefold_demo_1_g2"))
+    assert (params["connect_timeout"], params["user"]) == ("3", VIEWER_ROLE)
+
+
+def test_without_one_the_viewer_sets_its_own_connect_timeout() -> None:
+    params = conninfo_to_dict(RunSource("postgresql://postgres@db.example/postgres")._conninfo("x"))
+    assert params["connect_timeout"] == str(CONNECT_TIMEOUT_S)
 
 
 def test_wall_clock_times_become_iso_text_and_everything_else_stays() -> None:

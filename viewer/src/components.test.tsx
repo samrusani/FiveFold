@@ -108,6 +108,14 @@ describe("the pages, over a stubbed API", () => {
     expect(requested.every((line) => line.startsWith("GET "))).toBe(true);
   });
 
+  it("says a run with no scorecard is not scored yet, not that every property holds", async () => {
+    window.location.hash = "#/compare/demo_1_b0/demo_1_g2";
+    render(<App />);
+    await screen.findAllByTestId("compare-row");
+    expect(screen.getByText("not scored yet")).toBeTruthy();
+    expect(screen.queryByText("every property holds")).toBeNull();
+  });
+
   it("names the API's reason when a run cannot be read", async () => {
     window.location.hash = "#/runs/gone";
     render(<App />);
