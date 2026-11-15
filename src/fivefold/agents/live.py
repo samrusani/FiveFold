@@ -61,10 +61,11 @@ from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
-from pydantic import JsonValue, PrivateAttr
+from pydantic import JsonValue, PrivateAttr, ValidationError
 
 from fivefold.agents.worker import SPEND_CAP_TEXT
 from fivefold.domain.prices import ModelPrice, PriceFile
+from fivefold.harness.clock import within
 from fivefold.recorder.cassette import Tool
 
 Think = Callable[[], Awaitable[None]]
@@ -79,9 +80,15 @@ REFUSED: Final = "fivefold_refused"
 SPEND_CAP: Final = "spend_cap"
 """Why the harness refused a call: the spend cap was reached."""
 
+CALL_LIMIT_S: Final = 600.0
+"""How long, in wall-clock seconds, a live call may wait for its provider by default. A
+call still unanswered then fails, and its worker ends with an error, so a provider that
+accepts a request and never answers cannot hold the run forever."""
+
 
 class LiveError(ValueError):
-    """A live model that cannot be built: an unknown provider or parameter."""
+    """A live model that cannot be built, such as one with an unknown provider or
+    parameter, or a live call that failed because its provider did not answer in time."""
 
 
 # Providers ----------------------------------------------------------------------------------
@@ -155,8 +162,18 @@ def check_provider(provider: str, params: Mapping[str, JsonValue]) -> Provider:
 
 
 def provider_model(provider: str, model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
-    """`provider`'s chat model for `model`, with `params`. Building it sends nothing."""
-    return check_provider(provider, params).build(model, params)
+    """`provider`'s chat model for `model`, with `params`. Building it sends nothing.
+
+    A value the provider's model refuses raises `LiveError`, with the first problem in
+    one line.
+    """
+    entry = check_provider(provider, params)
+    try:
+        return entry.build(model, params)
+    except ValidationError as error:
+        first = error.errors(include_url=False)[0]
+        where = ".".join(str(part) for part in first["loc"]) or "a parameter"
+        raise LiveError(f"{provider} refuses {where}: {first['msg']}") from None
 
 
 # The spend cap -----------------------------------------------------------------------------
@@ -229,6 +246,7 @@ class LiveModel(BaseChatModel):
     _meter: SpendMeter = PrivateAttr()
     _think: Think = PrivateAttr()
     _hold: Hold = PrivateAttr()
+    _limit_s: float = PrivateAttr()
 
     def __init__(
         self,
@@ -239,8 +257,10 @@ class LiveModel(BaseChatModel):
         meter: SpendMeter,
         think: Think,
         hold: Hold,
+        limit_s: float = CALL_LIMIT_S,
     ) -> None:
-        """Answer with `chat`, the provider's model named `name`, charged at `price`."""
+        """Answer with `chat`, the provider's model named `name`, charged at `price`. A
+        call that waits more than `limit_s` wall-clock seconds for the provider fails."""
         super().__init__()
         self._chat = chat
         self._bound = chat
@@ -249,6 +269,7 @@ class LiveModel(BaseChatModel):
         self._meter = meter
         self._think = think
         self._hold = hold
+        self._limit_s = limit_s
 
     @property
     def _llm_type(self) -> str:
@@ -273,7 +294,13 @@ class LiveModel(BaseChatModel):
         await self._think()
         if self._meter.reached():
             return ChatResult(generations=[ChatGeneration(message=spend_cap_reply())])
-        reply = await self._hold(self._bound.ainvoke(messages, stop=stop, **kwargs))
+        call = self._bound.ainvoke(messages, stop=stop, **kwargs)
+        try:
+            reply = await self._hold(within(call, self._limit_s))
+        except TimeoutError:
+            raise LiveError(
+                f"the live model {self._name} did not answer within {self._limit_s:g} s"
+            ) from None
         self._meter.charge(self._name, self._price, reply.usage_metadata)
         return ChatResult(generations=[ChatGeneration(message=reply)])
 
@@ -286,6 +313,7 @@ class LiveModel(BaseChatModel):
             meter=self._meter,
             think=self._think,
             hold=self._hold,
+            limit_s=self._limit_s,
         )
         bound._bound = self._chat.bind_tools(tools, **kwargs)
         return bound

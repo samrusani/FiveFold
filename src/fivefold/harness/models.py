@@ -24,6 +24,7 @@ cap can always be enforced (`check_live`).
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -32,7 +33,14 @@ from typing import Final, Literal
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import JsonValue
 
-from fivefold.agents.live import Hold, LiveModel, SpendMeter, live_name, provider_model
+from fivefold.agents.live import (
+    CALL_LIMIT_S,
+    Hold,
+    LiveModel,
+    SpendMeter,
+    live_name,
+    provider_model,
+)
 from fivefold.agents.replay import CassettePlayer, ReplayModel
 from fivefold.domain.prices import ModelPrice
 from fivefold.harness.log import RunRecord
@@ -66,13 +74,15 @@ class Live:
 
     `params` are the model's generation parameters, which the cassette records and every
     request hash covers. `spend` is the spend cap and price file of the command that runs
-    it, shared by the command's runs; a live run is refused without one.
+    it, shared by the command's runs; a live run is refused without one. `limit_s` is how
+    long, in wall-clock seconds, each call may wait for the provider before it fails.
     """
 
     provider: str
     model: str
     params: Mapping[str, JsonValue] = field(default_factory=dict)
     spend: SpendMeter | None = None
+    limit_s: float = CALL_LIMIT_S
 
     @property
     def name(self) -> str:
@@ -106,6 +116,8 @@ def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, Mode
     check_live_flag(environ)
     if spec.spend is None:
         raise LiveRefused("a live run needs a spend cap in USD and a price file")
+    if not (math.isfinite(spec.limit_s) and spec.limit_s > 0):
+        raise LiveRefused(f"a live call's time limit must be above 0 seconds, not {spec.limit_s}")
     return spec.spend, spec.spend.prices.price(spec.provider, spec.model)
 
 
@@ -214,6 +226,7 @@ class RunModels:
                 meter=self._live.meter,
                 think=think,
                 hold=hold,
+                limit_s=self._live.spec.limit_s,
             )
             return RecordingModel(live, self._recorder, worker=worker)
         model = scripted()

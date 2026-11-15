@@ -408,6 +408,8 @@ def test_the_command_refuses_a_live_run_before_it_touches_a_database(
         ("1", changed("fake:m", "fake:other"), "no price for fake:other"),
         ("1", changed("0.50", "0"), "above 0 USD"),
         ("1", changed("fake:m", "fakem"), "PROVIDER:MODEL"),
+        ("1", changed("temperature=0", "temperature=NaN"), "which JSON cannot hold"),
+        ("1", [*args, "--call-limit-s", "0"], "above 0 seconds"),
     ]
     for flag, argv, message in refusals:
         if flag is None:
@@ -430,6 +432,97 @@ def test_the_command_refuses_a_live_run_before_it_touches_a_database(
     with pytest.raises(SystemExit):
         main([*args[: args.index("--live")], "--prices", args[args.index("--prices") + 1]])
     assert "go with --live" in capsys.readouterr().err
+
+
+def test_the_command_checks_a_parameter_s_value_before_it_touches_a_database(
+    admin_dsn: str,
+    db_prefix: str,
+    live_cli: tuple[list[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """A value the provider's model refuses is refused in one line, before the run's
+    database is reset, so a bad parameter never costs the last run's records."""
+    monkeypatch.setenv("FIVEFOLD_LIVE", "1")
+    args, cassette = live_cli
+    prices = tmp_path / "ollama-prices.yaml"
+    prices.write_text(
+        "price_date: 2026-11-15\nprices:\n  ollama:\n    m:\n"
+        "      input_usd_per_million_tokens: 0\n      output_usd_per_million_tokens: 0\n",
+        encoding="utf-8",
+    )
+    swap = {"fake:m": "ollama:m", "temperature=0": 'temperature="hot"'}
+    swap[args[args.index("--prices") + 1]] = str(prices)
+    assert main([swap.get(arg, arg) for arg in args]) == 1
+    error = capsys.readouterr().err
+    assert error.startswith("record failed: ollama refuses temperature"), error
+    assert error.count("\n") == 1
+    assert not cassette.exists()
+    assert not _exists(admin_dsn, f"{db_prefix}_cli_live")
+
+
+class StalledProvider(BaseChatModel):
+    """A provider that accepts every call and never answers."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "stalled-provider"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise NotImplementedError
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        await asyncio.Event().wait()
+        raise AssertionError("never answered")
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> Runnable[Any, AIMessage]:
+        return self.bind(tools=[convert_to_openai_tool(tool) for tool in tools], **kwargs)
+
+
+def test_a_provider_that_never_answers_ends_its_worker_and_the_run_goes_on(
+    run_database: Callable[[str], str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With each call's time limit, a stalled provider fails the call: the worker ends
+    with an error, and the run drains and stops instead of waiting forever."""
+    monkeypatch.setenv("FIVEFOLD_LIVE", "1")
+    monkeypatch.setitem(
+        PROVIDERS, "fake", Provider(lambda model, params: StalledProvider(), frozenset())
+    )
+    meter = SpendMeter(Decimal(1), price_file())
+    spec = replace(demo_1_spec("G2", 7), plan=[], model=Live("fake", "m", spend=meter, limit_s=0.2))
+    run = InprocRun(spec, run_database("live_stalled"))
+    # A wall-clock timer in the run's own loop would hold the scheduler (`settle`), so the
+    # run goes in a thread of its own and the test waits for it from outside.
+    done, errors = threading.Event(), list[BaseException]()
+
+    def execute() -> None:
+        try:
+            asyncio.run(run.execute())
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            done.set()
+
+    threading.Thread(target=execute, daemon=True).start()
+    assert done.wait(60), "the run kept waiting for the stalled provider"
+    assert errors == []
+    ((end, text),) = run.result.ends.values()
+    assert end is WorkerEnd.ERROR, text
+    assert "fake:m did not answer within 0.2 s" in text
+    assert meter.calls == 0
 
 
 def test_the_command_records_a_live_run_and_plays_it_back_with_no_network(
