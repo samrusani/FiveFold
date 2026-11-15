@@ -63,7 +63,7 @@ def test_all_names_every_expected_cell_of_the_configurations_and_levels() -> Non
     assert sorted(b0_at_c0) == sorted(
         cell.name for cell in EXPECTED.cells if cell.config == "B0" and cell.contract is Contract.C0
     )
-    assert len(b0_at_c0) == 17
+    assert len(b0_at_c0) == 18
 
 
 def test_none_names_one_cell_with_no_fault_per_configuration_and_level() -> None:
