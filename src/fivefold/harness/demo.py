@@ -19,7 +19,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ import psycopg
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file
+from fivefold.evaluator import RunResult as Evaluation
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
     bootstrap,
@@ -82,6 +83,7 @@ class Summary:
     messages: int
     digest: str
     ended: str
+    verdict: str = ""
 
 
 def summarize(dsn: str, config: str, ended: str) -> Summary:
@@ -132,7 +134,20 @@ def run_demo_1(admin_dsn: str, config: Config, seed: int) -> Summary:
     run = InprocRun(demo_1_spec(config, seed), dsn)
     result = asyncio.run(run.execute())
     ended = ", ".join(f"{worker}: {end[0]}" for worker, end in sorted(result.ends.items()))
-    return summarize(dsn, config, ended)
+    summary = summarize(dsn, config, ended)
+    return replace(summary, verdict=verdict_line(result.evaluation))
+
+
+def verdict_line(evaluation: Evaluation | None) -> str:
+    """The verdict and each failing property's reasons, for the properties evaluated."""
+    if evaluation is None:
+        return "not evaluated"
+    parts = [str(evaluation.verdict)]
+    for result in evaluation.properties:
+        if str(result.verdict) == "fail":
+            parts.append(f"property {result.property} fails ({', '.join(result.reason_codes)})")
+    evaluated = ", ".join(str(number) for number in evaluation.evaluated)
+    return "; ".join(parts) + f"  [properties evaluated: {evaluated}]"
 
 
 def render(summary: Summary) -> str:
@@ -151,6 +166,7 @@ def render(summary: Summary) -> str:
         ),
         "  faults: " + ", ".join(f"{f} at {p} (vt {vt})" for f, p, vt in summary.faults),
         f"  agent: {summary.ended}",
+        f"  verdict: {summary.verdict}",
         f"  message log: {summary.messages} messages, sha256 {summary.digest[:16]}",
     ]
     return "\n".join(lines)

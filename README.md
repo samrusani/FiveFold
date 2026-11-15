@@ -12,18 +12,19 @@ A task passes only if every real-world action:
 
 ## Status
 
-Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine. Milestone M1, the thin slice, is nearly done:
+Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine. Milestone M1, the thin slice, is done:
 
 - the simulator: purchase orders and reservations at contract levels C0 to C3, the effects ledger, fact history and the approvals service (`src/fivefold/sim/`);
 - the deterministic harness: the scheduler, the virtual clock, transports with a message log, fault plans with F2 and F11 (`src/fivefold/harness/`);
 - the gateway: the state machine with invariants I1 to I7, the PostgreSQL store, the dispatcher and the agent-facing tools over MCP (`src/fivefold/gateway/`);
-- the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`).
+- the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`);
+- the evaluator, which scores runs from ground truth; properties 1 (exactly once) and 5 (truthfully reported) so far (`src/fivefold/evaluator/`).
 
-Demo 1 runs from a seed. The evaluator, which scores the five properties, is being built.
+Demo 1 runs from a seed, and every built fault cell of the development scenario gets the verdict `faults/expected.yaml` expects. Milestone M2 has started: the scripted approver and faults F6, F7 and F12 are in.
 
 ## Demo
 
-`make demo` runs demo 1, "Order placed, reply lost", for the baseline B0 and the gateway G2 on the same seed. The purchase order's reply is lost (fault F2), and the agent is killed right after sending the order and resumed from its checkpoint 10 seconds later (F11). Without the gateway, the resumed agent orders again: two orders, one approval, an overdrawn budget. With the gateway, it retries with the same idempotency key while the agent is down, and the resumed agent's repeated proposal attaches to the confirmed order: one order. Time is virtual, so the demo takes a few seconds, and it needs PostgreSQL but no API key.
+`make demo` runs demo 1, "Order placed, reply lost", for the baseline B0 and the gateway G2 on the same seed. The purchase order's reply is lost (fault F2), and the agent is killed right after sending the order and resumed from its checkpoint 10 seconds later (F11). Without the gateway, the resumed agent orders again: two orders, one approval, an overdrawn budget. With the gateway, it retries with the same idempotency key while the agent is down, and the resumed agent's repeated proposal attaches to the confirmed order: one order. The evaluator then scores both runs: B0 fails property 1, G2 passes. Time is virtual, so the demo takes a few seconds, and it needs PostgreSQL but no API key.
 
 ## Documents
 
