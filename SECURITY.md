@@ -34,5 +34,5 @@ Not covered, by design:
 
 - **The Docker Compose setup is for local development only.** Its PostgreSQL trusts every connection (trust authentication) and publishes its port on 127.0.0.1 only. Never run it on a shared machine, and never expose its port.
 - **The reference gateway is a research artifact, not hardened for production.** It exists to show and measure the design in the decision records. Do not put it in front of real systems, real money or real approvals. [docs/limitations.md](docs/limitations.md) lists what each of its guarantees depends on.
-- **Wrong results are bugs, not vulnerabilities.** A wrong verdict, a fault that does not fire as the catalog says, or a gateway that breaks the spec: open an issue.
+- **Wrong results are bugs, not vulnerabilities.** For a wrong verdict, a fault that does not fire as the catalog says, or a gateway that breaks the spec in a way the list above does not name, open an issue.
 - **Other projects' vulnerabilities belong to them.** Report a problem in a dependency, a model provider, Ollama, PostgreSQL or Docker to that project.
