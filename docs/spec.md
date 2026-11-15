@@ -108,8 +108,8 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | Schema | Entity | Key fields | Notes |
 | --- | --- | --- | --- |
 | gw | Intent | intent_id, operation, closed | One row per task intent; the lock anchor for identity (0001). An accepted `not_done` claim closes it (0010) |
-| gw | Read | read_id, key, version, vt | Recorded on every read tool call |
-| gw | Proposal | proposal_id, intent_id, operation, args, based_on, outcome | Every write call, admitted or refused |
+| gw | Read | read_id, key, version, data, vt | Recorded on every read tool call, with the value served, so the exact rule can compare the cited fields (0004) |
+| gw | Proposal | proposal_id, intent_id, operation, args, based_on, outcome, action_id | Every write call, admitted or refused (0001, item 17). The outcome is admitted, attached, or refused with its reason |
 | gw | Action | action_id, task_id, intent_id, operation, target, args, action_key, identity, basis, state, grant_id, idempotency_key, effect_id, contract | One logical effect (0001, 0003) |
 | gw | Grant | grant_id, action_id, approval_id, state | Binds one approval to one action (0002) |
 | gw | Attempt | attempt_id, action_id, attempt_no, idempotency_key, grant_id, check, sent_vt, answer_class, answered_vt | One send (0003). The check keeps the approval's expiry when it found the approval approved (0010) |
