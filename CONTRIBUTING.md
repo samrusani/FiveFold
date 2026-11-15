@@ -18,6 +18,16 @@ FiveFold is working toward its first release, v0.1. The Status section of [READM
 - A behaviour change includes a test that would have caught the old behaviour.
 - Live model calls never run in CI.
 
+## Releases
+
+Releases go to PyPI through `.github/workflows/publish.yml`, with PyPI's Trusted Publishing, so no token is stored anywhere. To release:
+
+1. In a pull request, set the version in `pyproject.toml`, such as `0.1.0`.
+2. Once it merges, publish a GitHub release whose tag is `v` plus that version, such as `v0.1.0`.
+3. The workflow checks the tag against the version, builds the sdist and the wheel, installs the wheel outside the repository and runs demo 1 from it. Only then does the publish job run, in the GitHub environment `pypi`, whose protection rules apply first.
+
+Today the package does not carry its database migrations, scenarios or expected outcomes, so demo 1 fails from an installed wheel and the workflow refuses to publish. That has to change before the first release.
+
 ## Writing style
 
 Short sentences, plain words, specific numbers with units. No em dashes. Cite papers by full title and arXiv ID, and label them as preprints. The full rules are in [CLAUDE.md](CLAUDE.md).

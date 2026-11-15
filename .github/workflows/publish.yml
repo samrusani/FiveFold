@@ -1,0 +1,77 @@
+# Publishes FiveFold to PyPI when a GitHub release is published, through PyPI's
+# Trusted Publishing: no token is stored anywhere. The build job checks that the
+# release's tag is v plus the version in pyproject.toml, builds the sdist and the
+# wheel, installs the wheel outside the repository and runs demo 1 from it, so a
+# package that cannot run is never published. The publish job runs in the GitHub
+# environment `pypi`, whose protection rules apply before anything is published.
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check the distributions
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      FIVEFOLD_ADMIN_DSN: postgresql://postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv==0.13.8
+      - name: Check that the release tag names the package's version
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ "$tag" != "v$version" ]; then
+            echo "The release tag is $tag, but pyproject.toml says version $version: tag the release v$version."
+            exit 1
+          fi
+      - name: Build the sdist and the wheel
+        run: uv build --out-dir dist
+      - name: Run demo 1 from the installed wheel, outside the repository
+        run: |
+          smoke=$(mktemp -d)
+          uv venv --python 3.12 "$smoke/venv"
+          uv pip install --python "$smoke/venv/bin/python" dist/*.whl
+          cd "$smoke"
+          "$smoke/venv/bin/python" -m fivefold.harness.demo 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fivefold
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
