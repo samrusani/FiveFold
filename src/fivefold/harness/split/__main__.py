@@ -8,7 +8,9 @@
 
 `start` makes a run and its directory (`fivefold.harness.split.lifecycle`), and prints what
 the agent needs. `serve` runs one of the run's services until it is stopped. `end` ends the
-run after the drain window, and `score` scores it with the evaluator.
+run after the drain window, and `score` scores it with the evaluator. Start each service
+once per run: a service started again mid-run would fire its faults again from their first
+occurrence (`fivefold.harness.split.service`). `serve` refuses a run that has ended.
 
 In G1 and G2 the agent must run in a container on the Docker network `fivefold-agent`,
 which joins the gateway and the agent only, and reach the gateway at
@@ -62,7 +64,7 @@ from fivefold.harness.split.lifecycle import (
     start_run,
 )
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
-from fivefold.harness.split.service import serve
+from fivefold.harness.split.service import refuse_ended, serve
 from fivefold.harness.split.simulator import SimulatorService
 
 DEFAULT_RUN_DIR = "split-run"
@@ -199,6 +201,7 @@ def _command(args: argparse.Namespace) -> int:
         return 0
     run = read_run(run_dir)
     if args.command == "serve":
+        refuse_ended(run, dsn)
         if args.service == "simulator":
             app: Any = SimulatorService(run, base_dsn=dsn).app()
             port = SIMULATOR_PORT if args.port is None else args.port

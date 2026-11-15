@@ -7,6 +7,13 @@ same scenario, and reads the run's seeded fault plan from `harness.run`. Its clo
 `HostClock` with the run's origin, which the first service to start sets (migration
 0013), so both services read the same virtual time on one host.
 
+Each service starts once per run. Its fault counters, whether the agents' phase is over,
+and the scripted approver's timers live in its memory, so a service started again
+mid-run would fire a fault again from its first occurrence, serve an agent the run has
+stopped hearing, and never decide an approval it had scheduled. A service refuses to open
+a run that has ended: `end` stopped it (the directory's `ended`), or the simulator
+recorded its stop (`harness.run_stop`).
+
 Checked in starlette 1.10.0: `Request.receive` is the ASGI receive callable, and after the
 request's body is read, uvicorn 0.54.0's receive (`protocols/http/h11_impl.py`) returns
 `http.disconnect` once the client closes the connection, and not before. Checked in
@@ -61,7 +68,8 @@ class OpenRun:
 
 
 def open_run(run: SplitRun, base_dsn: str) -> OpenRun:
-    """Open `run` for a service. Raises `RunDirError` when the database holds another run."""
+    """Open `run` for a service. Raises `RunDirError` when the database holds another run,
+    or the run has ended."""
     scenario = run.scenario()
     conn = psycopg.connect(run.conninfo(base_dsn, "ff_harness"), autocommit=True)
     try:
@@ -72,6 +80,7 @@ def open_run(run: SplitRun, base_dsn: str) -> OpenRun:
             raise RunDirError(f"database {run.database} holds no split run {run.run_id}")
         if row[1] != scenario_digest(scenario):
             raise RunDirError(f"{run.directory}'s scenario is not the one run {run.run_id} has")
+        _refuse_ended(run, conn)
         params: Mapping[str, Any] = row[3]
         plan = parse_plan(params.get("plan", []))
         clock = HostClock(clock_origin(conn))
@@ -81,6 +90,20 @@ def open_run(run: SplitRun, base_dsn: str) -> OpenRun:
     except BaseException:
         conn.close()
         raise
+
+
+def refuse_ended(run: SplitRun, base_dsn: str) -> None:
+    """Raise `RunDirError` if `run` has ended, before a service starts for it."""
+    with psycopg.connect(run.conninfo(base_dsn, "ff_harness"), autocommit=True) as conn:
+        _refuse_ended(run, conn)
+
+
+def _refuse_ended(run: SplitRun, conn: psycopg.Connection[TupleRow]) -> None:
+    stopped = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone()
+    if run.ended or stopped is not None:
+        raise RunDirError(
+            f"run {run.run_id} has ended, and its services cannot serve it again: start a new run"
+        )
 
 
 def clock_origin(conn: psycopg.Connection[TupleRow]) -> int:

@@ -38,6 +38,7 @@ from fivefold.agents.remote import RemoteAgent, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
 from fivefold.gateway.admin_api import TOKEN_VARIABLE
+from fivefold.harness.log import SharedPgHarnessLog
 from fivefold.harness.migrations import (
     create_database,
     database_lock,
@@ -45,11 +46,13 @@ from fivefold.harness.migrations import (
     registry_database,
 )
 from fivefold.harness.registry import forget
+from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.gateway import AdminFactory, GatewayService, admin_api
 from fivefold.harness.split.lifecycle import end_run, score_run, start_run
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
+from fivefold.harness.split.service import open_run
 from fivefold.harness.split.simulator import SimulatorService
 
 pytestmark = pytest.mark.pg
@@ -709,6 +712,39 @@ def test_the_agents_phase_ends_then_the_run_stops(split: Split) -> None:
     with split.connect() as conn:
         stop = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone()
     assert stop == (stopped.json()["stopped_vt"],)
+
+
+@pytest.mark.parametrize("how", ["ended", "stopped"])
+def test_a_service_refuses_a_run_that_has_ended_in_one_line(
+    split: Split,
+    how: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A service keeps its fault counters, the agents' phase and the approver's timers in
+    memory, so one started again would fire `occurrence: 1` faults again. A run has ended
+    once `end` wrote `ended`, or once the simulator recorded its stop, which `end` does
+    first; `serve` then refuses in one line, and a service's start refuses too."""
+    run = split.start("G2", [])
+    if how == "ended":
+        run.mark_ended(1_234)
+    else:
+        with psycopg.connect(run.conninfo(split.admin, "ff_harness"), autocommit=True) as conn:
+            SharedPgHarnessLog(conn).run_stopped(1_234)
+    with pytest.raises(RunDirError, match="has ended"):
+        open_run(run, split.admin)
+
+    def served(*_: object, **__: object) -> None:
+        raise AssertionError("a run that has ended was served")
+
+    monkeypatch.setattr(split_main, "serve", served)
+    common = ["--run-dir", str(run.directory), "--dsn", split.admin, "serve"]
+    for service in ("simulator", "gateway"):
+        capsys.readouterr()
+        assert main([*common, service]) == 1
+        error = capsys.readouterr().err
+        assert error.count("\n") == 1, error
+        assert f"run {run.run_id} has ended" in error
 
 
 def _free_port() -> int:
