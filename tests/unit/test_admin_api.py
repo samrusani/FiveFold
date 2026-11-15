@@ -307,6 +307,12 @@ def test_a_token_may_hold_every_character_rfc_6750_allows() -> None:
     assert response.status_code == 200
 
 
+def test_the_app_is_named_for_the_project() -> None:
+    gateway = Gateway()
+    app = admin_app(gateway.admin, gateway.store, token=TOKEN)
+    assert app.title == "FiveFold gateway admin API"
+
+
 def test_a_deployment_reads_the_token_from_its_environment() -> None:
     assert TOKEN_VARIABLE == "FIVEFOLD_ADMIN_API_TOKEN"
     assert token_from_environment({TOKEN_VARIABLE: TOKEN}) == TOKEN

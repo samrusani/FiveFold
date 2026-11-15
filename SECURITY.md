@@ -1,12 +1,12 @@
 # Security policy
 
-Fivefold is a test suite and reference gateway for research. This page says how to report a vulnerability, which versions get fixes, and what the policy covers.
+FiveFold is a test suite and reference gateway for research. This page says how to report a vulnerability, which versions get fixes, and what the policy covers.
 
 ## Report a vulnerability privately
 
 Use GitHub's private vulnerability reporting for this repository:
 
-1. Open the repository's **Security** tab and choose **Report a vulnerability**. The form is at <https://github.com/samrusani/AgentCheck/security/advisories/new>.
+1. Open the repository's **Security** tab and choose **Report a vulnerability**. The form is at <https://github.com/samrusani/FiveFold/security/advisories/new>.
 2. Say what the problem is, which commit or release has it, and how to reproduce it: the commands, and any scenario, cassette or price file they need.
 3. Submit the report. GitHub keeps it private between you and the repository's maintainers, and the maintainer, [samrusani](https://github.com/samrusani), follows up there.
 
@@ -26,8 +26,8 @@ In scope:
 
 - the code in `src/fivefold/`, the database roles and migrations in `db/`, the `Dockerfile` and the CI workflows in `.github/workflows/`;
 - a way around the trust boundaries of [decision record 0008](docs/adr/0008-configurations-and-trust-boundaries.md): for example, an agent in G1 or G2 that writes to the simulator without the gateway, or a component's database role that can change another component's tables;
-- a file Fivefold reads, such as a scenario, a cassette, a price file or a saved result, that makes it run code or write outside the place it was asked to write;
-- a secret that reaches a file Fivefold writes, such as a cassette, a result or a report;
+- a file FiveFold reads, such as a scenario, a cassette, a price file or a saved result, that makes it run code or write outside the place it was asked to write;
+- a secret that reaches a file FiveFold writes, such as a cassette, a result or a report;
 - a secret or a personal detail committed to the repository or its history.
 
 Not covered, by design:

@@ -9,7 +9,7 @@ export function App() {
     <>
       <nav className="top">
         <a href={href({ page: "runs" })} className="brand">
-          Fivefold viewer
+          FiveFold viewer
         </a>
         <span className="muted">read-only: runs, timelines, scorecards</span>
       </nav>

@@ -1,6 +1,6 @@
 # Product spec
 
-Fivefold is an open-source test suite and reference gateway that checks whether AI agents act correctly when things fail. A task passes only if every real-world action happens exactly once, with valid authority, on fresh inputs, is actually committed, and is honestly reported. Version 0.1 ships a procurement simulator, three demos and a published comparison report, with no GPUs and no model training.
+FiveFold is an open-source test suite and reference gateway that checks whether AI agents act correctly when things fail. A task passes only if every real-world action happens exactly once, with valid authority, on fresh inputs, is actually committed, and is honestly reported. Version 0.1 ships a procurement simulator, three demos and a published comparison report, with no GPUs and no model training.
 
 Status: M0 decisions accepted, 14 Nov 2026. Companion docs: [spec.md](spec.md) (technical spec), [plan.md](plan.md) (build plan) and the [decision records](adr/README.md).
 
@@ -72,7 +72,7 @@ These are working targets, not commitments.
 
 Every piece has 2026 prior work, but nobody scores all five properties together, and most of the strongest work has no released code.
 
-| Prior work | What it covers | What Fivefold adds |
+| Prior work | What it covers | What FiveFold adds |
 | --- | --- | --- |
 | LIMBO (preprint) | Duplicates and false success after lost replies | Authority and freshness checks; runnable code (LIMBO's release unconfirmed) |
 | CapLease | One approval executed more than once | Freshness and reporting checks |
@@ -86,7 +86,7 @@ Two openings are untaken: an MCP conformance test for lost replies (requested in
 
 ## Decisions and open questions
 
-- **Name:** Fivefold. The name was unclaimed on PyPI and npm on 14 Nov 2026.
+- **Name:** FiveFold; the Python package and its commands are `fivefold`. The name was unclaimed on PyPI and npm on 14 Nov 2026. The repository was renamed from AgentCheck to FiveFold on 15 Nov 2026.
 - **License:** Apache-2.0, which includes a patent grant.
 - **AliceMemory:** v0.2. It drives the memory-correction fault (F8), which decision record 0006 defers.
 - **Open: live study.** Which models, and the spend cap after the pilot.

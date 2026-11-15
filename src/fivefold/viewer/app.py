@@ -59,7 +59,7 @@ NO_STORE: Final = {"Cache-Control": "no-store"}
 """A run that is still going on changes between two requests."""
 
 NOT_BUILT: Final = (
-    "<!doctype html><title>Fivefold viewer</title>"
+    "<!doctype html><title>FiveFold viewer</title>"
     "<p>The viewer's frontend is not built. Run <code>npm ci</code> and"
     " <code>npm run build</code> in <code>viewer/</code>, then start the viewer again."
     " The API answers under <code>/api/</code>.</p>"

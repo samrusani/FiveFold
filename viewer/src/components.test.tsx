@@ -88,6 +88,12 @@ describe("the pages, over a stubbed API", () => {
     });
   });
 
+  it("names itself FiveFold viewer in the top bar", async () => {
+    render(<App />);
+    expect(screen.getByRole("link", { name: "FiveFold viewer" })).toBeTruthy();
+    expect(await screen.findAllByTestId("run-row")).toHaveLength(3);
+  });
+
   it("lists the runs and offers B0 beside G2", async () => {
     render(<App />);
     expect(await screen.findAllByTestId("run-row")).toHaveLength(3);

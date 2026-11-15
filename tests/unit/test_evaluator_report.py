@@ -460,6 +460,10 @@ def test_a_run_with_no_plan_or_an_empty_plan_says_so() -> None:
 # The report ------------------------------------------------------------------------------
 
 
+def test_the_report_is_headed_with_the_projects_name() -> None:
+    assert markdown_report([make_result()]).splitlines()[0] == "# FiveFold results"
+
+
 def test_the_report_says_what_was_run() -> None:
     results = [
         b0_demo_1(seed=10),

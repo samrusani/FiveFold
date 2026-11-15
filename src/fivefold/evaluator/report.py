@@ -719,7 +719,7 @@ def markdown_report(results: Iterable[RunResult], prices: PriceFile | None = Non
     """
     rows = _rows(results, prices)
     lines = [
-        "# Fivefold results",
+        "# FiveFold results",
         "",
         f"The evaluator's results for {_runs(len(rows))} (record 0004). It decides every"
         " verdict from the simulator's and the harness's records. Each run's result is a"
