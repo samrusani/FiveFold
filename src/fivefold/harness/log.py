@@ -46,6 +46,33 @@ DropReason = Literal[
 delivered a second time (F4): the transport never delivers it to the sender (0006)."""
 
 
+NUL_REFUSED = "it holds a NUL character (\\u0000), which the harness's log cannot store"
+"""Why a message holding a NUL is refused, before anything logs it (`holds_nul`)."""
+
+
+def holds_nul(value: object) -> bool:
+    """Whether a JSON value holds a NUL character, in a string or a key. PostgreSQL's JSONB
+    cannot store one, so neither can the harness's log. Both topologies refuse an agent's
+    message holding one before anything logs it, as a malformed one is refused: the split
+    services (`fivefold.harness.split`) and the inproc agent's connection to the gateway
+    (`fivefold.harness.mcp_link`). B0's tools need no such check: every request model, the
+    final report's included, already refuses a NUL in any field."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, Mapping):
+            for key, inner in item.items():
+                if isinstance(key, str) and "\x00" in key:
+                    return True
+                pending.append(inner)
+        elif isinstance(item, list | tuple):
+            pending.extend(item)
+    return False
+
+
 @dataclass(frozen=True)
 class MessageRecord:
     """One message on one hop, as sent. Its fate comes later (0004, 0006)."""

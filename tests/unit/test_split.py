@@ -23,7 +23,7 @@ from fivefold.gateway.records import Answer, Attempt, CheckRecord
 from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import ActionState, CheckKind, Reason
 from fivefold.harness.clock import HostClock
-from fivefold.harness.log import MemoryHarnessLog
+from fivefold.harness.log import MemoryHarnessLog, holds_nul
 from fivefold.harness.migrations import check_database_name
 from fivefold.harness.scheduler import HostScheduler, Scheduler
 from fivefold.harness.split import SERVICE_STOPPED
@@ -32,7 +32,7 @@ from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
 from fivefold.harness.split.gateway import Attestations, AttestationsClosed, SimulatorLink
-from fivefold.harness.split.hops import Hops, answer_class, holds_nul
+from fivefold.harness.split.hops import Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
     Config,
