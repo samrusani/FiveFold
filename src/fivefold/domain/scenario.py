@@ -15,13 +15,13 @@ YAML parsing sits behind `parse_yaml`, the loader's only use of a YAML library.
 
 from __future__ import annotations
 
-import importlib
 import json
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
 
+import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -484,14 +484,13 @@ def _fits(
 def parse_yaml(text: str) -> object:
     """Parse YAML text into plain data. The loader's only use of a YAML library.
 
-    It uses PyYAML's `safe_load`, which builds only plain data. PyYAML is not a project
-    dependency yet, so it is imported only when called.
+    It uses PyYAML's `safe_load`, which builds only plain data: a tag that would build a
+    Python object is refused.
     """
     try:
-        yaml = importlib.import_module("yaml")
-    except ModuleNotFoundError as error:
-        raise ScenarioError("reading YAML needs PyYAML, which is not installed") from error
-    data: object = yaml.safe_load(text)
+        data: object = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ScenarioError(f"the scenario is not valid YAML: {error}") from error
     return data
 
 

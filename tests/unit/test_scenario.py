@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import copy
-import sys
-import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -22,7 +20,6 @@ from fivefold.domain.scenario import (
     ScenarioError,
     feasible_together,
     json_schema_text,
-    load_scenario,
     load_scenario_file,
     options,
     parse_yaml,
@@ -54,32 +51,16 @@ def test_the_dev_scenario_validates(dev_data: Data) -> None:
 
 
 def test_the_dev_scenario_file_holds_the_dev_data(dev_data: Data) -> None:
-    """Runs once PyYAML is installed; the loader's YAML use is `parse_yaml` alone."""
-    pytest.importorskip("yaml")
     assert parse_yaml(DEV_FILE.read_text(encoding="utf-8")) == dev_data
     assert load_scenario_file(DEV_FILE) == scenario_from_data(dev_data)
 
 
-def test_the_loader_parses_yaml_with_safe_load(
-    dev_data: Data, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen: list[str] = []
-
-    def safe_load(text: str) -> Data:
-        seen.append(text)
-        return copy.deepcopy(dev_data)
-
-    stub = types.ModuleType("yaml")
-    stub.safe_load = safe_load  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "yaml", stub)
-    assert load_scenario("the text").id == "dev-001-single-po"
-    assert seen == ["the text"]
-
-
-def test_the_loader_says_when_pyyaml_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "yaml", None)
-    with pytest.raises(ScenarioError, match="needs PyYAML"):
-        parse_yaml("id: x")
+def test_the_loader_builds_only_plain_data() -> None:
+    """`safe_load` refuses tags that would build Python objects."""
+    with pytest.raises(ScenarioError, match="not valid YAML"):
+        parse_yaml("!!python/object/apply:os.getcwd []")
+    with pytest.raises(ScenarioError, match="not valid YAML"):
+        parse_yaml("id: [unclosed")
 
 
 def test_the_committed_json_schema_matches_the_model() -> None:

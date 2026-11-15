@@ -3,7 +3,7 @@
 `Ledger` holds the SQL; `service.py` decides what to write. Every method runs in the
 caller's transaction, which has already locked the run's row, so the simulator handles
 one request at a time (0004). The schema checks much of what is written here
-(`db/migrations/0004_sim.sql`); this module only maps rows to plain values.
+(`db/migrations/0005_sim.sql`); this module only maps rows to plain values.
 """
 
 from __future__ import annotations
