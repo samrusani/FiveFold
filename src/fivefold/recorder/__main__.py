@@ -15,7 +15,9 @@ exits with 0 only when the replay matches. It refuses to run in the original run
 and only ever reads that one.
 
 Each command drops and recreates the database it runs in, as the demos do. The admin
-connection comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`. No command needs an API key.
+connection comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`. No command needs an API key. A
+refused input, such as a scenario that changed or a fault plan the configuration does
+not have, ends the command with one line on standard error and exit status 1.
 """
 
 from __future__ import annotations
@@ -31,11 +33,11 @@ from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.replay import ReplayError
 from fivefold.domain.contracts import Contract
-from fivefold.domain.scenario import ScenarioError, load_scenario_file
+from fivefold.domain.scenario import load_scenario_file
 from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, bootstrap, migrate, recreate_database
 from fivefold.harness.run import RunSpec
-from fivefold.recorder.cassette import Cassette, CassetteError
+from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import RECORDS, PlaybackError, play, record, replay_spec
 
 RECORDED = "fivefold_recorded"
@@ -141,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         bootstrap(conn, DB_DIR / "bootstrap.sql")
     try:
         return _record(args) if args.command == "record" else _play(args)
-    except (CassetteError, OSError, PlaybackError, ReplayError, ScenarioError) as error:
+    except (OSError, PlaybackError, ReplayError, ValueError) as error:
         print(f"{args.command} failed: {error}", file=sys.stderr)
         return 1
 

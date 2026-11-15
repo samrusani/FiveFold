@@ -284,3 +284,23 @@ def test_the_command_records_and_plays_back(
     path.write_text(json.dumps(edited, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     assert main(play_args) == 1
     assert "play failed: the original run recorded the cassette" in capsys.readouterr().err
+
+
+def test_the_command_reports_a_refused_run_in_one_line(
+    admin_dsn: str,
+    cli_databases: tuple[str, str],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """dev-001's own fault fires on the gateway's hop, which B0 does not have."""
+    recorded, _ = cli_databases
+    args = ["--dsn", admin_dsn, "record", "--scenario", str(DEV_001), "--contract", "C2"]
+    path = tmp_path / "refused.json"
+    args += ["--config", "B0", "--cassette", str(path), "--database", recorded]
+    assert main(args) == 1
+    error = capsys.readouterr().err
+    assert error == (
+        "record failed: not in a configuration without a gateway: F2 at net.gw_sim.answer"
+        " (0006, 0008)\n"
+    )
+    assert not path.exists()
