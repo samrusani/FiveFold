@@ -4,6 +4,33 @@
 #   make db-up                    start PostgreSQL
 #   docker compose run --rm app   build the app image and run `make check` inside it
 #   docker compose up viewer      serve the viewer on http://127.0.0.1:8300 (0012)
+#
+# The `split` profile runs the split topology for your own agent (record 0009; README.md,
+# "Bring your own agent"): the simulator and the gateway as services next to PostgreSQL.
+# They too publish their ports on 127.0.0.1 only.
+#
+#   docker compose --profile split run --rm split start --scenario PATH --config G2 ...
+#   docker compose --profile split up --detach --wait simulator gateway
+#   (run your agent against the gateway, on the network fivefold-agent)
+#   docker compose --profile split run --rm split end
+#   docker compose --profile split run --rm split score
+#
+# Networks: the agent's network, `fivefold-agent`, joins only the gateway and your agent,
+# so in G1 and G2 the agent has no route to the simulator (0008). The backend network
+# joins the gateway, the simulator, PostgreSQL and the `split` commands.
+
+x-split-environment: &split-environment
+  FIVEFOLD_ADMIN_DSN: postgresql://postgres@postgres:5432/postgres
+  FIVEFOLD_RUN_DIR: /var/lib/fivefold/run
+  FIVEFOLD_SIMULATOR_URL: http://simulator:8100
+  FIVEFOLD_GATEWAY_URL: http://gateway:8000
+
+x-split: &split
+  build: .
+  profiles: ["split"]
+  environment: *split-environment
+  volumes:
+    - split-run:/var/lib/fivefold
 
 services:
   postgres:
@@ -12,6 +39,7 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "127.0.0.1:5432:5432"
+    networks: [default, backend]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 2s
@@ -40,3 +68,73 @@ services:
       FIVEFOLD_ADMIN_DSN: postgresql://postgres@postgres:5432/postgres
     ports:
       - "127.0.0.1:8300:8300"
+
+  # The run's commands: start, end and score. `start` writes the run's directory, with
+  # its secrets, to the volume the services read.
+  split:
+    <<: *split
+    entrypoint: [".venv/bin/python", "-m", "fivefold.harness.split"]
+    command: ["--help"]
+    networks: [backend]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  simulator:
+    <<: *split
+    command:
+      [".venv/bin/python", "-m", "fivefold.harness.split", "serve", "simulator",
+       "--host", "0.0.0.0", "--port", "8100"]
+    networks: [backend]
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Set FIVEFOLD_ADMIN_API_TOKEN where you run Compose to serve the gateway's admin API
+  # at /admin, where you resolve escalations. Without it the gateway serves none.
+  gateway:
+    <<: *split
+    environment:
+      <<: *split-environment
+      FIVEFOLD_ADMIN_API_TOKEN: ${FIVEFOLD_ADMIN_API_TOKEN:-}
+    command:
+      [".venv/bin/python", "-m", "fivefold.harness.split", "serve", "gateway",
+       "--host", "0.0.0.0", "--port", "8000"]
+    networks: [agent, backend]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      simulator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The scripted agent, to check the setup before you bring your own: on the agent's
+  # network only, as your agent's container would be. It reaches the gateway at
+  # http://gateway:8000/mcp.
+  agent:
+    build: .
+    profiles: ["split"]
+    entrypoint: [".venv/bin/python", "-m", "fivefold.agents.remote"]
+    command: ["--help"]
+    networks: [agent]
+
+networks:
+  agent:
+    name: fivefold-agent
+  backend: {}
+
+volumes:
+  split-run: {}
