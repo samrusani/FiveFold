@@ -15,13 +15,14 @@ from typing import Any, LiteralString
 import psycopg
 import pytest
 
+from fivefold.domain.api import GetOrderStatus, StatusAnswer, SubmitPurchaseOrder, WriteCommitted
 from fivefold.domain.contracts import Contract
 from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.harness.log import MemoryHarnessLog, MessageRecord
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.sim_points import SimulatorPoints
-from fivefold.harness.transport import Reply, Transport, TransportTimeout
+from fivefold.harness.transport import Envelope, Reply, Transport, TransportTimeout
 from fivefold.sim import Simulator
 from fivefold.sim.endpoint import endpoint
 
@@ -251,3 +252,51 @@ def test_f10_stale_beyond_the_lag_lists_the_state_when_it_fired_but_claims_now(
     assert bodies["stale"]["effects"] == []
     assert bodies["stale"]["as_of_vt"] == stale_request.delivered_vt
     assert [e["effect_id"] for e in bodies["fresh"]["effects"]] == ["PO-0001"]
+
+
+def test_f10_stale_beyond_the_lag_answers_alike_when_an_order_commits_in_its_millisecond(
+    make_sim: SimFactory,
+) -> None:
+    """Every answer F10 shapes lists the same effects, those committed before the virtual
+    millisecond in which it fired. An order that commits later in that millisecond is in
+    none of them, though each answer claims to be current (0006)."""
+    sim = make_sim(Contract.C1)
+    scheduler = Scheduler()
+    faults = FaultInjector(parse_plan([f10("stale_beyond_lag", 2)]))
+    points = SimulatorPoints(
+        scheduler, faults, MemoryHarnessLog(), dispatch_timeout_ms=T_MS, status_lag_ms=0
+    )
+
+    def status(vt: int, seq: int) -> list[str]:
+        scheduler.clock.advance_to(vt)
+        request = Envelope(
+            seq=seq,
+            hop="gw_sim",
+            kind="request",
+            sender="gateway",
+            receiver="simulator",
+            api="get_order_status",
+            correlation=None,
+            intent_id="REQ-1",
+            idempotency_key=None,
+            answer_class=None,
+            body=STATUS,
+            sent_vt=vt,
+        )
+        shape = points.status_answer(request)
+        assert shape is not None and shape.contract_violation
+        answer = sim.get_order_status(
+            GetOrderStatus(**STATUS),
+            caller="gateway",
+            vt=vt,
+            as_of_vt=shape.as_of_vt,
+            reflect_vt=shape.reflect_vt,
+            contract_violation=True,
+        )
+        assert isinstance(answer, StatusAnswer)
+        return [effect.effect_id for effect in answer.effects]
+
+    first = status(5_000, 1)
+    order = sim.submit_purchase_order(SubmitPurchaseOrder(**ORDER), caller="gateway", vt=5_000)
+    assert isinstance(order, WriteCommitted) and order.effect_id == "PO-0001"
+    assert status(6_000, 2) == first == [], "the order committed in F10's millisecond"

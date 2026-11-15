@@ -141,7 +141,7 @@ def test_f10_stale_beyond_the_lag_reflects_the_state_when_it_fired() -> None:
     to the time each is produced: a contract violation (0006)."""
     rig = Rig([f10("stale_beyond_lag", occurrence=2, count=2)])
     assert rig.status(vt=1_000) is None, "it fires at the second status answer"
-    expected = StatusShape(reflect_vt=5_000, contract_violation=True)
+    expected = StatusShape(reflect_vt=4_999, contract_violation=True)
     assert [rig.status(vt=vt) for vt in (5_000, 8_000, 11_000)] == [expected, expected, None]
     assert rig.log.faults[0].vt == 5_000
 
@@ -152,7 +152,7 @@ def test_overlapping_f10s_each_count_the_answer_and_the_first_shapes_it() -> Non
     assert shapes == [
         StatusShape(hold_ms=T_MS),
         StatusShape(hold_ms=T_MS),
-        StatusShape(reflect_vt=2_000, contract_violation=True),
+        StatusShape(reflect_vt=1_999, contract_violation=True),
         None,
     ]
     assert [(f.variant, f.vt) for f in rig.log.faults] == [

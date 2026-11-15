@@ -14,8 +14,10 @@ at its two points:
     arrives after the caller's timeout, and the probe counts as unanswered;
   - `stale_within_lag`: the answer is accurate to L (`status_lag_ms`) before it is
     produced, as stale as the destination's promise allows, and says so;
-  - `stale_beyond_lag`: the answer lists the effects as they were when F10 fired, but
-    claims to be accurate to the time it is produced: a contract violation.
+  - `stale_beyond_lag`: the answer lists the effects committed before the virtual
+    millisecond in which F10 fired, the same in every answer F10 shapes, but claims to
+    be accurate to the time it is produced: a contract violation. A write that commits
+    later in that millisecond is in none of them.
   When two F10 entries overlap, every one counts the answer, and the one that fired
   first shapes it.
 
@@ -123,7 +125,11 @@ class SimulatorPoints:
         if variant == F10_STALE_WITHIN_LAG:
             return StatusShape(as_of_vt=max(0, now - self._lag_ms))
         if variant == F10_STALE_BEYOND_LAG:
-            return StatusShape(reflect_vt=first.fired_vt, contract_violation=True)
+            # The simulator lists effects committed at or before `reflect_vt`. Freezing at
+            # the millisecond before F10 fired keeps every shaped answer alike, even when a
+            # write commits later in the millisecond F10 fired in.
+            frozen_vt = max(0, first.fired_vt - 1)
+            return StatusShape(reflect_vt=frozen_vt, contract_violation=True)
         raise SimulatorPointError(f"F10 has no variant {variant!r}")
 
     def _record(
