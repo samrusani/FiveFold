@@ -35,10 +35,11 @@ The variants of a cell:
   `delayed` and `stale_within_lag` fire at the first status answer. The `delayed` cells
   set `count` to 5, below `max_probes` (0013), and the `stale_within_lag` cells set
   `status_lag_ms` to 3,000 (`cell_scenario`). `stale_beyond_lag` fires as the order
-  reaches the simulator, and the status answers after it list the state just before
-  (0013). B0 has no F10 cells: its scripted agent never calls the status tool (0008), so
-  no status answer is produced for F10 to change. G1 has none either: its gateway never
-  probes, and its agent has no status tool (0008), so nothing asks for a status answer.
+  reaches the simulator, and the status answers after it list the state from just before
+  the order arrived (0013). B0 has no F10 cells: its scripted agent never calls the status
+  tool (0008), so no status answer is produced for F10 to change. G1 has none either: its
+  gateway never probes, and its agent has no status tool (0008), so nothing asks for a
+  status answer.
 """
 
 from __future__ import annotations
