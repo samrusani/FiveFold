@@ -55,6 +55,8 @@ Detail: 0008.
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. B0, G1 and G2 share one LangGraph agent: a model node and the prebuilt tool node, with the library's default error handling and a retry policy with library defaults. 0008 lists the facts behind that choice, checked in library source, and the scripted agent policy used by deterministic tests.
 
+G1 has G2's tools and schemas. Its gateway files one approval request per write call, checks the approval and no fact before the one send, and sends no idempotency key. It has no status probes, retries, report checks or run closing. A send with no answer fails the call with the tool error `gateway_timeout`, as a proxy returns 504, so the framework's retry applies; the action stays OutcomeUnknown. G1 forwards the final report to the harness's report sink unchanged.
+
 ## Trust boundaries
 
 Detail: 0008.
@@ -197,6 +199,8 @@ Invariants. 0003 gives the check for each one.
 | I5 | Every agent-facing result reports the action's state when it is produced, never reports OutcomeUnknown as confirmed, failed or rejected, and the gateway accepts no final report that contradicts its records. |
 | I6 | Every state change writes exactly one `action_event` row in the same transaction, holding a row lock on the action. `action_event` is append-only. |
 | I7 | At most one action per intent is live or Confirmed. G1's actions are exempt. |
+
+The invariants are claimed for G2 only (0003). G1's actions are held to the ones G1 follows: its check before a send covers the approval only (I3), it sends each action at most once (I4), and its results never say how an outcome is reconciled, because G1 reconciles nothing (I5).
 
 ## Gateway
 
