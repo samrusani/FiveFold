@@ -4,7 +4,11 @@ calls (0004).
 The evaluator scores from these records and the simulator's, never from the gateway's
 (0004). One counter numbers every harness event in order: a message's send and its
 delivery, a fault firing, an action of a scripted human and a submitted report. So "this
-message was delivered before that report" is a comparison of two numbers.
+message was delivered before that report" is a comparison of two numbers. Each fault
+names the task intent it touched, which recovery latency starts from (0014).
+
+The database stamps each record with the wall-clock time it was written (`wall_at`), and
+a delivery with the time of its fate (`delivered_wall_at`), for metrics only (0009).
 
 Model calls have their own numbers, in the order the model answered them, which is the
 order of the run's cassette (0009). They take none of the event counter's, so logging them
@@ -84,6 +88,11 @@ class FaultRecord:
     voided: tuple[int, ...] = ()
     """The seqs of messages whose delivery the fault voided (0006, crashes)."""
     params: Mapping[str, object] = field(default_factory=dict)
+    intent_id: str | None = None
+    """The task intent the fault touched: the intent of the message, action or tool call
+    it acted on. None for F9, which touches every task intent, and for a message without
+    an intent, such as a read (0014). F10 gets one more record for each status answer it
+    changes, naming that answer and its intent."""
 
 
 @dataclass(frozen=True)
@@ -403,10 +412,12 @@ class PgHarnessLog(HarnessLog):
         delivered_seq: int | None = None,
     ) -> None:
         _check_fate(fate, reason, delivered_seq)
+        delivered = fate == "delivered"
         updated = self._conn.execute(
             "UPDATE harness.message_log SET fate = %s, drop_reason = %s, delivered_seq = %s,"
-            " delivered_vt = %s WHERE seq = %s AND fate IS NULL",
-            (fate, reason, delivered_seq, vt if fate == "delivered" else None, seq),
+            " delivered_vt = %s, delivered_wall_at = CASE WHEN %s THEN now() END"
+            " WHERE seq = %s AND fate IS NULL",
+            (fate, reason, delivered_seq, vt if delivered else None, delivered, seq),
         )
         if updated.rowcount != 1:
             raise ValueError(f"message {seq} was never sent or already has a fate")
@@ -414,8 +425,8 @@ class PgHarnessLog(HarnessLog):
     def fault_fired(self, record: FaultRecord) -> None:
         self._conn.execute(
             "INSERT INTO harness.fault_log (seq, fault, variant, point, occurrence, action,"
-            " target_seq, component, voided, params, vt)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " target_seq, component, voided, params, vt, intent_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 record.seq,
                 record.fault,
@@ -428,6 +439,7 @@ class PgHarnessLog(HarnessLog):
                 list(record.voided),
                 Jsonb(dict(record.params)),
                 record.vt,
+                record.intent_id,
             ),
         )
 

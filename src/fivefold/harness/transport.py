@@ -16,6 +16,7 @@ Transport rules (0006, as amended by 0010):
 - When a component crashes, every later answer to a request it sent before the crash is
   dropped.
 - Faults fire at `net.{hop}.request` and `net.{hop}.answer`, before the message travels.
+  The fault's record names the message and its intent (0014).
 - When F4 fires on a request, the transport delivers it a second time, `copy_delay_ms`
   after the first delivery. The copy is a message of its own, logged with `copy_of`
   naming the request: its sender sent the request once. A copy reaches no fault point
@@ -326,6 +327,7 @@ class Transport:
                 vt=self._scheduler.now,
                 target_seq=original.seq,
                 params={**fired.planned.params, "copy_seq": copy.seq},
+                intent_id=original.intent_id,
             )
         )
         self._log.message_sent(
@@ -388,6 +390,7 @@ class Transport:
                 vt=self._scheduler.now,
                 target_seq=envelope.seq,
                 params=dict(fired.planned.params),
+                intent_id=envelope.intent_id,
             )
         )
 

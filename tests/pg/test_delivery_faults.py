@@ -315,6 +315,32 @@ def test_f5_in_b0_the_framework_retry_orders_again_without_a_key(
 
 # F10: status answers delayed or stale ---------------------------------------------------
 
+STATUS_ANSWER_SEQS: LiteralString = (
+    "SELECT seq FROM harness.message_log WHERE kind = 'answer' AND api = 'get_order_status'"
+    " ORDER BY seq"
+)
+
+
+def order_answer(dsn: str) -> int:
+    """The seq of the simulator's answer to the order on the gateway's hop, which F2 drops."""
+    ((seq,),) = rows(
+        dsn,
+        "SELECT seq FROM harness.message_log WHERE kind = 'answer'"
+        " AND api = 'submit_purchase_order' AND hop = 'gw_sim'",
+    )
+    return int(seq)
+
+
+def status_request(dsn: str) -> int:
+    """The seq of the first status request on the gateway's hop, where F10 fires."""
+    ((seq,),) = rows(
+        dsn,
+        "SELECT min(seq) FROM harness.message_log WHERE kind = 'request'"
+        " AND api = 'get_order_status'",
+    )
+    return int(seq)
+
+
 STATUS_ANSWERS: LiteralString = (
     "SELECT a.fate, a.drop_reason, (a.body->>'as_of_vt')::bigint, r.delivered_vt,"
     " jsonb_path_query_array(a.body, '$.effects[*].effect_id')"
@@ -342,10 +368,15 @@ def test_f10_delayed_five_probes_go_unanswered_and_the_sixth_confirms_the_order(
         ("confirmed", "status_found"),
     ]
     assert rows(dsn, "SELECT action_id FROM gw.escalation") == []
-    assert [(row[0], row[1], row[2], row[6]) for row in faults(dsn)] == [
-        ("F2", None, "net.gw_sim.answer", {}),
-        ("F10", "delayed", "sim.status.answer", {"count": 5}),
-    ]
+    answer_seqs = [seq for (seq,) in rows(dsn, STATUS_ANSWER_SEQS)]
+    assert [(row[0], row[1], row[2], row[4], row[6]) for row in faults(dsn)] == [
+        ("F2", None, "net.gw_sim.answer", order_answer(dsn), {}),
+        ("F10", "delayed", "sim.status.answer", status_request(dsn), {"count": 5}),
+        *(
+            ("F10", "delayed", "sim.status.answer", seq, {"count": 5, "answer_no": number})
+            for number, seq in enumerate(answer_seqs[:5], start=1)
+        ),
+    ], "F10's row, then one for each status answer it changed: the five it delayed (0014)"
     assert effects(dsn) == [("PO-0001", "APR-0001")]
     assert claim(dsn) == ("done", ["PO-0001"])
 
@@ -382,6 +413,7 @@ def test_f10_stale_beyond_the_lag_hides_the_order_so_failed_is_wrong_and_the_rep
         "SELECT sent_vt FROM harness.message_log WHERE kind = 'request'"
         " AND api = 'submit_purchase_order' AND hop = 'gw_sim'",
     )
+    answer_seqs = [seq for (seq,) in rows(dsn, STATUS_ANSWER_SEQS)]
     stale = [(*row[:6], row[6]) for row in faults(dsn) if row[0] == "F10"]
     assert stale == [
         (
@@ -392,9 +424,23 @@ def test_f10_stale_beyond_the_lag_hides_the_order_so_failed_is_wrong_and_the_rep
             order,
             "simulator",
             {"count": 20},
-        )
-    ]
-    assert rows(dsn, "SELECT vt FROM harness.fault_log WHERE fault = 'F10'") == [(arrived,)]
+        ),
+        *(
+            (
+                "F10",
+                "stale_beyond_lag",
+                "sim.status.answer",
+                "degrade_status",
+                seq,
+                "simulator",
+                {"count": 20, "answer_no": number},
+            )
+            for number, seq in enumerate(answer_seqs, start=1)
+        ),
+    ], "F10's row where the order arrived, then one for each status answer it changed (0014)"
+    assert rows(
+        dsn, "SELECT vt FROM harness.fault_log WHERE fault = 'F10' AND NOT params ? 'answer_no'"
+    ) == [(arrived,)]
 
     answers = rows(dsn, STATUS_ANSWERS)
     assert len(answers) > 1

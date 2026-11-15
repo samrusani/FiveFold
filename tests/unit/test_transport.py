@@ -264,6 +264,7 @@ def test_f2_drops_the_committed_answer_and_the_fault_is_logged() -> None:
         "drop",
         dropped[0].seq,
     )
+    assert fault.intent_id == "REQ-1", "the answer's intent, which the fault touched (0014)"
 
 
 def test_a_rejected_answer_does_not_match_f2() -> None:
@@ -464,6 +465,7 @@ def test_f4_delivers_the_request_twice_and_the_sender_gets_one_answer() -> None:
         request.seq,
     )
     assert fault.params == {"copy_delay_ms": 30, "copy_seq": copy.seq}
+    assert fault.intent_id == "REQ-1", "the request's intent, which the fault touched (0014)"
     assert request.seq < fault.seq < copy.seq
 
 
@@ -567,3 +569,29 @@ def test_f4_copies_a_notification_too_which_has_no_answer() -> None:
     notification, copy = rig.log.messages
     assert arrivals == [(notification.seq, None), (copy.seq, notification.seq)]
     assert (copy.kind, copy.delivered_vt) == ("notification", notification.delivered_vt)
+
+
+def test_a_fault_on_a_message_without_an_intent_names_none() -> None:
+    """A fault touches the intent of the message it acted on, and a read names no intent,
+    so the fault names none either (0014)."""
+    plan: list[dict[str, object]] = [{"fault": "F12", "at": {"point": "net.gw_sim.request"}}]
+    rig = Rig(plan=plan)
+    outcomes: list[str] = []
+
+    async def read() -> None:
+        try:
+            await rig.transport.call(
+                hop="gw_sim",
+                sender="gateway",
+                receiver="sim",
+                api="get_quote",
+                body={"n": 1},
+                timeout_ms=1_000,
+            )
+        except TransportTimeout:
+            outcomes.append("timeout")
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", read(), name="read"))
+    assert outcomes == ["timeout"]
+    (fault,) = rig.log.faults
+    assert (fault.fault, fault.action, fault.intent_id) == ("F12", "drop", None)

@@ -92,6 +92,63 @@ def test_the_log_writes_messages_their_fates_and_faults(migrated_database: str) 
         assert PgHarnessLog(conn).next_seq() == 5, "a new log continues after the stored events"
 
 
+def test_a_fault_names_its_intent_and_a_delivery_its_wall_clock_time(
+    migrated_database: str,
+) -> None:
+    """0014: the fault log names the task intent each fault touched, and a delivered
+    message gets the wall-clock time of its delivery with its fate; a dropped one, none.
+    Once the fate is set, the time is history too."""
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        request = _message(log.next_seq())
+        log.message_sent(request)
+        log.message_fate(request.seq, "delivered", vt=30, delivered_seq=log.next_seq())
+        answer = _message(log.next_seq(), kind="answer", correlation=request.seq)
+        log.message_sent(answer)
+        for intent_id in ("REQ-1", None):
+            log.fault_fired(
+                FaultRecord(
+                    seq=log.next_seq(),
+                    fault="F2",
+                    variant=None,
+                    point="net.gw_sim.answer",
+                    occurrence=1,
+                    action="drop",
+                    vt=40,
+                    target_seq=answer.seq,
+                    intent_id=intent_id,
+                )
+            )
+        log.message_fate(answer.seq, "dropped", vt=40, reason="fault")
+        assert conn.execute(
+            "SELECT seq, fate, delivered_wall_at IS NOT NULL FROM harness.message_log ORDER BY seq"
+        ).fetchall() == [(1, "delivered", True), (3, "dropped", False)]
+        assert conn.execute(
+            "SELECT seq, intent_id FROM harness.fault_log ORDER BY seq"
+        ).fetchall() == [
+            (4, "REQ-1"),
+            (5, None),
+        ]
+        _refused(
+            conn,
+            psycopg.errors.RaiseException,
+            "UPDATE harness.message_log SET delivered_wall_at = now() WHERE seq = 1",
+        )
+        unsent = _message(log.next_seq())
+        log.message_sent(unsent)
+        assert unsent.seq == 6
+        _refused(
+            conn,
+            psycopg.errors.CheckViolation,
+            "UPDATE harness.message_log SET delivered_wall_at = now() WHERE seq = 6",
+        )
+        _refused(
+            conn,
+            psycopg.errors.InsufficientPrivilege,
+            "UPDATE harness.fault_log SET intent_id = 'REQ-2' WHERE seq = 5",
+        )
+
+
 def test_a_copy_names_the_request_it_repeats_and_its_answer_is_dropped_as_such(
     migrated_database: str,
 ) -> None:
