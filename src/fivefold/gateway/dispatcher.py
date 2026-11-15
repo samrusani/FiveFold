@@ -82,7 +82,11 @@ class Dispatcher:
         timing: Timing | None = None,
         faults: FaultInjector | None = None,
         on_fault: FaultHandler | None = None,
+        on_escalated: Callable[[str], None] | None = None,
     ) -> None:
+        """`on_escalated` is called with an action's id when its driver stops because the
+        action is escalated: only an attestation through the admin path can move it now
+        (0010, reading 7). After a restart, it is called again for every such action."""
         self._scheduler = scheduler
         self._store = store
         self._destination = destination
@@ -91,6 +95,7 @@ class Dispatcher:
         self._timing = timing if timing is not None else Timing()
         self._faults = faults if faults is not None else FaultInjector()
         self._on_fault = on_fault
+        self._on_escalated = on_escalated
         self._driving: set[str] = set()
         self._changed: dict[str, asyncio.Event] = {}
 
@@ -132,6 +137,13 @@ class Dispatcher:
             if until(self._store.view(action_id).action.state):
                 return
 
+    def wake(self, action_id: str) -> None:
+        """End every `wait` on the action now, so that each sees its state at once.
+
+        The admin path calls it after an attestation, a step no driver runs (0003).
+        """
+        self._notify(action_id)
+
     def _notify(self, action_id: str) -> None:
         event = self._changed.get(action_id)
         if event is not None:
@@ -154,6 +166,8 @@ class Dispatcher:
                     await self._authorized(view.action)
                 elif state is _S.OUTCOME_UNKNOWN:
                     if not await self._unknown(view.action):
+                        if view.escalation is not None and self._on_escalated is not None:
+                            self._on_escalated(action_id)
                         return
                 else:
                     raise RuntimeError(f"{action_id} is {state} with no send in flight")
