@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 nearly done (viewer v1 is in, record 0012; the held-out set is T6's); M4 started (G1, the evaluator's report with tokens and cost, the live model adapter and the study runner are in; the live study waits for the maintainer). Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 started (G1, the evaluator's report with tokens, cost and recovery latency, record 0014, the live model adapter with Ollama, Anthropic, OpenAI and Google, and the study runner are in; the live study waits for the maintainer's models, keys, prices and spend cap); M5 started (the README's two paths, the limitations page and the security policy are in). The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
