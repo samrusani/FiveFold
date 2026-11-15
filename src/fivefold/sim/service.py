@@ -800,6 +800,21 @@ class Control:
             ledger.add_fact_version(key, version + 1, value, seq, cause="control", actor=actor)
             return FactRead(key=key, version=version + 1, data=json_object(value))
 
+    def current_fact(self, key: str) -> FactRead | None:
+        """The latest version of a fact, read without serving it: no read is logged.
+
+        Fault plans use it to compute a change, such as F7's new price (0006).
+        """
+        sim = self._sim
+        with sim._conn.transaction():
+            row = sim._conn.execute("SELECT last_vt FROM sim.run").fetchone()
+            vt = 0 if row is None else int(row[0])
+            latest = Ledger(sim._conn, vt).latest_fact(key)
+        if latest is None:
+            return None
+        version, value = latest
+        return FactRead(key=key, version=version, data=json_object(value))
+
     def pending_approvals(self) -> list[ApprovalAnswer]:
         """Requests waiting for the scripted approver, in the order they were filed."""
         sim = self._sim

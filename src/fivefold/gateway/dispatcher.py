@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from fivefold.domain.contracts import Capability
-from fivefold.faults.plan import FaultInjector
+from fivefold.faults.plan import FaultInjector, Fired
 from fivefold.gateway.destination import Destination, FactNow, Unreachable
 from fivefold.gateway.records import (
     Action,
@@ -42,6 +42,10 @@ _S = ActionState
 
 _DEAD_AUTHORITY = frozenset({ApprovalStatus.DENIED, ApprovalStatus.REVOKED, ApprovalStatus.EXPIRED})
 """Approval answers that reject a pending action whatever its basis (0002, 0010)."""
+
+
+FaultHandler = Callable[[Fired, str, Mapping[str, object]], None]
+"""Applies a fault that fired at a dispatch point, given what it acts on."""
 
 
 class Freshness(Protocol):
@@ -77,6 +81,7 @@ class Dispatcher:
         component: str = "gateway",
         timing: Timing | None = None,
         faults: FaultInjector | None = None,
+        on_fault: FaultHandler | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._store = store
@@ -85,6 +90,7 @@ class Dispatcher:
         self._component = component
         self._timing = timing if timing is not None else Timing()
         self._faults = faults if faults is not None else FaultInjector()
+        self._on_fault = on_fault
         self._driving: set[str] = set()
         self._changed: dict[str, asyncio.Event] = {}
 
@@ -306,11 +312,22 @@ class Dispatcher:
     # Fault points ---------------------------------------------------------------------------
 
     def _hook(self, point: str, action: Action) -> None:
+        """A fault point (0006): faults that fire here take effect before the step goes on.
+
+        What a fault acts on is the action: its intent, its business arguments and the
+        approval its grant names.
+        """
         fired = self._faults.at(point, {"intent_id": action.intent_id, "api": action.operation})
-        if fired:
-            raise NotImplementedError(
-                f"{[f.fault for f in fired]} at {point} is not built yet (0006)"
-            )
+        if not fired:
+            return
+        if self._on_fault is None:
+            raise NotImplementedError(f"{[f.fault for f in fired]} at {point}: no fault handler")
+        grant = self._store.view(action.action_id).grant
+        context: dict[str, object] = {**dict(action.args), "intent_id": action.intent_id}
+        if grant is not None:
+            context["approval_id"] = grant.approval_id
+        for one in fired:
+            self._on_fault(one, point, context)
 
 
 def _action_number(action_id: str) -> int:

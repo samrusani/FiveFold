@@ -87,6 +87,9 @@ class Reply:
 
 Handler = Callable[[Envelope], Awaitable[Reply]]
 
+Effect = Callable[[Fired, "Envelope"], None]
+"""Applies a fault that fired on a message and does more than drop it (F6, F7)."""
+
 Stage = Literal["sent", "delivered"]
 Observer = Callable[[Envelope, Stage], None]
 """Called after a message is sent, and again after it is delivered."""
@@ -113,11 +116,19 @@ class Transport:
         self._faults = faults if faults is not None else FaultInjector()
         self._handlers: dict[str, Handler] = {}
         self._observers: list[Observer] = []
+        self._effect: Effect | None = None
 
     @property
     def max_hop_latency_ms(self) -> int:
         """The longest one-way latency a message can take on any hop."""
         return self._max_latency
+
+    def apply_faults_with(self, effect: Effect) -> None:
+        """Apply faults that change state, such as F6 and F7, with `effect` (0006).
+
+        The effect runs when the fault fires, before the message travels on.
+        """
+        self._effect = effect
 
     def observe(self, observer: Observer) -> None:
         """Call `observer` after each message is sent, and after each is delivered.
@@ -198,7 +209,12 @@ class Transport:
         dropped = False
         for fired in self._faults.at(point, fields):
             self._record(fired, point, envelope)
-            dropped = dropped or fired.planned.kind.action is Action.DROP
+            if fired.planned.kind.action is Action.DROP:
+                dropped = True
+            elif self._effect is not None:
+                self._effect(fired, envelope)
+            else:
+                raise RuntimeError(f"{fired.fault} fired at {point} with nothing to apply it")
         if dropped:
             self._log.message_fate(envelope.seq, "dropped", vt=self._scheduler.now, reason="fault")
         else:

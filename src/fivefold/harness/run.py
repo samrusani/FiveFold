@@ -42,7 +42,7 @@ from fivefold.agents.worker import WorkerEnd, WorkerSpec, build_graph, run_worke
 from fivefold.domain.contracts import Capability, Contract
 from fivefold.domain.scenario import Scenario
 from fivefold.faults.catalog import Action
-from fivefold.faults.plan import FaultInjector, parse_plan
+from fivefold.faults.plan import FaultInjector, Fired, parse_plan
 from fivefold.gateway.dispatcher import Dispatcher, Timing
 from fivefold.gateway.freshness import RuleFreshness
 from fivefold.gateway.pg_store import PgStore
@@ -52,6 +52,7 @@ from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.tools import GatewayTools, ToolTiming
 from fivefold.harness.actors import ScriptedApprover
 from fivefold.harness.clock import settle
+from fivefold.harness.fault_effects import SimulatorFaults, message_context
 from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.reports import ReportSink, sink_endpoint
@@ -196,6 +197,10 @@ class InprocRun:
         self.approver = ScriptedApprover(
             self.scheduler, self.simulator.control, self.log, scenario.authority
         )
+        self.effects = SimulatorFaults(self.scheduler, self.simulator.control, self.log, scenario)
+        self.transport.apply_faults_with(
+            lambda fired, envelope: self.effects.apply(fired, message_context(envelope.body))
+        )
         self.transport.serve(
             SIMULATOR,
             endpoint(
@@ -258,6 +263,7 @@ class InprocRun:
                 probe_interval_ms=params.status_probe_interval_ms,
             ),
             faults=self.faults,
+            on_fault=self._gateway_fault,
         )
         self.tools = GatewayTools(
             self.scheduler,
@@ -270,6 +276,23 @@ class InprocRun:
             timing=ToolTiming(tool_wait_ms=params.tool_wait_ms),
         )
         self.dispatcher.start()
+
+    def _gateway_fault(self, fired: Fired, point: str, context: Mapping[str, object]) -> None:
+        """A fault at a dispatch point: record it, then apply it (F6 and F7 early)."""
+        self.log.fault_fired(
+            FaultRecord(
+                seq=self.log.next_seq(),
+                fault=str(fired.fault),
+                variant=fired.planned.variant,
+                point=point,
+                occurrence=fired.occurrence,
+                action=str(fired.planned.kind.action),
+                vt=self.scheduler.now,
+                component=GATEWAY,
+                params=dict(fired.planned.params),
+            )
+        )
+        self.effects.apply(fired, context)
 
     # Agent workers ------------------------------------------------------------------------
 

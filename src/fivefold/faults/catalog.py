@@ -59,6 +59,11 @@ class Action(StrEnum):
     """Drop the message at the point (F2 drops an answer, F12 a request)."""
     KILL = "kill"
     """Stop the component at the point; it restarts after `restart_delay_ms` (F11)."""
+    REVOKE = "revoke"
+    """Revoke the approval the action or the message cites (F6)."""
+    CHANGE_QUOTE = "change_quote"
+    """Change the quote the action or the message cites (F7): its price, or only its
+    lead time in the `harmless` variant."""
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,17 @@ class FaultKind:
     params: Mapping[str, int]
     """Parameters and their defaults."""
 
+
+AUTHORITY_POINTS = frozenset(
+    {
+        "gw.dispatch.before_check",
+        "net.gw_sim.request",
+        "net.agent_sim.answer",
+        "net.agent_sim.request",
+    }
+)
+"""Where F6 and F7 fire (0006): early, at the gateway's check or as B0's approval answer
+reaches it; late, as the write request leaves for the simulator."""
 
 BUILT: Mapping[FaultId, FaultKind] = {
     FaultId.F2: FaultKind(
@@ -87,6 +103,27 @@ BUILT: Mapping[FaultId, FaultKind] = {
         frozenset({"agent.after_tool_call", "agent.after_tool_result"}),
         Action.KILL,
         {"restart_delay_ms": 1_000},
+    ),
+    FaultId.F6: FaultKind(
+        FaultId.F6,
+        "Approval revoked before commit",
+        AUTHORITY_POINTS,
+        Action.REVOKE,
+        {},
+    ),
+    FaultId.F7: FaultKind(
+        FaultId.F7,
+        "Quote changes after approval",
+        AUTHORITY_POINTS,
+        Action.CHANGE_QUOTE,
+        {"percent": 5},
+    ),
+    FaultId.F12: FaultKind(
+        FaultId.F12,
+        "Request lost before it reaches the destination",
+        frozenset({"net.agent_gw.request", "net.gw_sim.request", "net.agent_sim.request"}),
+        Action.DROP,
+        {},
     ),
 }
 """The faults this build can inject, with the points 0006 allows for each."""
