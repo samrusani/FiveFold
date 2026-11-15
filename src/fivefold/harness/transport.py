@@ -142,11 +142,27 @@ class Transport:
         self._observers: list[Observer] = []
         self._before_send: list[BeforeSend] = []
         self._effect: Effect | None = None
+        self._last_due: dict[tuple[str, str], int] = {}
 
     @property
     def max_hop_latency_ms(self) -> int:
         """The longest one-way latency a message can take on any hop."""
         return self._max_latency
+
+    def last_due_vt(self, hop: Hop, sender: str) -> int | None:
+        """When the last message `sender` has sent on `hop` is due to arrive, or None.
+
+        A message arrives within `max_hop_latency_ms`, but a copy F4 delivers can arrive
+        later, `copy_delay_ms` after the first delivery. A connection waits for this
+        before its receiving end closes, so nothing it was due to deliver is lost.
+        """
+        return self._last_due.get((hop, sender))
+
+    def _due(self, envelope: Envelope, delay_ms: int) -> None:
+        """Note that `envelope` is due to arrive `delay_ms` from now."""
+        key = (envelope.hop, envelope.sender)
+        due = self._scheduler.now + delay_ms
+        self._last_due[key] = max(due, self._last_due.get(key, due))
 
     def apply_faults_with(self, effect: Effect) -> None:
         """Apply faults that change state, such as F6 and F7, with `effect` (0006).
@@ -265,6 +281,7 @@ class Transport:
             self._log.message_fate(envelope.seq, "dropped", vt=self._scheduler.now, reason="fault")
         else:
             latency = self.draw_latency()
+            self._due(envelope, latency)
             self._scheduler.call_later(
                 latency,
                 lambda: self._arrive(envelope, on_arrival, wanted),
@@ -328,8 +345,10 @@ class Transport:
                 copy_of=original.seq,
             )
         )
+        delay_ms = latency + fired.planned.param("copy_delay_ms")
+        self._due(copy, delay_ms)
         self._scheduler.call_later(
-            latency + fired.planned.param("copy_delay_ms"),
+            delay_ms,
             lambda: self._arrive(copy, on_arrival, wanted),
             label=f"deliver copy {copy.seq}",
         )

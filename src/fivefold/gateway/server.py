@@ -3,17 +3,18 @@
 Each connection is a `Link` from the harness, whose `agent` names the agent worker. The
 worker's name comes from the connection, not from anything the agent sends, and stays
 the same when the worker resumes from its checkpoint (0009), so the report check knows
-whose report it is (0010). The link also gives the message seq of each request, from the
-handler context's `request_id`, so the report sink can record which message carried a
-report.
+whose report it is (0010). Each request the link delivers carries its message seq on the
+handler context's `request`, so the report sink can record which message carried a
+report, a copy that F4 delivered included (0004).
 
 A tool's result goes back as JSON text and as structured content. A `ToolError` becomes
 an MCP tool error (`is_error`), with the error code and message as JSON text.
 
 MCP SDK calls used (mcp 2.3.0): `mcp.server.lowlevel.server.Server(name, on_list_tools=,
-on_call_tool=)`, `Server.run(read, write, Server.create_initialization_options())`, and
-the `mcp_types` models `Tool`, `ListToolsResult`, `CallToolRequestParams`,
-`CallToolResult` and `TextContent`.
+on_call_tool=)`, `Server.run(read, write, Server.create_initialization_options())`, the
+handler context's `request` (`mcp.server.context.ServerRequestContext`), and the
+`mcp_types` models `Tool`, `ListToolsResult`, `CallToolRequestParams`, `CallToolResult`
+and `TextContent`.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import mcp_types as types
 from mcp.server.lowlevel.server import Server
 
 from fivefold.gateway.tools import TOOLS, GatewayTools, ToolError
-from fivefold.harness.mcp_link import Link
+from fivefold.harness.mcp_link import Link, delivered_seq
 
 SERVER_NAME = "fivefold-gateway"
 
@@ -51,7 +52,7 @@ def server_for(tools: GatewayTools, link: Link) -> Server[Any]:
                 params.name,
                 params.arguments or {},
                 worker=link.agent,
-                message_seq=link.request_seq(ctx.request_id),
+                message_seq=delivered_seq(ctx.request),
             )
         except ToolError as error:
             failure = {"error": error.code, "message": error.message}

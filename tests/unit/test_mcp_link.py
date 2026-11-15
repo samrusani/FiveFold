@@ -346,3 +346,34 @@ def test_f4_on_the_gateway_hop_the_gateway_answers_twice_and_the_agent_gets_one(
         request.seq,
         copy.seq,
     )
+
+
+def test_a_copy_still_due_when_the_agent_crashes_reaches_the_gateway() -> None:
+    """F4: the gateway's end stays open until every delivery the transport has scheduled
+    arrives, a late copy included, so the copy is served rather than lost on a closed
+    connection while the log says it was delivered."""
+    plan: list[dict[str, object]] = [
+        {
+            "fault": "F4",
+            "at": {"point": "net.agent_gw.request", "match": {"api": "propose"}},
+            "params": {"copy_delay_ms": 200},
+        }
+    ]
+    rig = Rig(plan=plan)
+
+    def start() -> None:
+        rig.connect(calls=1)
+
+        def on_sent(envelope: Any, stage: str) -> None:
+            if stage == "sent" and envelope.kind == "request" and envelope.api == "propose":
+                rig.scheduler.call_later(0, lambda: rig.scheduler.crash("agent-1"))
+
+        rig.transport.observe(on_sent)
+
+    rig.go(start)
+    request, copy = (m for m in rig.log.messages if (m.kind, m.api) == ("request", "propose"))
+    assert copy.copy_of == request.seq
+    assert copy.fate == "delivered" and copy.delivered_vt is not None
+    assert copy.delivered_vt > request.sent_vt + rig.transport.max_hop_latency_ms + 1
+    assert rig.handled == ["REQ-1", "REQ-1"], "the gateway served the late copy too"
+    assert rig.server_ended and rig.server_ended[0] > copy.delivered_vt

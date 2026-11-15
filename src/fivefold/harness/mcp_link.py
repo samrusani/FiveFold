@@ -12,8 +12,8 @@ What a crash means for a connection (0006, 0010 change 3):
 - A crashed agent's connection is gone. Its requests already on the wire still reach
   the gateway, which serves them, as a server serves a request whose client died after
   sending it; the answers are dropped. The gateway's end reads end-of-stream once every
-  such request has arrived, `max_hop_latency_ms` after the crash. A restarted agent
-  opens a new connection.
+  such request has arrived: `max_hop_latency_ms` after the crash, or later when a copy
+  that F4 makes is still due. A restarted agent opens a new connection.
 - A crashed gateway's connections are gone too (F1). Answers it sent before the crash
   still arrive; then the agent's end reads end-of-stream, `max_hop_latency_ms` after the
   crash, and a call still waiting fails as a closed connection. What the agent sends on
@@ -27,6 +27,12 @@ When the transport delivers a request twice (F4), the gateway gets the same JSON
 message twice and answers both, with the same id. Content cannot tell the two answers
 apart, so they pair with the deliveries in the order those arrived: the first answer
 goes to the agent, and the next one is the copy's, which the transport drops (0006).
+
+Each request delivered to the gateway carries its own message seq, as a transport
+attaches its per-request data: `ServerMessageMetadata(request_context=...)`, which the
+SDK hands to the handler as `ServerRequestContext.request` (mcp 2.3.0,
+`mcp/shared/message.py`, `mcp/server/runner.py` `_make_context`). So the gateway names
+the delivery it served, the copy included, when it records a final report (0004).
 """
 
 from __future__ import annotations
@@ -38,13 +44,30 @@ from dataclasses import dataclass, field
 from types import TracebackType
 
 import anyio
-from mcp.shared.message import SessionMessage
+from mcp.shared.message import ServerMessageMetadata, SessionMessage
 
 from fivefold.harness.log import DropReason, Kind
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Envelope, Transport, answer_to_copy
 
 Item = SessionMessage | Exception
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """The delivery of a request to the gateway: the seq of the message that carried it."""
+
+    seq: int
+
+
+def delivered_seq(request: object) -> int | None:
+    """The message seq of the delivery a gateway handler serves.
+
+    `request` is the handler context's `request`, which the link sets on each request it
+    delivers to the gateway. When the transport delivered a request twice (F4), each
+    delivery has its own seq, so a handler serving the copy names the copy.
+    """
+    return request.seq if isinstance(request, Delivery) else None
 
 
 class Inbox:
@@ -178,9 +201,13 @@ class Outbox:
                 correlation, wanted = answered.seq, answer_to_copy
 
         def arrive(envelope: Envelope) -> None:
+            delivered = item
             if kind == "request":
                 self._own.arrived.setdefault(message_id, deque()).append(envelope)
-            self._peer.deliver(item)
+                if self._receiver == self._link.gateway:
+                    metadata = ServerMessageMetadata(request_context=Delivery(envelope.seq))
+                    delivered = SessionMessage(item.message, metadata=metadata)
+            self._peer.deliver(delivered)
 
         envelope = self._transport.post(
             hop="agent_gw",
@@ -252,7 +279,6 @@ class Link:
         self.client_read = Inbox()
         self.server_read = Inbox()
         agent_requests, gateway_requests = _Requests(), _Requests()
-        self._agent_requests = agent_requests
         self.client_write = Outbox(
             self,
             transport,
@@ -272,15 +298,6 @@ class Link:
             theirs=agent_requests,
         )
         scheduler.on_crash(self._crashed)
-
-    def request_seq(self, request_id: object) -> int | None:
-        """The message seq of the agent's request with this JSON-RPC id, if it was sent.
-
-        The gateway names the message that carried a final report this way, so the
-        evaluator can find when the report reached it (0004, property 5).
-        """
-        sent = self._agent_requests.sent.get(request_id)
-        return None if sent is None else sent[0]
 
     @property
     def ended(self) -> bool:
@@ -320,22 +337,29 @@ class Link:
         if not self._scheduler.is_up(sender):
             return
         self._scheduler.call_later(
-            self._transport.max_hop_latency_ms + 1,
-            inbox.close,
-            label=f"{sender} closes its end",
+            self._in_flight_ms(sender), inbox.close, label=f"{sender} closes its end"
         )
+
+    def _in_flight_ms(self, sender: str) -> int:
+        """How long until every message `sender` has sent on this hop can have arrived:
+        `max_hop_latency_ms`, or longer while a copy that F4 makes is still due."""
+        wait = self._transport.max_hop_latency_ms + 1
+        due = self._transport.last_due_vt("agent_gw", sender)
+        if due is not None:
+            wait = max(wait, due - self._scheduler.now + 1)
+        return wait
 
     def _crashed(self, component: str) -> None:
         if component == self.agent:
             self.client_read.close()
             self._scheduler.call_later(
-                self._transport.max_hop_latency_ms + 1,
+                self._in_flight_ms(self.agent),
                 self.server_read.close,
                 label=f"{self.agent}'s connection ends",
             )
         elif component == self.gateway and self._served and not self.client_read.closed:
             self._scheduler.call_later(
-                self._transport.max_hop_latency_ms + 1,
+                self._in_flight_ms(self.gateway),
                 self.client_read.close,
                 label=f"{self.agent}'s connection to the gateway ends",
             )

@@ -16,6 +16,7 @@ from mcp.client.session import ClientSession
 
 from fivefold.domain.api import FactRead, GetBudget, GetInventory, GetQuote, ListSuppliers
 from fivefold.domain.contracts import Contract, ContractParams
+from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
 from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.freshness import RuleFreshness
@@ -158,11 +159,15 @@ class Client:
 
 
 class Run:
-    def __init__(self) -> None:
+    def __init__(self, plan: list[dict[str, object]] | None = None) -> None:
         self.scheduler = Scheduler()
         self.log = MemoryHarnessLog()
         self.transport = Transport(
-            self.scheduler, self.log, Generators(7).get("latency"), max_hop_latency_ms=50
+            self.scheduler,
+            self.log,
+            Generators(7).get("latency"),
+            max_hop_latency_ms=50,
+            faults=FaultInjector(parse_plan(plan or [])),
         )
         self.sim = FakeSim(self.scheduler)
         self.store = MemoryStore(
@@ -255,6 +260,31 @@ def test_a_cited_order_is_confirmed_and_reported_done() -> None:
     assert carried[0].delivered_seq is not None and carried[0].delivered_seq < report.seq
     assert run.store.snapshot().run_closed, "the only expected report closes the run"
     assert {m.hop for m in run.log.messages} == {"agent_gw"}
+
+
+def test_each_report_names_the_delivery_that_carried_it_a_copy_included() -> None:
+    """F4 (0006): the transport delivers the report twice, and the gateway serves both.
+    Each report it records names its own delivery, so the evaluator can tell the copy's
+    from the original's (0004)."""
+    plan: list[dict[str, object]] = [
+        {
+            "fault": "F4",
+            "at": {"point": "net.agent_gw.request", "match": {"api": "submit_final_report"}},
+            "params": {"copy_delay_ms": 0},
+        }
+    ]
+    run = Run(plan)
+
+    async def agent(client: Client) -> None:
+        claims = [{"intent_id": "REQ-1", "status": "not_done", "effect_ids": []}]
+        await client.ok("submit_final_report", claims=claims)
+
+    run.go(agent)
+    request, copy = (
+        m for m in run.log.messages if (m.kind, m.api) == ("request", "submit_final_report")
+    )
+    assert copy.copy_of == request.seq
+    assert [report.message_seq for report in run.log.reports] == [request.seq, copy.seq]
 
 
 def test_a_write_that_breaks_the_schema_is_refused_and_recorded() -> None:
