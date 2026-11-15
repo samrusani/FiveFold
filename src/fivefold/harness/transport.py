@@ -87,6 +87,10 @@ class Reply:
 
 Handler = Callable[[Envelope], Awaitable[Reply]]
 
+Stage = Literal["sent", "delivered"]
+Observer = Callable[[Envelope, Stage], None]
+"""Called after a message is sent, and again after it is delivered."""
+
 
 class Transport:
     """Carries messages between a run's components, on the scheduler's clock."""
@@ -108,6 +112,23 @@ class Transport:
         self._max_latency = max_hop_latency_ms
         self._faults = faults if faults is not None else FaultInjector()
         self._handlers: dict[str, Handler] = {}
+        self._observers: list[Observer] = []
+
+    @property
+    def max_hop_latency_ms(self) -> int:
+        """The longest one-way latency a message can take on any hop."""
+        return self._max_latency
+
+    def observe(self, observer: Observer) -> None:
+        """Call `observer` after each message is sent, and after each is delivered.
+
+        The harness uses it for fault points that belong to a component rather than a
+        hop, such as F11's `agent.after_tool_call` (0006). It runs inside the step that
+        sent or delivered the message, after the message's fate so far is logged. For a
+        delivery it runs before the receiver gets the message, and a receiver that an
+        observer crashed never gets it: the delivery happened, and the crash voided it.
+        """
+        self._observers.append(observer)
 
     def draw_latency(self) -> int:
         """One hop's latency, from the run's latency generator (0009)."""
@@ -180,12 +201,14 @@ class Transport:
             dropped = dropped or fired.planned.kind.action is Action.DROP
         if dropped:
             self._log.message_fate(envelope.seq, "dropped", vt=self._scheduler.now, reason="fault")
-            return envelope
-        self._scheduler.call_later(
-            self.draw_latency(),
-            lambda: self._arrive(envelope, on_arrival, wanted),
-            label=f"deliver {envelope.seq}",
-        )
+        else:
+            self._scheduler.call_later(
+                self.draw_latency(),
+                lambda: self._arrive(envelope, on_arrival, wanted),
+                label=f"deliver {envelope.seq}",
+            )
+        for observer in self._observers:
+            observer(envelope, "sent")
         return envelope
 
     def _arrive(
@@ -206,7 +229,10 @@ class Transport:
         self._log.message_fate(
             envelope.seq, "delivered", vt=now, delivered_seq=self._log.next_seq()
         )
-        on_arrival(envelope)
+        for observer in self._observers:
+            observer(envelope, "delivered")
+        if self._scheduler.is_up(envelope.receiver):
+            on_arrival(envelope)
 
     def _record(self, fired: Fired, point: str, envelope: Envelope) -> None:
         self._log.fault_fired(

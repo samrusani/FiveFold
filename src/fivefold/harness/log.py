@@ -73,6 +73,22 @@ class FaultRecord:
 
 
 @dataclass(frozen=True)
+class RunRecord:
+    """What a run is: its scenario, configuration, contract, seed and model (0009)."""
+
+    run_id: str
+    scenario_id: str
+    scenario_digest: str
+    config: Literal["B0", "G1", "G2"]
+    contract: Literal["C0", "C1", "C2", "C3"]
+    seed: int
+    model_adapter: Literal["scripted", "live", "replay"]
+    model: str
+    params: Mapping[str, object]
+    topology: Literal["inproc", "split"] = "inproc"
+
+
+@dataclass(frozen=True)
 class ReportRecord:
     """A final report an agent worker submitted, as the report sink received it (0004).
 
@@ -93,6 +109,10 @@ class ReportRecord:
 
 class HarnessLog(ABC):
     """Numbers harness events and records messages, faults and reports."""
+
+    @abstractmethod
+    def run_recorded(self, record: RunRecord) -> None:
+        """Record the run itself, once, before anything happens in it."""
 
     @abstractmethod
     def next_seq(self) -> int:
@@ -139,6 +159,12 @@ class MemoryHarnessLog(HarnessLog):
         self._messages: dict[int, MessageRecord] = {}
         self.faults: list[FaultRecord] = []
         self.reports: list[ReportRecord] = []
+        self.run: RunRecord | None = None
+
+    def run_recorded(self, record: RunRecord) -> None:
+        if self.run is not None:
+            raise ValueError("the run is already recorded")
+        self.run = record
 
     @property
     def messages(self) -> list[MessageRecord]:
@@ -205,6 +231,25 @@ class PgHarnessLog(HarnessLog):
             " (SELECT max(seq) FROM harness.final_report))"
         ).fetchone()
         self._last_seq = 0 if row is None or row[0] is None else int(row[0])
+
+    def run_recorded(self, record: RunRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO harness.run (run_id, scenario_id, scenario_digest, config, contract,"
+            " seed, topology, model_adapter, model, params)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                record.run_id,
+                record.scenario_id,
+                record.scenario_digest,
+                record.config,
+                record.contract,
+                record.seed,
+                record.topology,
+                record.model_adapter,
+                record.model,
+                Jsonb(dict(record.params)),
+            ),
+        )
 
     def next_seq(self) -> int:
         self._last_seq += 1

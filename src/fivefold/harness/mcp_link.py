@@ -9,9 +9,11 @@ and low-level `Server.run` use them as they would any transport.
 
 What a crash means for a connection (0006, 0010 change 3):
 
-- A crashed agent's connection is gone: the gateway's end reads end-of-stream, and the
-  answers to the agent's earlier requests are dropped. A restarted agent opens a new
-  connection.
+- A crashed agent's connection is gone. Its requests already on the wire still reach
+  the gateway, which serves them, as a server serves a request whose client died after
+  sending it; the answers are dropped. The gateway's end reads end-of-stream once every
+  such request has arrived, `max_hop_latency_ms` after the crash. A restarted agent
+  opens a new connection.
 - A component that is down sends nothing (`Transport.post`).
 """
 
@@ -161,7 +163,11 @@ class Outbox:
             self._own.sent[message_id] = (envelope.seq, api, intent_id)
 
     async def aclose(self) -> None:
-        self._peer.close()
+        """End this direction, after the messages already on the wire arrive.
+
+        A component that is down closes nothing: its crash ends the connection.
+        """
+        self._link.close_after_flight(self._sender, self._peer)
 
     async def __aenter__(self) -> Outbox:
         return self
@@ -201,6 +207,7 @@ class Link:
         self, scheduler: Scheduler, transport: Transport, *, agent: str, gateway: str
     ) -> None:
         self._scheduler = scheduler
+        self._transport = transport
         self.agent = agent
         self.gateway = gateway
         self._agent_incarnation = scheduler.incarnation(agent)
@@ -243,7 +250,21 @@ class Link:
             return "caller_crashed"
         return None
 
+    def close_after_flight(self, sender: str, inbox: Inbox) -> None:
+        """Close `inbox` once every message `sender` has sent can have arrived."""
+        if not self._scheduler.is_up(sender):
+            return
+        self._scheduler.call_later(
+            self._transport.max_hop_latency_ms + 1,
+            inbox.close,
+            label=f"{sender} closes its end",
+        )
+
     def _crashed(self, component: str) -> None:
         if component == self.agent:
-            self.server_read.close()
             self.client_read.close()
+            self._scheduler.call_later(
+                self._transport.max_hop_latency_ms + 1,
+                self.server_read.close,
+                label=f"{self.agent}'s connection ends",
+            )

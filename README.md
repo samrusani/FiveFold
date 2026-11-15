@@ -12,7 +12,18 @@ A task passes only if every real-world action:
 
 ## Status
 
-Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and the scaffold, CI and Docker Compose work. Milestone M1 has started with the gateway's state machine (`src/fivefold/gateway/`): the transition tables, the decision steps, invariants I1 to I7 as checks, and a PostgreSQL store for the records, tested by Hypothesis against an in-memory oracle. Record 0010, accepted on 14 Nov 2026, corrects the state machine; its changes to the gateway's records are implemented, and its rule for the dispatcher (reading 11) comes with the dispatcher. The harness's deterministic scheduler, virtual clock and transports are in (`src/fivefold/harness/`), with the message and fault logs the evaluator reads. Nothing here runs a benchmark yet.
+Milestone M0, the design freeze, is done: decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine. Milestone M1, the thin slice, is nearly done:
+
+- the simulator: purchase orders and reservations at contract levels C0 to C3, the effects ledger, fact history and the approvals service (`src/fivefold/sim/`);
+- the deterministic harness: the scheduler, the virtual clock, transports with a message log, fault plans with F2 and F11 (`src/fivefold/harness/`);
+- the gateway: the state machine with invariants I1 to I7, the PostgreSQL store, the dispatcher and the agent-facing tools over MCP (`src/fivefold/gateway/`);
+- the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`).
+
+Demo 1 runs from a seed. The evaluator, which scores the five properties, is being built.
+
+## Demo
+
+`make demo` runs demo 1, "Order placed, reply lost", for the baseline B0 and the gateway G2 on the same seed. The purchase order's reply is lost (fault F2), and the agent is killed right after sending the order and resumed from its checkpoint 10 seconds later (F11). Without the gateway, the resumed agent orders again: two orders, one approval, an overdrawn budget. With the gateway, it retries with the same idempotency key while the agent is down, and the resumed agent's repeated proposal attaches to the confirmed order: one order. Time is virtual, so the demo takes a few seconds, and it needs PostgreSQL but no API key.
 
 ## Documents
 
@@ -32,6 +43,7 @@ make setup      # install the locked dependencies into .venv
 make db-up      # start PostgreSQL 16 on 127.0.0.1:5432
 make check      # lint, type check and every test
 make test-fast  # only the tests that need no database
+make demo       # demo 1 for B0 and G2, from a seed
 make help       # every target
 ```
 
