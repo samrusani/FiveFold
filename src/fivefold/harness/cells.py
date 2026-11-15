@@ -24,6 +24,8 @@ The variants of a cell:
 - F3 has none: in G modes the gateway crashes after the order's answer arrives and before
   it is recorded; in B0 the agent is killed as the order's result reaches it, F3's B0
   equivalent. The crashed component restarts 1,000 ms later.
+- F4 names the hop it delivers the order twice on, as F12 does. The copy follows the
+  first delivery after `copy_delay_ms`, which the run draws from its seed.
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ F12_HOPS: dict[str, frozenset[str]] = {
     "G2": frozenset({"gw_sim", "agent_gw"}),
     "B0": frozenset({"agent_sim"}),
 }
-"""The hops F12 can drop the order on, by configuration."""
+"""The hops F12 can drop the order on, by configuration. F4 delivers it twice on the same."""
 
 
 class Cell(BaseModel):
@@ -190,6 +192,19 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                 "fault": "F9",
                 "variant": cell.variant,
                 "at": {"point": "agent.step", "match": {"worker": "agent-1"}, "occurrence": 1},
+            }
+        ]
+    if cell.fault == "F4":
+        if cell.variant not in F12_HOPS.get(cell.config, frozenset()):
+            raise ValueError(f"F4 cannot copy the order on {cell.variant!r} in {cell.config}")
+        return [
+            {
+                "fault": "F4",
+                "at": {
+                    "point": f"net.{cell.variant}.request",
+                    "match": {"api": ORDER},
+                    "occurrence": 1,
+                },
             }
         ]
     raise ValueError(f"no plan for {cell.fault} yet")

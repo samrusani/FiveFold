@@ -22,6 +22,11 @@ What a crash means for a connection (0006, 0010 change 3):
 - A connection opened while the gateway is down is never served: what the agent sends
   on it is dropped, as messages to a component that is down are.
 - A component that is down sends nothing (`Transport.post`).
+
+When the transport delivers a request twice (F4), the gateway gets the same JSON-RPC
+message twice and answers both, with the same id. Content cannot tell the two answers
+apart, so they pair with the deliveries in the order those arrived: the first answer
+goes to the agent, and the next one is the copy's, which the transport drops (0006).
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ from mcp.shared.message import SessionMessage
 
 from fivefold.harness.log import DropReason, Kind
 from fivefold.harness.scheduler import Scheduler
-from fivefold.harness.transport import Transport
+from fivefold.harness.transport import Envelope, Transport, answer_to_copy
 
 Item = SessionMessage | Exception
 
@@ -104,9 +109,21 @@ class Inbox:
 
 @dataclass
 class _Requests:
-    """What one side's requests were: their message seq, tool or method, and intent."""
+    """What one side's requests were: their message seq, tool or method, and intent, and
+    the deliveries of each that the other side has not answered yet, oldest first."""
 
     sent: dict[object, tuple[int, str | None, str | None]] = field(default_factory=dict)
+    arrived: dict[object, deque[Envelope]] = field(default_factory=dict)
+
+    def answering(self, message_id: object) -> Envelope | None:
+        """The delivery that an answer with this JSON-RPC id answers: the oldest one."""
+        waiting = self.arrived.get(message_id)
+        if not waiting:
+            return None
+        delivery = waiting.popleft()
+        if not waiting:
+            del self.arrived[message_id]
+        return delivery
 
 
 class Outbox:
@@ -154,18 +171,29 @@ class Outbox:
             kind = "answer"
             correlation, api, intent_id = self._theirs.sent.get(message_id, (None, None, None))
             answer_class = _answer_class(body)
+        wanted = self._link.wanted(self._sender, kind)
+        if kind == "answer":
+            answered = self._theirs.answering(message_id)
+            if answered is not None and answered.copy_of is not None:
+                correlation, wanted = answered.seq, answer_to_copy
+
+        def arrive(envelope: Envelope) -> None:
+            if kind == "request":
+                self._own.arrived.setdefault(message_id, deque()).append(envelope)
+            self._peer.deliver(item)
+
         envelope = self._transport.post(
             hop="agent_gw",
             kind=kind,
             sender=self._sender,
             receiver=self._receiver,
             body=body,
-            on_arrival=lambda _: self._peer.deliver(item),
+            on_arrival=arrive,
             api=api,
             correlation=correlation,
             intent_id=intent_id,
             answer_class=answer_class,
-            wanted=self._link.wanted(self._sender, kind),
+            wanted=wanted,
         )
         if envelope is not None and kind == "request":
             self._own.sent[message_id] = (envelope.seq, api, intent_id)

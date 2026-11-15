@@ -171,7 +171,7 @@ def _messages(conn: Connection) -> tuple[Message, ...]:
     rows = conn.execute(
         "SELECT seq, hop, kind, sender, receiver, api, correlation, intent_id,"
         " idempotency_key, answer_class, body, sent_vt, fate, drop_reason, delivered_seq,"
-        " delivered_vt FROM harness.message_log ORDER BY seq"
+        " delivered_vt, copy_of FROM harness.message_log ORDER BY seq"
     ).fetchall()
     return tuple(
         Message(
@@ -191,6 +191,7 @@ def _messages(conn: Connection) -> tuple[Message, ...]:
             drop_reason=_text(row[13]),
             delivered_seq=_integer(row[14]),
             delivered_vt=_integer(row[15]),
+            copy_of=_integer(row[16]),
         )
         for row in rows
     )

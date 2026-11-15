@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import LiteralString
 
 import psycopg
@@ -82,6 +83,89 @@ def test_the_log_writes_messages_their_fates_and_faults(migrated_database: str) 
         ]
     with _harness(migrated_database) as conn:
         assert PgHarnessLog(conn).next_seq() == 5, "a new log continues after the stored events"
+
+
+def test_a_copy_names_the_request_it_repeats_and_its_answer_is_dropped_as_such(
+    migrated_database: str,
+) -> None:
+    """F4 (0006): the copy is a message of its own; the answer to it is never delivered."""
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        request = _message(log.next_seq())
+        log.message_sent(request)
+        copy = replace(request, seq=log.next_seq(), copy_of=request.seq)
+        log.message_sent(copy)
+        log.message_fate(copy.seq, "delivered", vt=35, delivered_seq=log.next_seq())
+        answer = _message(log.next_seq(), kind="answer", correlation=copy.seq)
+        log.message_sent(answer)
+        log.message_fate(answer.seq, "dropped", vt=60, reason="answer_to_copy")
+        rows = conn.execute(
+            "SELECT seq, kind, copy_of, fate, drop_reason FROM harness.message_log ORDER BY seq"
+        ).fetchall()
+        assert rows == [
+            (1, "request", None, None, None),
+            (2, "request", 1, "delivered", None),
+            (4, "answer", None, "dropped", "answer_to_copy"),
+        ]
+        _refused(
+            conn,
+            psycopg.errors.RaiseException,
+            "UPDATE harness.message_log SET copy_of = NULL WHERE seq = 2",
+        )
+
+
+COPY_INSERT: LiteralString = (
+    "INSERT INTO harness.message_log (seq, hop, kind, sender, receiver, api, correlation,"
+    " intent_id, idempotency_key, answer_class, body, sent_vt, copy_of)"
+    " SELECT %s, hop, kind, sender, receiver, api, correlation, intent_id, idempotency_key,"
+    " answer_class, body, sent_vt, %s FROM harness.message_log WHERE seq = %s"
+)
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ("UPDATE harness.message_log SET body = '{\"n\": 9}' WHERE seq = 10", "RaiseException"),
+        ("UPDATE harness.message_log SET sender = 'agent-1' WHERE seq = 10", "RaiseException"),
+        ("UPDATE harness.message_log SET sent_vt = 11 WHERE seq = 10", "RaiseException"),
+    ],
+)
+def test_a_copy_must_repeat_its_request_field_for_field(
+    migrated_database: str, change: LiteralString, error: str
+) -> None:
+    """The copy is built from a request, then one field is made to differ. The database
+    holds every copy to the request it names, as the transport makes it (0006)."""
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        log = PgHarnessLog(conn)
+        log.message_sent(_message(1))
+        conn.execute("ALTER TABLE harness.message_log DISABLE TRIGGER USER")
+        conn.execute(COPY_INSERT, (10, None, 1))
+        conn.execute(change)
+        conn.execute("ALTER TABLE harness.message_log ENABLE TRIGGER USER")
+        with pytest.raises(getattr(psycopg.errors, error)), conn.transaction():
+            conn.execute(COPY_INSERT, (11, 1, 10))
+        conn.execute(COPY_INSERT, (12, 1, 1))
+
+
+def test_only_a_later_message_can_copy_a_request_and_never_an_answer(
+    migrated_database: str,
+) -> None:
+    """A copy comes after its request (7 copies 5, 4 cannot), and repeats what a
+    component sent: not a copy (7) and not an answer (6). A notification passes the
+    request's fault point, so it can be copied (3 copies 2)."""
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        log = PgHarnessLog(conn)
+        log.message_sent(replace(_message(2), kind="notification", api="notifications/x"))
+        conn.execute(COPY_INSERT, (3, 2, 2))
+        log.message_sent(_message(5))
+        log.message_sent(_message(6, kind="answer", correlation=5))
+        conn.execute(COPY_INSERT, (7, 5, 5))
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute(COPY_INSERT, (4, 5, 5))
+        with pytest.raises(psycopg.errors.RaiseException, match="not a copy"), conn.transaction():
+            conn.execute(COPY_INSERT, (8, 7, 7))
+        with pytest.raises(psycopg.errors.RaiseException, match="not a copy"), conn.transaction():
+            conn.execute(COPY_INSERT, (9, 6, 6))
 
 
 def test_the_log_writes_reports_and_numbers_after_them(migrated_database: str) -> None:

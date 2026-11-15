@@ -16,6 +16,12 @@ Transport rules (0006, as amended by 0010):
 - When a component crashes, every later answer to a request it sent before the crash is
   dropped.
 - Faults fire at `net.{hop}.request` and `net.{hop}.answer`, before the message travels.
+- When F4 fires on a request, the transport delivers it a second time, `copy_delay_ms`
+  after the first delivery. The copy is a message of its own, logged with `copy_of`
+  naming the request: its sender sent the request once. A copy reaches no fault point
+  and no before-send hook. The answer to a copy is never delivered: it is dropped on
+  arrival with reason `answer_to_copy`, as a retrying proxy drops it (0006). An MCP
+  notification passes the same point, as with F12, and is copied the same way.
 
 A message's body is copied when it is sent: the log and the receiver each get their own
 copy, so nothing done to a body later changes what was sent.
@@ -30,7 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from fivefold.faults.catalog import HOPS, Action
@@ -75,6 +81,8 @@ class Envelope:
     answer_class: str | None
     body: JsonValue
     sent_vt: int
+    copy_of: int | None = None
+    """For a copy the transport made (F4), the seq of the request it repeats."""
 
 
 @dataclass(frozen=True)
@@ -239,25 +247,92 @@ class Transport:
         point = f"net.{hop}.{'answer' if kind == 'answer' else 'request'}"
         fields = {"api": api, "tool": api, "answer": answer_class, "intent_id": intent_id}
         dropped = False
+        copies: list[Fired] = []
         for fired in self._faults.at(point, fields):
+            action = fired.planned.kind.action
+            if action is Action.DUPLICATE:
+                copies.append(fired)
+                continue
             self._record(fired, point, envelope)
-            if fired.planned.kind.action is Action.DROP:
+            if action is Action.DROP:
                 dropped = True
             elif self._effect is not None:
                 self._effect(fired, envelope)
             else:
                 raise RuntimeError(f"{fired.fault} fired at {point} with nothing to apply it")
+        latency: int | None = None
         if dropped:
             self._log.message_fate(envelope.seq, "dropped", vt=self._scheduler.now, reason="fault")
         else:
+            latency = self.draw_latency()
             self._scheduler.call_later(
-                self.draw_latency(),
+                latency,
                 lambda: self._arrive(envelope, on_arrival, wanted),
                 label=f"deliver {envelope.seq}",
             )
+        for fired in copies:
+            self._copy(fired, point, envelope, text, on_arrival, wanted, latency)
         for observer in self._observers:
             observer(envelope, "sent")
         return envelope
+
+    def _copy(
+        self,
+        fired: Fired,
+        point: str,
+        original: Envelope,
+        text: str,
+        on_arrival: Callable[[Envelope], None],
+        wanted: Callable[[], DropReason | None] | None,
+        latency: int | None,
+    ) -> None:
+        """F4: deliver `original` a second time, `copy_delay_ms` after its first delivery.
+
+        The fault's record names the copy (`copy_seq`), and the copy's names the request
+        it repeats (`copy_of`). When a fault dropped the request itself, the copy still
+        travels, with a latency of its own.
+        """
+        if latency is None:
+            latency = self.draw_latency()
+        fault_seq = self._log.next_seq()
+        copy = replace(
+            original, seq=self._log.next_seq(), body=json.loads(text), copy_of=original.seq
+        )
+        self._log.fault_fired(
+            FaultRecord(
+                seq=fault_seq,
+                fault=str(fired.fault),
+                variant=fired.planned.variant,
+                point=point,
+                occurrence=fired.occurrence,
+                action=str(Action.DUPLICATE),
+                vt=self._scheduler.now,
+                target_seq=original.seq,
+                params={**fired.planned.params, "copy_seq": copy.seq},
+            )
+        )
+        self._log.message_sent(
+            MessageRecord(
+                seq=copy.seq,
+                hop=copy.hop,
+                kind=copy.kind,
+                sender=copy.sender,
+                receiver=copy.receiver,
+                api=copy.api,
+                correlation=copy.correlation,
+                intent_id=copy.intent_id,
+                idempotency_key=copy.idempotency_key,
+                answer_class=copy.answer_class,
+                body=json.loads(text),
+                sent_vt=copy.sent_vt,
+                copy_of=original.seq,
+            )
+        )
+        self._scheduler.call_later(
+            latency + fired.planned.param("copy_delay_ms"),
+            lambda: self._arrive(copy, on_arrival, wanted),
+            label=f"deliver copy {copy.seq}",
+        )
 
     def _arrive(
         self,
@@ -345,9 +420,10 @@ class Transport:
                 answered.set_result(answer)
 
         def on_request(request: Envelope) -> None:
+            wanted = answer_to_copy if request.copy_of is not None else still_wanted
             self._scheduler.spawn(
                 receiver,
-                self._answer(request, self._handlers[receiver], on_answer, still_wanted),
+                self._answer(request, self._handlers[receiver], on_answer, wanted),
                 name=f"{api} {request.seq}",
             )
 
@@ -393,3 +469,8 @@ class Transport:
             answer_class=reply.answer_class,
             wanted=still_wanted,
         )
+
+
+def answer_to_copy() -> DropReason:
+    """The arrival check of an answer to a copy (F4): it never reaches the sender (0006)."""
+    return "answer_to_copy"

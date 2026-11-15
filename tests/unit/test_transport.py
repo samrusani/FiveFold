@@ -402,3 +402,168 @@ def test_a_hook_that_crashes_the_sender_stops_the_message() -> None:
     rig.go(lambda: rig.scheduler.spawn("gateway", caller(), name="call"))
     assert rig.log.messages == [], "nothing was sent, and nothing was logged"
     assert not rig.scheduler.is_up("gateway")
+
+
+# F4: duplicate delivery ------------------------------------------------------------------
+
+
+def copy_plan(delay_ms: int = 30, **at: object) -> dict[str, object]:
+    return {
+        "fault": "F4",
+        "at": {"point": "net.gw_sim.request", **at},
+        "params": {"copy_delay_ms": delay_ms},
+    }
+
+
+class Recording:
+    """A receiver that records every request it gets and answers with its seq."""
+
+    def __init__(self, rig: Rig) -> None:
+        self.seen: list[Envelope] = []
+        rig.transport.serve("sim", self.handle, replace=True)
+
+    async def handle(self, request: Envelope) -> Reply:
+        self.seen.append(request)
+        return Reply({"for": request.seq}, answer_class="committed")
+
+
+def test_f4_delivers_the_request_twice_and_the_sender_gets_one_answer() -> None:
+    """0006: the copy is delivered `copy_delay_ms` after the request, and its answer is
+    never delivered to the sender."""
+    rig = Rig(plan=[copy_plan(30)])
+    receiver = Recording(rig)
+    results: list[Reply] = []
+
+    async def caller() -> None:
+        results.append(await rig.call(1))
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", caller(), name="call"))
+    request, copy = (m for m in rig.log.messages if m.kind == "request")
+    assert (request.copy_of, copy.copy_of) == (None, request.seq)
+    same = ("hop", "sender", "receiver", "api", "intent_id", "idempotency_key", "body", "sent_vt")
+    assert [getattr(copy, name) for name in same] == [getattr(request, name) for name in same]
+    assert request.delivered_vt is not None
+    assert copy.delivered_vt == request.delivered_vt + 30
+    assert [(e.seq, e.copy_of) for e in receiver.seen] == [
+        (request.seq, None),
+        (copy.seq, request.seq),
+    ]
+    answers = [
+        (m.correlation, m.fate, m.drop_reason) for m in rig.log.messages if m.kind == "answer"
+    ]
+    assert answers == [
+        (request.seq, "delivered", None),
+        (copy.seq, "dropped", "answer_to_copy"),
+    ]
+    assert results == [Reply({"for": request.seq}, "committed")]
+    (fault,) = rig.log.faults
+    assert (fault.fault, fault.point, fault.action, fault.target_seq) == (
+        "F4",
+        "net.gw_sim.request",
+        "duplicate",
+        request.seq,
+    )
+    assert fault.params == {"copy_delay_ms": 30, "copy_seq": copy.seq}
+    assert request.seq < fault.seq < copy.seq
+
+
+def test_a_copy_reaches_no_fault_point_and_no_hook_before_a_send() -> None:
+    """The copy is made after the request's fault point: it neither counts as another
+    occurrence there nor passes a before-send hook. Here F12's second occurrence is the
+    second request, not the first request's copy."""
+    plan: list[dict[str, object]] = [
+        copy_plan(10),
+        {"fault": "F12", "at": {"point": "net.gw_sim.request", "occurrence": 2}},
+    ]
+    rig = Rig(plan=plan)
+    Recording(rig)
+    hooked: list[Outgoing] = []
+    rig.transport.before_send(hooked.append)
+    outcomes: list[str] = []
+
+    async def calls() -> None:
+        for n in (1, 2):
+            try:
+                await rig.call(n, timeout_ms=1_000)
+                outcomes.append(f"{n}: answered")
+            except TransportTimeout:
+                outcomes.append(f"{n}: timeout")
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", calls(), name="calls"))
+    assert outcomes == ["1: answered", "2: timeout"]
+    requests = [m for m in rig.log.messages if m.kind == "request"]
+    assert [(m.copy_of, m.fate, m.drop_reason) for m in requests] == [
+        (None, "delivered", None),
+        (requests[0].seq, "delivered", None),
+        (None, "dropped", "fault"),
+    ]
+    assert [(f.fault, f.target_seq) for f in rig.log.faults] == [
+        ("F4", requests[0].seq),
+        ("F12", requests[2].seq),
+    ]
+    assert [(o.kind, o.sender) for o in hooked] == [
+        ("request", "gateway"),
+        ("answer", "sim"),
+        ("answer", "sim"),
+        ("request", "gateway"),
+    ], "two requests and the two answers to the first and its copy; the copy itself is not"
+
+
+def test_the_copy_travels_even_when_a_fault_drops_the_request() -> None:
+    """The copy is a second delivery of what was sent: when F12 drops the request itself,
+    the copy still arrives, and its answer still never reaches the sender."""
+    rig = Rig(plan=[copy_plan(20), {"fault": "F12", "at": {"point": "net.gw_sim.request"}}])
+    receiver = Recording(rig)
+    outcome: list[str] = []
+
+    async def caller() -> None:
+        try:
+            await rig.call(1, timeout_ms=1_000)
+        except TransportTimeout:
+            outcome.append(f"timeout at {rig.scheduler.now}")
+
+    rig.go(lambda: rig.scheduler.spawn("gateway", caller(), name="call"))
+    assert outcome == ["timeout at 1000"]
+    request, copy, answer = rig.log.messages
+    assert (request.fate, request.drop_reason) == ("dropped", "fault")
+    assert (copy.copy_of, copy.fate) == (request.seq, "delivered")
+    assert [e.seq for e in receiver.seen] == [copy.seq]
+    assert (answer.correlation, answer.drop_reason) == (copy.seq, "answer_to_copy")
+
+
+def test_copies_are_deterministic_for_a_seed() -> None:
+    def history(seed: int) -> list[MessageRecord]:
+        rig = Rig(seed=seed, plan=[copy_plan(25, occurrence=2)])
+
+        async def caller(n: int) -> None:
+            await rig.call(n)
+
+        rig.go(lambda: [rig.scheduler.spawn("gateway", caller(n), name=f"c{n}") for n in range(4)])
+        return rig.log.messages
+
+    assert history(4) == history(4)
+    assert sum(1 for m in history(4) if m.copy_of is not None) == 1
+
+
+def test_f4_copies_a_notification_too_which_has_no_answer() -> None:
+    """MCP notifications pass `net.{hop}.request` as requests do (as with F12)."""
+    plan: list[dict[str, object]] = [
+        {"fault": "F4", "at": {"point": "net.agent_sim.request"}, "params": {"copy_delay_ms": 0}}
+    ]
+    rig = Rig(plan=plan)
+    arrivals: list[tuple[int, int | None]] = []
+
+    def send() -> None:
+        rig.transport.post(
+            hop="agent_sim",
+            kind="notification",
+            sender="agent-1",
+            receiver="sim",
+            body={"n": 1},
+            on_arrival=lambda e: arrivals.append((e.seq, e.copy_of)),
+        )
+
+    rig.go(send)
+    notification, copy = rig.log.messages
+    assert arrivals == [(notification.seq, None), (copy.seq, notification.seq)]
+    assert (copy.kind, copy.delivered_vt) == ("notification", notification.delivered_vt)

@@ -13,12 +13,13 @@
 # in B0 kills the agent just before it sends the order; the component restarts 1,000 ms
 # later. F2 drops the purchase order's committed answer on the stack's hop to the
 # simulator. F3 crashes the gateway after the order's answer arrives, before it is
-# recorded, and in B0 kills the agent as the order's result arrives. F6 revokes the
-# order's approval, and F7 changes the quote it relies on: early at the gateway's
-# dispatch check (G2) or as the approval answer reaches the agent (B0), late as the
-# order leaves for the simulator. F9 starts a second worker at the first worker's first
-# step. F11 kills the agent at the named point of its purchase order call and resumes it
-# 1,000 ms later. F12 drops the order's request on the named hop.
+# recorded, and in B0 kills the agent as the order's result arrives. F4 delivers the
+# order's request twice on the named hop. F6 revokes the order's approval, and F7 changes
+# the quote it relies on: early at the gateway's dispatch check (G2) or as the approval
+# answer reaches the agent (B0), late as the order leaves for the simulator. F9 starts a
+# second worker at the first worker's first step. F11 kills the agent at the named point
+# of its purchase order call and resumes it 1,000 ms later. F12 drops the order's request
+# on the named hop.
 #
 # dev-001's budget covers one order but not two, so a second order on the first approval
 # fails property 1 (a duplicate), property 2 (the approval backs the first order) and
@@ -192,3 +193,22 @@ cells:
   - {fault: F12, variant: gw_sim, contract: C3, config: G2, verdict: pass, failing: []}
   - {fault: F12, variant: agent_gw, contract: C3, config: G2, verdict: pass, failing: []}
   - {fault: F12, variant: agent_sim, contract: C3, config: B0, verdict: pass, failing: []}
+
+  # F4, duplicate delivery (property 1): the transport delivers the order twice, on the
+  # named hop. On gw_sim at C0 and C1 the destination has no keys and commits both,
+  # citing one approval and overdrawing the budget (a documented G2 limit, 0006); at C2
+  # and C3 the copy gets the stored result. On agent_gw the copy reaches the gateway,
+  # which attaches it to the same action. B0 sends no keys, so it fails at C0 to C2; at C3
+  # the copy fails the conditional write (approval used, budget short).
+  - {fault: F4, variant: gw_sim, contract: C0, config: G2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: gw_sim, contract: C1, config: G2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: gw_sim, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F4, variant: gw_sim, contract: C3, config: G2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_gw, contract: C0, config: G2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_gw, contract: C1, config: G2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_gw, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_gw, contract: C3, config: G2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_sim, contract: C0, config: B0, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: agent_sim, contract: C1, config: B0, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: agent_sim, contract: C2, config: B0, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: agent_sim, contract: C3, config: B0, verdict: pass, failing: []}

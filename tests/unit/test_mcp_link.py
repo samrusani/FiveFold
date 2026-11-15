@@ -10,6 +10,7 @@ from mcp.client.session import ClientSession
 from mcp.server.lowlevel.server import Server
 from mcp.shared.exceptions import MCPError
 
+from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.harness.log import MemoryHarnessLog, MessageRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.rng import Generators
@@ -18,12 +19,17 @@ from fivefold.harness.transport import Transport
 
 
 class Rig:
-    def __init__(self, seed: int = 1) -> None:
+    def __init__(self, seed: int = 1, plan: list[dict[str, object]] | None = None) -> None:
         self.scheduler = Scheduler()
         self.log = MemoryHarnessLog()
         self.transport = Transport(
-            self.scheduler, self.log, Generators(seed).get("latency"), max_hop_latency_ms=50
+            self.scheduler,
+            self.log,
+            Generators(seed).get("latency"),
+            max_hop_latency_ms=50,
+            faults=FaultInjector(parse_plan(plan or [])),
         )
+        self.handled: list[str] = []
         self.results: list[tuple[int, object]] = []
         self.server_ended: list[int] = []
         self.delay_ms = 100
@@ -35,6 +41,7 @@ class Rig:
             return types.ListToolsResult(tools=[types.Tool(name="propose", input_schema=schema)])
 
         async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
+            self.handled.append(str((params.arguments or {})["intent_id"]))
             await self.scheduler.sleep(self.delay_ms)
             if self.crash_as_it_answers:
                 self.scheduler.call_later(
@@ -304,3 +311,38 @@ def test_a_connection_opened_while_the_gateway_is_down_is_never_served() -> None
     assert initialize.sent_vt == 1_000 and rig.scheduler.is_up("gateway")
     assert (initialize.fate, initialize.drop_reason) == ("dropped", "receiver_down")
     assert timed_out == [3_000]
+
+
+def test_f4_on_the_gateway_hop_the_gateway_answers_twice_and_the_agent_gets_one() -> None:
+    """0006: the copy reaches the gateway as the same JSON-RPC request, and the gateway
+    answers both. The answers carry the same id, so they pair with the deliveries in the
+    order those arrived; the copy's answer is dropped and correlates with the copy."""
+    plan: list[dict[str, object]] = [
+        {
+            "fault": "F4",
+            "at": {"point": "net.agent_gw.request", "match": {"api": "propose"}},
+            "params": {"copy_delay_ms": 10},
+        }
+    ]
+    rig = Rig(plan=plan)
+    rig.go(lambda: rig.connect(calls=2))
+    assert rig.handled == ["REQ-1", "REQ-1", "REQ-2"], "the gateway served the copy too"
+    assert [r for _, r in rig.results] == [
+        {"result": "action", "intent_id": "REQ-1"},
+        {"result": "action", "intent_id": "REQ-2"},
+    ]
+    propose = [m for m in rig.log.messages if m.api == "propose"]
+    request, copy = (m for m in propose if m.kind == "request" and m.intent_id == "REQ-1")
+    assert copy.copy_of == request.seq and copy.body == request.body
+    answers = [(m.correlation, m.fate, m.drop_reason) for m in propose if m.kind == "answer"]
+    assert answers[:2] == [
+        (request.seq, "delivered", None),
+        (copy.seq, "dropped", "answer_to_copy"),
+    ]
+    assert answers[2][1:] == ("delivered", None), "the next call is answered as usual"
+    (fault,) = rig.log.faults
+    assert (fault.fault, fault.target_seq, fault.params["copy_seq"]) == (
+        "F4",
+        request.seq,
+        copy.seq,
+    )

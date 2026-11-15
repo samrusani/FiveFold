@@ -50,7 +50,13 @@ from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import evaluate_run
 from fivefold.faults.catalog import Action
-from fivefold.faults.plan import FaultInjector, Fired, check_configuration, parse_plan
+from fivefold.faults.plan import (
+    FaultInjector,
+    Fired,
+    check_configuration,
+    parse_plan,
+    seed_parameters,
+)
 from fivefold.gateway.dispatcher import Dispatcher, Timing
 from fivefold.gateway.freshness import RuleFreshness
 from fivefold.gateway.pg_store import PgStore
@@ -155,6 +161,7 @@ class InprocRun:
         self.spec = spec
         self._plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(spec.scenario))
         check_configuration(self._plan, gateway=spec.config != "B0")
+        self._plan = seed_parameters(self._plan, Generators(spec.seed).get("faults"))
         self._dsn = dsn
         self.scheduler = Scheduler()
         self.result = RunResult(spec.run_id)
