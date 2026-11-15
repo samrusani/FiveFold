@@ -66,6 +66,8 @@ def test_demo_1_saves_both_results_and_the_report_counts_them(
     assert "| B0 | 1/1 | 1/1 | 1/1 | 0/1 | 0/1 |" in markdown
     assert "| G2 | 0/1 | 0/1 | 0/1 | 0/1 | 0/1 |" in markdown
     assert "| duplicates | 1 | 0 |" in markdown
+    assert "| B0 | C2 | 0/1 | 1/1 |" in markdown, "B0 is live but not safe"
+    assert "| G2 | C2 | 1/1 | 1/1 |" in markdown, "G2 is safe and live"
 
     loaded = load_results(reversed(files))
     assert runs_csv(loaded).encode("utf-8") == csv_path.read_bytes()

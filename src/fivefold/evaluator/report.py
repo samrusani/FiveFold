@@ -9,10 +9,10 @@ wall-clock time and no randomness; a result holds none either.
 
 The CSV has a header row and the columns of `CSV_COLUMNS`, in that order. Its rows are
 sorted by scenario, configuration, contract level, planned faults and seed, then by the
-rest of the run's identity. The report says what was run. It counts verdicts by
-configuration and contract level, failures by property and configuration, and verdicts by
-fault plan, each count over its denominator. It sums every metric by configuration, and
-names the metrics of record 0004 that are not computed yet.
+rest of the run's identity. The report says what was run. It counts verdicts, and safe
+and live runs, by configuration and contract level, failures by property and
+configuration, and verdicts by fault plan, each count over its denominator. It sums every
+metric by configuration, and names the metrics of record 0004 that are not computed yet.
 
 Readings the decision records leave open:
 
@@ -78,6 +78,12 @@ PROPERTIES = tuple(sorted(PROPERTY_NAMES))
 """The five properties, by number."""
 
 VERDICTS = (Verdict.PASS, Verdict.PASS_UNRESOLVED, Verdict.FAIL)
+
+SAFETY = (1, 2, 3, 5)
+"""The safety properties: nothing bad happened (0004)."""
+
+LIVENESS = (4,)
+"""The liveness property: the required effect happened (0004)."""
 """The run verdicts, in the order the tables show them."""
 
 NO_FAULTS = "none"
@@ -442,6 +448,7 @@ def markdown_report(results: Iterable[RunResult]) -> str:
         "",
         *_what_was_run(rows),
         *_verdict_table(rows),
+        *_safety_table(rows),
         *_failure_table(rows),
         *_fault_table(rows),
         *_metric_table(rows),
@@ -499,6 +506,39 @@ def _verdict_table(rows: Sequence[Row]) -> list[str]:
     ):
         lines.append(_table_row([config, contract, *_verdict_counts(members)]))
     return [*lines, ""]
+
+
+def _safety_table(rows: Sequence[Row]) -> list[str]:
+    lines = [
+        "## Safety and liveness",
+        "",
+        "Record 0004's headline numbers keep safety apart from liveness. A run is safe when"
+        " properties 1, 2, 3 and 5 all hold, and live when property 4 holds. Each cell is"
+        " the runs that are safe, or live, over the runs that evaluated those properties.",
+        "",
+        _table_row(["Configuration", "Contract", "safe", "live"]),
+        _table_rule(4),
+    ]
+    for (config, contract), members in _groups(
+        rows, lambda row: (row.result.run.config, row.result.run.contract)
+    ):
+        lines.append(
+            _table_row([config, contract, _holding(members, SAFETY), _holding(members, LIVENESS)])
+        )
+    return [*lines, ""]
+
+
+def _holding(rows: Sequence[Row], numbers: tuple[int, ...]) -> str:
+    """How many of `rows` pass every property in `numbers`, over the rows that evaluated
+    them all."""
+    held = evaluated = 0
+    for row in rows:
+        verdicts = {prop.property: prop.verdict for prop in row.result.properties}
+        if any(number not in verdicts for number in numbers):
+            continue
+        evaluated += 1
+        held += all(verdicts[number] is PropertyVerdict.PASS for number in numbers)
+    return _fraction(held, evaluated) if evaluated else "not evaluated"
 
 
 def _failure_table(rows: Sequence[Row]) -> list[str]:

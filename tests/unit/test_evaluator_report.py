@@ -427,6 +427,24 @@ def test_verdicts_are_counted_by_configuration_and_contract_level_with_denominat
     ]
 
 
+def test_safety_and_liveness_are_counted_apart_with_denominators() -> None:
+    """Record 0004's headline numbers: safe when 1, 2, 3 and 5 hold, live when 4 holds."""
+    results = [
+        b0_demo_1(seed=7),
+        make_result(config="B0", seed=8),
+        make_result(config="G2", seed=7, failing={4: (ReasonCode.MISSING_EFFECT,)}),
+        make_result(config="G2", seed=8, unknown=True),
+        make_result(config="G2", seed=9, failing={5: (ReasonCode.DONE_UNSUPPORTED,)}),
+        make_result(config="G1", seed=7, evaluated=(1, 5)),
+    ]
+    assert table(markdown_report(results), "Safety and liveness") == [
+        ["Configuration", "Contract", "safe", "live"],
+        ["B0", "C2", "1/2", "2/2"],
+        ["G1", "C2", "not evaluated", "not evaluated"],
+        ["G2", "C2", "2/3", "2/3"],
+    ]
+
+
 def test_failures_are_counted_by_property_over_the_runs_that_evaluated_it() -> None:
     results = [
         b0_demo_1(seed=7),
