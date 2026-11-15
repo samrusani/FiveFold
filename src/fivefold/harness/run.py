@@ -25,9 +25,12 @@ and workers. It is a new run all the same, with its own run id, the parent's wit
    at its points (F1, F6 and F7 early), and this module those at the agent's points (F1's
    B0 equivalent, F11). A crashed gateway restarts through startup recovery (0003), and
    each agent worker then opens a new MCP connection to it; a crashed worker restarts
-   from its last checkpoint. The simulator's endpoint fires F5 and F10 at the
-   simulator's points (`fivefold.harness.sim_points`). Each fault's record names the
-   task intent it touched, which recovery latency starts from (0014);
+   from its last checkpoint. A component that a crash stopped reaches no further fault
+   point, at the gateway's points and the agent's alike: when two crash faults meet at
+   one event, only the first fires, and the component restarts after its delay. The
+   simulator's endpoint fires F5 and F10 at the simulator's points
+   (`fivefold.harness.sim_points`). Each fault's record names the task intent it
+   touched, which recovery latency starts from (0014);
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
@@ -663,6 +666,7 @@ class InprocRun:
                 )
             )
             self._kill(worker, fired.planned.param("restart_delay_ms"))
+            return  # The worker is down, so it reaches no further fault (`_agent_points`).
 
     def _gateway_answers(self, envelope: Envelope, stage: Stage) -> None:
         """Note each write answer delivered to the gateway, by API and intent, so that a
@@ -715,6 +719,10 @@ class InprocRun:
             # delivery to its receiver only after the observers ran, and only if the
             # receiver is still up (0006, voided results).
             self._kill(worker, delay)
+            # A worker that is down reaches no fault point, as the gateway's dispatcher
+            # stops at the first crash: a second kill at this event does not fire, and
+            # the worker restarts once, after this kill's delay.
+            return
 
     def _kill(self, worker: str, restart_after_ms: int) -> None:
         self.scheduler.crash(

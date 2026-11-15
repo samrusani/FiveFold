@@ -9,6 +9,12 @@ Before a run starts, `check_configuration` and `check_run` refuse a plan that th
 configuration, contract or timing cannot carry out, and `seed_parameters` draws each
 seeded parameter the plan leaves unset, such as F4's `copy_delay_ms`, from the run's
 `faults` generator (0009). The run records the plan with the values it drew.
+
+`parse_plan` also refuses two crash faults with the very same trigger: the same point,
+match and occurrence. They would fire at the same event on the same component, and one
+crash already stops it. Two crashes whose triggers differ can still meet at one event;
+then only the first fires, since a component it stopped reaches no further fault point
+(`fivefold.harness.run`).
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from fivefold.faults.catalog import (
     F5_BEYOND_DEADLINE,
     F10_STALE_WITHIN_LAG,
     POINTS,
+    Action,
     FaultId,
     FaultKind,
     point_exists,
@@ -105,8 +112,27 @@ class PlannedFault(BaseModel):
 
 
 def parse_plan(entries: Sequence[Mapping[str, Any]]) -> tuple[PlannedFault, ...]:
-    """Validate a scenario's `faults` list (0006, Plans)."""
-    return tuple(PlannedFault.model_validate(entry) for entry in entries)
+    """Validate a scenario's `faults` list (0006, Plans).
+
+    Raises `ValueError` for an entry that is not a planned fault, and for two crash
+    faults with the same trigger.
+    """
+    plan = tuple(PlannedFault.model_validate(entry) for entry in entries)
+    crashes: dict[tuple[str, tuple[tuple[str, str], ...], int], PlannedFault] = {}
+    for planned in plan:
+        if planned.kind.action is not Action.KILL:
+            continue
+        at = planned.at
+        # The injector compares match values as text, so the trigger does too.
+        trigger = (at.point, tuple(sorted((k, str(v)) for k, v in at.match.items())), at.occurrence)
+        first = crashes.setdefault(trigger, planned)
+        if first is not planned:
+            raise ValueError(
+                f"{first.fault} and {planned.fault} crash the same component at the same event"
+                f" ({at.point}, occurrence {at.occurrence}); one crash already stops it, so"
+                " give one of them another trigger (0006)"
+            )
+    return plan
 
 
 def check_configuration(plan: Sequence[PlannedFault], *, gateway: bool) -> None:

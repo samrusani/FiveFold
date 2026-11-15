@@ -264,6 +264,39 @@ def test_a_crash_cancels_the_components_tasks_and_a_restart_brings_it_back() -> 
     assert scheduler.incarnation("gateway") == 0
 
 
+def test_a_second_crash_before_the_restart_leaves_one_restart_the_latest() -> None:
+    """A component that crashes again before its restart fires restarts once. Each
+    restart belongs to the crash that queued it, so the earlier one finds a newer
+    incarnation and does nothing: the component never runs as two copies. Later crashes
+    restart as usual."""
+    scheduler = Scheduler()
+    started: list[tuple[str, int]] = []
+
+    def restart(label: str) -> Callable[[], None]:
+        def bring_back() -> None:
+            started.append((label, scheduler.now))
+            scheduler.spawn("agent-1", scheduler.sleep(100_000), name=label)
+
+        return bring_back
+
+    def crash_twice() -> None:
+        scheduler.crash("agent-1", restart_after_ms=1_200, restart=restart("first"))
+        scheduler.crash("agent-1", restart_after_ms=1_000, restart=restart("second"))
+
+    async def main() -> None:
+        scheduler.spawn("agent-1", scheduler.sleep(100_000), name="original")
+        scheduler.call_at(1_000, crash_twice)
+        scheduler.call_at(
+            5_000,
+            lambda: scheduler.crash("agent-1", restart_after_ms=500, restart=restart("third")),
+        )
+        await scheduler.run(deadline_ms=10_000)
+
+    run(main)
+    assert started == [("second", 2_000), ("third", 5_500)]
+    assert scheduler.incarnation("agent-1") == 3 and scheduler.is_up("agent-1")
+
+
 def test_a_down_component_cannot_start_work_and_listeners_hear_of_crashes() -> None:
     scheduler = Scheduler()
     heard: list[str] = []
