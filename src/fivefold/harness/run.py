@@ -1,8 +1,9 @@
 """One run in the inproc topology: every component on one scheduler (0009).
 
 A run is a scenario, a configuration, a contract level, a seed and a model (0009). This
-build runs B0, G1 and G2 with the scripted model, recorded into a cassette or not, or with
-a cassette's replay (`fivefold.harness.models`). `InprocRun.execute`:
+build runs B0, G1 and G2 with the scripted model, recorded into a cassette or not, with a
+cassette's replay, or with a live model, always recorded (`fivefold.harness.models`).
+`InprocRun.execute`:
 
 1. records the run, sets up the simulator for the contract with the configuration's
    credentials (only the gateway in G1 and G2, the agent workers in B0; 0008), and serves the
@@ -670,7 +671,9 @@ class InprocRun:
                 lambda: scripted_policy(scenario.intents, mode=mode, rank=rank), think
             )
 
-        return self.models.chat_model(worker, scripted=scripted, think=think)
+        return self.models.chat_model(
+            worker, scripted=scripted, think=think, hold=self.scheduler.hold
+        )
 
     def _models_stopped(self) -> None:
         """The run has stopped: a recording's cassette is complete, and `harness.run`
