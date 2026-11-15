@@ -20,36 +20,11 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.worker import WorkerEnd
-from fivefold.domain.contracts import Contract
-from fivefold.domain.scenario import Scenario, load_scenario_file
+from fivefold.harness.demo import demo_1_spec
 from fivefold.harness.migrations import drop_database
-from fivefold.harness.run import InprocRun, RunSpec
+from fivefold.harness.run import Config, InprocRun
 
 pytestmark = pytest.mark.pg
-
-DEV_001 = "scenarios/dev/dev-001-single-po.yaml"
-
-
-def demo_1_plan(hop: str) -> list[dict[str, Any]]:
-    return [
-        {
-            "fault": "F2",
-            "at": {
-                "point": f"net.{hop}.answer",
-                "match": {"api": "submit_purchase_order", "answer": "committed"},
-                "occurrence": 1,
-            },
-        },
-        {
-            "fault": "F11",
-            "at": {
-                "point": "agent.after_tool_call",
-                "match": {"tool": "submit_purchase_order"},
-                "occurrence": 1,
-            },
-            "params": {"restart_delay_ms": 10_000},
-        },
-    ]
 
 
 @pytest.fixture
@@ -74,14 +49,8 @@ def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], 
         drop_database(admin_dsn, name)
 
 
-def scenario() -> Scenario:
-    return load_scenario_file(DEV_001)
-
-
-def run(dsn: str, config: str, *, seed: int = 7) -> InprocRun:
-    hop = "gw_sim" if config == "G2" else "agent_sim"
-    spec = RunSpec(scenario(), config, Contract.C2, seed, plan=demo_1_plan(hop))  # type: ignore[arg-type]
-    inproc = InprocRun(spec, dsn)
+def run(dsn: str, config: Config, *, seed: int = 7) -> InprocRun:
+    inproc = InprocRun(demo_1_spec(config, seed), dsn)
     asyncio.run(inproc.execute())
     return inproc
 
@@ -145,10 +114,22 @@ def test_b0_places_a_second_order_after_the_resume(run_database: Callable[[str],
     assert budget[0]["committed_minor"] > budget[0]["limit_minor"], "the budget is overdrawn"
 
 
-def test_a_run_from_a_seed_is_byte_identical(run_database: Callable[[str], str]) -> None:
-    """The determinism contract (0009): the same inputs give the same message log."""
-    first, second = run_database("first"), run_database("second")
-    run(first, "G2")
-    run(second, "G2")
+@pytest.mark.parametrize("config", ["B0", "G2"])
+def test_a_run_from_a_seed_is_byte_identical(
+    run_database: Callable[[str], str], config: Config
+) -> None:
+    """The determinism contract (0009): the same inputs give the same records."""
+    first, second = run_database(f"{config.lower()}_1"), run_database(f"{config.lower()}_2")
+    run(first, config)
+    run(second, config)
     assert message_log(first) == message_log(second)
     assert effects(first) == effects(second)
+    assert reports(first) == reports(second)
+
+
+def test_another_seed_changes_the_timing_but_not_the_outcome(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("seed_8")
+    run(dsn, "G2", seed=8)
+    assert effects(dsn) == [("PO-0001", "REQ-1", "APR-0001", "A-0001")]

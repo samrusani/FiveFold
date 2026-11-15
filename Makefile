@@ -44,8 +44,8 @@ db-down: ## Stop the local database
 db-reset: ## Recreate the fivefold_dev database, then create roles and migrate
 	$(UV) run python -m fivefold.harness.migrations reset --database fivefold_dev
 
-demo: ## Run demo 1 (a stub until milestone M1)
-	@echo "Demo 1 (order placed, reply lost) arrives in milestone M1. See docs/plan.md."
+demo: ## Run demo 1 (order placed, reply lost) for B0 and G2 from a seed (needs PostgreSQL)
+	$(UV) run python -m fivefold.harness.demo
 
 clean: ## Remove caches
 	rm -rf .mypy_cache .ruff_cache .pytest_cache .hypothesis
