@@ -343,7 +343,7 @@ Detail: 0009.
 
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, and Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every fault variant, contract level and configuration on the standard development scenario, and deterministic tests assert each cell (0006).
-- **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix.
+- **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.
 - **CI:** deterministic suites and the determinism check on every pull request. Live runs are manual and capped by budget.
 - **Live runs:** `python -m fivefold.recorder record --live ollama:MODEL --spend-cap-usd X --prices PATH` runs one, and refuses unless the environment sets `FIVEFOLD_LIVE=1` and the price file, which records its price date, prices the model. One spend cap holds across a command's runs, and the spend can pass it by at most the cost of the one call in flight. `prices/example.yaml` shows the format with Ollama models at 0 USD, since they run locally, and lists no API provider. Tests use fake chat models and never reach a provider.
