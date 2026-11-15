@@ -205,9 +205,6 @@ class RunSummary(ResultModel):
     cassette_digest: str | None
     parent_run_id: str | None
     branch_point: int | None
-    config_hash: str
-    """The SHA-256 of the run config: its configuration, contract level, topology and
-    params (`fivefold.evaluator.evaluate.config_hash`)."""
     params: JsonValue
     end_vt: int
     """When the run ended, as property 4 judges "at the end": the harness's stop time."""

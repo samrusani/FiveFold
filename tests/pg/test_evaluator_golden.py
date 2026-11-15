@@ -10,7 +10,6 @@ per reason code (0004, Checks), one for each passing verdict, and one for each e
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1101,13 +1100,6 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
         "status": "done",
     }
     passed = {"failures": [], "reason_codes": [], "verdict": "pass"}
-    run_config = {
-        "config": "G2",
-        "contract": "C2",
-        "params": run.scenario.params.model_dump(),
-        "topology": "inproc",
-    }
-    canonical = json.dumps(run_config, sort_keys=True, separators=(",", ":"))
     assert data == {
         "code_version": data["code_version"],
         "evaluated": [1, 2, 3, 4, 5],
@@ -1182,7 +1174,6 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
             "branch_point": None,
             "cassette_digest": None,
             "config": "G2",
-            "config_hash": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
             "contract": "C2",
             "end_vt": 100_000,
             "model": "scripted-policy",

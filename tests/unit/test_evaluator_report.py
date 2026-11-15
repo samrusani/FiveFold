@@ -31,7 +31,6 @@ from fivefold.evaluator import (
     ReportError,
     RunInfo,
     RunRecords,
-    config_hash,
     evaluate,
     load_results,
     markdown_report,
@@ -154,9 +153,6 @@ def make_result(
             cassette_digest=cassette,
             parent_run_id=parent,
             branch_point=None if parent is None else 12,
-            config_hash=config_hash(
-                config=config, contract=contract, topology="inproc", params=params
-            ),
             params=params,
             end_vt=58_200,
         ),
@@ -268,9 +264,6 @@ def test_the_csv_has_a_header_and_one_row_per_run() -> None:
         "parent_run_id": "",
         "branch_point": "",
         "code_version": "0.0.0",
-        "config_hash": config_hash(
-            config="G2", contract="C2", topology="inproc", params=g2_demo_1().run.params
-        ),
         "end_vt": "58200",
     }
     assert {name: g2[name] for name in identity} == identity
@@ -291,7 +284,6 @@ def test_the_csv_columns_are_fixed_and_name_every_metric_in_record_0004s_order()
         "parent_run_id",
         "branch_point",
         "code_version",
-        "config_hash",
         "planned_faults",
         "end_vt",
         "verdict",
