@@ -2,6 +2,7 @@
 
 Status: Accepted (2026-11-14)
 Amended by: 0010 (2026-11-14): a crash drops answers to the crashed component's open requests
+Amended by: 0013 (2026-11-15): F10's stale-beyond-L variant fires at `sim.write.received`; the delayed cells set `count` to 5
 Date: 2026-11-14
 Spec sections affected: Fault catalog, Demos (product.md), Testing, plan.md (M1 to M3), product.md success measures, CLAUDE.md (Tests)
 Resolves M0 questions: 4, 6, 10 (fault side), 30, 33 (F4), 34, 35; part of 37
@@ -69,7 +70,7 @@ Some crash points change what the stack can know. The fault log records this, an
 | F7 | Quote changes after approval | Changes the quote the action cites, at the same points as F6 | as F6 | early, late; change `price_up` (default +5%, within the scenario's maximum) or `harmless` (lead time only) | all | 3 |
 | F8 | Memory correction after proposal | Deferred to v0.2 with AliceMemory | | | | 3 |
 | F9 | Two workers on the same task | `agent.step` occurrence N starts a second agent worker | same | same_args; different_args (the second worker picks the second-cheapest acceptable supplier) | all | 1, 2 |
-| F10 | Status answer delayed or stale | `sim.status.answer`, for the next `count` answers | same, if the agent calls the status tool | delayed (the answer arrives after T, so the probe counts as unanswered); stale within L; stale beyond L (answers reflect the state when F10 fired, a contract violation); `count` (default 20) | C1 | 1, 5 |
+| F10 | Status answer delayed or stale | `sim.status.answer`, for the next `count` answers; stale beyond L at `sim.write.received`, for the next `count` answers after that write (0013) | same, if the agent calls the status tool | delayed (the answer arrives after T, so the probe counts as unanswered); stale within L; stale beyond L (answers reflect the state just before that write arrived, a contract violation); `count` (default 20) | C1 | 1, 5 |
 | F11 | Agent killed and resumed from checkpoint | Kill at `agent.after_tool_call` (default) or `agent.after_tool_result` | same | point; `restart_delay_ms` | all | 1, 2, 5 |
 | F12 | Request lost before it reaches the destination (new) | `net.{hop}.request`: dropped | `net.agent_sim.request` | hop: `agent_gw` or `gw_sim` | all | 4, 5 |
 
@@ -78,7 +79,7 @@ Notes:
 - F6 was "Approval revoked before dispatch" and fired in "Admin API". It now fires in the approvals service (0002). The early variant tests whether the stack checks authority. The late variant tests the race between the check and the commit.
 - F7's `harmless` variant is a control. Every configuration should pass it, which shows the freshness rules do not reject harmless changes.
 - F9 was "Two workers propose the same action". A worker is one instance of the agent graph with its own checkpoint thread and its own budgets, running the same policy on the same task (0008, 0009).
-- F10 needs a status probe, so its matrix cells pair it with F2. The "stale within L" cells set `status_lag_ms` to 3,000 in the scenario's parameters (0009), because the default L is 0.
+- F10 needs a status probe, so its matrix cells pair it with F2. The "stale within L" cells set `status_lag_ms` to 3,000 in the scenario's parameters (0009), because the default L is 0. The "delayed" cells set `count` to 5, below `max_probes` (0013).
 - F12 is new. It is the counterpart of F2. Without it, every lost message in the catalog happens after a commit, and C0 looks safer than it is.
 - F8 is deferred, because it adds a second project to the critical path while F7 already exercises property 3. The fact model treats memory entries as ordinary facts, so F8 will need no change to property 3.
 
