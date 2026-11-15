@@ -211,11 +211,35 @@ The replay matches the original run in fivefold_recorded.
 
 - **M0, the design freeze, is done.** Decision records 0001 to 0009 were accepted on 14 Nov 2026, and record 0010 corrects the state machine.
 - **M1, the thin slice, and M2, authority and freshness, are done.** The simulator runs purchase orders and reservations at contract levels C0 to C3, with the effects ledger, fact history and the approvals service (`src/fivefold/sim/`). The deterministic harness has the scheduler, the virtual clock, transports with a message log, and fault plans (`src/fivefold/harness/`, `src/fivefold/faults/`). The gateway has the state machine with invariants I1 to I7, the PostgreSQL store, the dispatcher and the agent-facing tools over MCP, as G2 and as G1 (`src/fivefold/gateway/`). A LangGraph agent with a scripted model runs in G1, G2 and B0 (`src/fivefold/agents/`). The evaluator scores every run on all five properties and writes a CSV and a Markdown report across runs (`src/fivefold/evaluator/`).
-- **M3, full scenarios, is nearly done.** Faults F3, F4, F5 and F10, demos 2 and 3, the scripted resolver and recorded playback are in. Viewer v1 waits for record 0012, and the held-out scenarios are kept outside this repository.
+- **M3, full scenarios, is nearly done.** Faults F3, F4, F5 and F10, demos 2 and 3, the scripted resolver, recorded playback and viewer v1 (record 0012; see Viewer below) are in. The held-out scenarios are kept outside this repository.
 - **M4, the live study, has started.** G1, the report's token counts and cost, the live model adapter and the study runner are in. The study waits for the maintainer's choice of models, API keys and a spend cap.
 - **M5, the release, has started.** The two paths above, [docs/limitations.md](docs/limitations.md) and [SECURITY.md](SECURITY.md) are in.
 
 The development scenario has 223 expected-outcome cells: faults F1 to F7 and F9 to F12, at each contract level and configuration they apply to. F10 needs a status probe, so it applies at C1 in G2 only. Each cell runs from the committed seed and gets the verdict `faults/expected.yaml` expects. Every G2 cell passes except the limits record 0006 documents. Record 0006 fixes no G1 outcome, so G1's cells come from its first runs. Record 0013 settles two of F10's cells. The delayed cell delays 5 status answers, fewer than G2's 20 probes, so G2 hears the sixth and confirms the order. The stale-beyond-L cell freezes the status from just before the order reached the simulator, so G2 marks the order failed and the report says "not done" while the order exists: a documented G2 limit. CI runs each demo twice from its seed, in B0, G1 and G2, and compares every record by digest.
+
+## Viewer
+
+The viewer shows the runs on your PostgreSQL server: each run's timeline and five-property scorecard, and a demo's B0 and G2 runs side by side (record 0012). It only reads. It needs Node 26, the current LTS line, and npm, to build its frontend once.
+
+```
+make viewer-build   # install the viewer's locked npm packages and build its frontend
+make demo           # run the demos; each run lists itself in the run registry
+make viewer         # serve the viewer on http://127.0.0.1:8300
+```
+
+What it shows:
+
+- **Runs:** every run database the run registry lists, newest first. Each B0 run is paired with the G2 run of the same scenario, contract level and seed, as the demos run them; any two runs can be compared.
+- **A run:** its scorecard, from the evaluator: each property's verdict, reason codes and failed checks, the intents property 4 excuses, and how each claim of the report was judged. Its timeline: every message on every hop with its fate, the faults that fired, the scripted humans' actions, the reports and, in G1 and G2, the gateway's action events. Events go by virtual time; at one virtual time, harness events come before gateway events, and `=` marks every event that shares its virtual time with another, because which came first is then not known. Messages can be filtered by hop. Last, the effects ledger and the fact history.
+- **Side by side:** two runs aligned by virtual time, each with the agent's view (what the agent sent and was sent, the faults that hit it, its final report) beside its ledger (each effect and fact change). In demo 1, B0's resumed agent orders again and the budget goes over its limit; G2's resumed agent gets the order the gateway already confirmed.
+
+The run registry is a small database, `fivefold_registry` (set `FIVEFOLD_REGISTRY_DB` for another), with one row per run database. Every run writes its row as it starts: demos, studies, recorded playback and tests. A study's dropped episode database leaves the registry. `python -m fivefold.harness.migrations bootstrap` creates the registry; the demo, study and recorder commands do so too.
+
+The viewer connects to the server `FIVEFOLD_ADMIN_DSN` names, always as `ff_viewer`, which can only select, in read-only transactions. It opens only databases the registry lists, and reads only their `sim`, `gw`, `harness` and `eval` schemas. Its API answers JSON to `GET` only: `/api/runs`, `/api/runs/DATABASE` (the run and its scorecard), `/api/runs/DATABASE/timeline` and `/api/runs/DATABASE/ledger`. A run is named by its database, since a recording and its replay share a run id.
+
+With Docker Compose, `docker compose up viewer` builds the frontend and the API into one image and serves the viewer on 127.0.0.1:8300 against the Compose database.
+
+To work on the frontend, `cd viewer`, then `npm run dev` serves it with hot reload on port 5173 and passes `/api` to a viewer on port 8300; `npm test` runs the Vitest tests, `npm run lint` runs ESLint, and `npm run build` type checks and builds. `make viewer-e2e` checks a running viewer in Chromium against a demo's runs and saves a screenshot of the side-by-side page; it needs Playwright's Chromium (`npx playwright install chromium`, once).
 
 ## Studies and reports
 
@@ -295,7 +319,7 @@ curl -X POST http://HOST/admin/escalations/ESC-0001/resolve \
 
 ## Development
 
-You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Docker Compose can run the database for you.
+You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Docker Compose can run the database for you. The viewer's frontend also needs Node 26 and npm; the Python tests never do.
 
 ```
 make setup      # install the locked dependencies into .venv
