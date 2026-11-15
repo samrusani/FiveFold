@@ -97,7 +97,7 @@ Detail: 0007.
 | Agent | LangGraph with its Postgres checkpointer |
 | Models | Adapters: scripted (no network), live (Ollama through `langchain-ollama` now; one API provider to come, as one more entry in the live adapter's provider table), replay (cassettes). A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file, and always records a cassette |
 | Tests | pytest; Hypothesis rule-based state machines |
-| Packaging | Docker Compose; `make demo` runs demo 1 with the scripted model and needs no API key |
+| Packaging | Docker Compose; `make demo` runs the four demos of record 0006 (1, 2a, 2b and 3) for B0 and G2 with the scripted model, and needs no API key |
 | Viewer | React and TypeScript over a read-only API; tooling decided at M3 |
 | Formal model (v0.2) | TLA+ checked with TLC |
 
