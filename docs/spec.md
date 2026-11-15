@@ -1,6 +1,6 @@
 # Technical spec
 
-Fivefold is a set of Python services around one Postgres database per run, plus a React viewer. In gateway configurations the agent holds no simulator credential, and only the simulator's and the harness's records count as truth.
+FiveFold is a set of Python services around one Postgres database per run, plus a React viewer. In gateway configurations the agent holds no simulator credential, and only the simulator's and the harness's records count as truth.
 
 Status: M0 decisions accepted, 14 Nov 2026. This spec states the contracts. Decision records 0001 to 0009 in `docs/adr/` hold the reasoning and the full detail, and that detail is binding too. Contract changes go through a new decision record that the maintainer approves.
 

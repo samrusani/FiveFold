@@ -1,6 +1,6 @@
 # Limitations
 
-What each of Fivefold's guarantees depends on, and the limits known so far. The guarantees are those of the gateway in configuration G2. Decision records are cited by number and live in [adr/](adr/README.md).
+What each of FiveFold's guarantees depends on, and the limits known so far. The guarantees are those of the gateway in configuration G2. Decision records are cited by number and live in [adr/](adr/README.md).
 
 Status: written for v0.1 on 15 Nov 2026. It states the accepted records 0001 to 0011, 0013 and 0014 as written. It draws nothing yet from record 0012 (viewer tooling), whose work is not merged.
 
@@ -162,7 +162,7 @@ When G2 cannot settle an outcome safely, it escalates to a human, and its automa
 3. **B0 has no F10 cells.** F10 changes status answers, and B0's scripted agent never calls the status tool, so F10 never fires in B0. Record 0006's B0 column for F10 reads "same, if the agent calls the status tool". G1 has no F10 cell either: its gateway never probes, and its agent has no status tool (`faults/expected.yaml`).
 4. **F8 is deferred to v0.2.** Memory correction after a proposal is not tested. F7 exercises property 3 in the meantime (0006).
 5. **One domain.** v0.1 covers procurement only: quotes, suppliers, budgets, approvals, purchase orders and inventory reservations ([product](product.md), Scope). The expected outcomes cover one development scenario, dev-001, a task with one intent (0006).
-6. **A fixed fault catalog.** Faults fire at named points, on per-point event counters, never on wall-clock time (0006). Fivefold is not a general chaos tool ([product](product.md), Scope), so failures outside the catalog are not tested.
+6. **A fixed fault catalog.** Faults fire at named points, on per-point event counters, never on wall-clock time (0006). FiveFold is not a general chaos tool ([product](product.md), Scope), so failures outside the catalog are not tested.
 7. **The split topology is not deterministic** (0009; see [Virtual time](#virtual-time)). It fires faults only on the network and in the simulator, so it refuses F1, F3, F9 and F11, and F6 and F7 early in G1 and G2. It runs one agent worker, its services must share one host, and each service must start once per run: its fault counters live in its memory, so a service started again mid-run fires a fault again from its first occurrence. It counts no tokens and no cost, since it runs no model ([README](../README.md#bring-your-own-agent-split-topology)).
 8. **Failed is final, and nothing is undone.** A commit after Failed happens only when the destination breaks its contract; G2 does not reverse Failed, and the evaluator still scores the ledger (0003). v0.1 has no compensation: if one intent's effect commits and another's fails, nothing is undone, and the report must say so (0004).
 9. **An agent cannot withdraw a live proposal.** It waits for the approval, a denial or the approval timeout (0001).

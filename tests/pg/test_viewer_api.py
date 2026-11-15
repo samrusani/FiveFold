@@ -302,10 +302,11 @@ def test_a_registry_that_cannot_be_read_is_503(admin_dsn: str, db_prefix: str) -
 def test_the_built_frontend_is_served_and_its_absence_is_explained(
     admin_dsn: str, tmp_path: Path
 ) -> None:
-    (tmp_path / "index.html").write_text("<!doctype html><title>Fivefold</title>", "utf-8")
+    (tmp_path / "index.html").write_text("<!doctype html><title>FiveFold</title>", "utf-8")
     built = TestClient(create_app(RunSource(admin_dsn, registry_database()), static=tmp_path))
-    assert built.get("/").text == "<!doctype html><title>Fivefold</title>"
+    assert built.get("/").text == "<!doctype html><title>FiveFold</title>"
     absent = TestClient(create_app(RunSource(admin_dsn, registry_database()), static=None))
     response = absent.get("/")
     assert response.status_code == 404
     assert "npm run build" in response.text
+    assert "<title>FiveFold viewer</title>" in response.text

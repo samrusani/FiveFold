@@ -172,7 +172,7 @@ def admin_app(admin: GatewayAdmin, records: GatewayRecords, *, token: str) -> Fa
             "a bearer token holds letters, digits and -._~+/, then any number of = (RFC 6750)"
         )
     app = FastAPI(
-        title="Fivefold gateway admin API",
+        title="FiveFold gateway admin API",
         openapi_url=None,
         docs_url=None,
         redoc_url=None,

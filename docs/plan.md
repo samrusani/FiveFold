@@ -44,7 +44,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 
 - [x] Maintainer: write the action contract: what one logical action is, the action_key fields, what a grant permits (decision records 0001 and 0002)
 - [x] Maintainer: define the five properties as checks over ground truth (decision record 0004)
-- [x] Maintainer: choose the name and license (Fivefold, Apache-2.0)
+- [x] Maintainer: choose the name and license (FiveFold, Apache-2.0)
 - [x] T1: gw schema with migrations; action and grant tables with unique constraints, and the Postgres store tested against the in-memory one
 - [x] T1: state machine module with the transition table and I1 to I7 as assertions, tested by Hypothesis in memory and against PostgreSQL
 - [x] T2: purchase-order service with the idempotency_key capability (C2), the effects ledger and fact history, plus policy approvals in the approvals service

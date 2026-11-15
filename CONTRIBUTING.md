@@ -1,6 +1,6 @@
 # Contributing
 
-Fivefold is working toward its first release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
+FiveFold is working toward its first release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
 
 ## How decisions are made
 
@@ -30,4 +30,4 @@ Short sentences, plain words, specific numbers with units. No em dashes. Cite pa
 
 ## License
 
-Fivefold is licensed under the Apache License 2.0. By contributing, you agree that your contributions are licensed under the same terms.
+FiveFold is licensed under the Apache License 2.0. By contributing, you agree that your contributions are licensed under the same terms.

@@ -4,7 +4,7 @@ Rules for every coding agent working in this repo.
 
 ## What this is
 
-Fivefold is an open-source test suite and reference gateway. It checks whether AI agents act correctly under failure: every real-world action happens exactly once, with valid authority, on fresh inputs, is actually committed, and is honestly reported.
+FiveFold is an open-source test suite and reference gateway. It checks whether AI agents act correctly under failure: every real-world action happens exactly once, with valid authority, on fresh inputs, is actually committed, and is honestly reported.
 
 Read these before writing code, in this order:
 
