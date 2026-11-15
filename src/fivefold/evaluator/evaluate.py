@@ -9,11 +9,19 @@ intents property 4 excuses, and gives the run verdict:
 | pass | All five properties pass, and no claim is `unknown` |
 | pass_unresolved | All five properties pass, and at least one claim is `unknown` |
 | fail | Any property fails |
+
+Each result records the run's provenance (0004, Metrics): the scenario's digest, the
+config hash (`config_hash`), the contract level, the seed, the model, the cassette's
+digest and the code version.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from importlib import metadata
+
+from pydantic import JsonValue
 
 from fivefold.domain.report import ClaimStatus
 from fivefold.evaluator.authorization import check_authorized_at_commit
@@ -40,6 +48,21 @@ def code_version() -> str:
         return metadata.version(PACKAGE)
     except metadata.PackageNotFoundError:
         return "unknown"
+
+
+def config_hash(*, config: str, contract: str, topology: str, params: JsonValue) -> str:
+    """The SHA-256 of the run config, as the harness records it in `harness.run`: the
+    configuration, the contract level, the topology and the params, in canonical JSON
+    (sorted keys, no spaces), as for the scenario digest.
+
+    The params hold the values the run used, its fault plan with the parameters it drew
+    from its seed, and its number of agent workers (0009). The result records the
+    scenario's digest, the seed, the model, the cassette's digest and the code version on
+    their own, so the hash leaves them out (0004, Metrics).
+    """
+    run_config = {"config": config, "contract": contract, "topology": topology, "params": params}
+    text = json.dumps(run_config, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def run_verdict(properties: tuple[PropertyResult, ...], report: CountedReport | None) -> Verdict:
@@ -90,6 +113,12 @@ def evaluate(records: RunRecords) -> RunResult:
             cassette_digest=run.cassette_digest,
             parent_run_id=run.parent_run_id,
             branch_point=run.branch_point,
+            config_hash=config_hash(
+                config=str(run.config),
+                contract=str(run.contract),
+                topology=run.topology,
+                params=run.params,
+            ),
             params=run.params,
             end_vt=records.end_vt(),
         ),

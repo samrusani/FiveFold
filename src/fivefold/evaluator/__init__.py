@@ -19,7 +19,7 @@ Markdown report (`report`; `python -m fivefold.evaluator report`).
 """
 
 from fivefold.evaluator.checks import CLAIM_METRICS
-from fivefold.evaluator.evaluate import evaluate, run_verdict
+from fivefold.evaluator.evaluate import config_hash, evaluate, run_verdict
 from fivefold.evaluator.evidence import (
     IntentKnowledge,
     Knowledge,
@@ -109,6 +109,7 @@ __all__ = [
     "SubmittedReport",
     "Verdict",
     "WrongRole",
+    "config_hash",
     "evaluate",
     "evaluate_run",
     "facts_without_effects",
