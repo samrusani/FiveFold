@@ -15,7 +15,8 @@ Typical use, after the run has stopped:
 `load_run` and `evaluate` split that into reading and pure scoring; `write_result`
 stores a result in the `eval` schema. Across runs, `load_results` reads saved result
 files, and `runs_csv` and `markdown_report` write a CSV with one row per run and a
-Markdown report (`report`; `python -m fivefold.evaluator report`).
+Markdown report, with each run's cost when given a price file (`report`; `python -m
+fivefold.evaluator report`).
 """
 
 from fivefold.evaluator.checks import CLAIM_METRICS
@@ -48,11 +49,14 @@ from fivefold.evaluator.records import (
     SubmittedReport,
 )
 from fivefold.evaluator.report import (
+    COST_COLUMN,
     CSV_COLUMNS,
     METRICS,
     ReportError,
+    load_prices,
     load_results,
     markdown_report,
+    run_cost,
     runs_csv,
 )
 from fivefold.evaluator.result import (
@@ -74,6 +78,7 @@ from fivefold.evaluator.store import EVALUATOR_ROLE, WrongRole, evaluate_run, wr
 
 __all__ = [
     "CLAIM_METRICS",
+    "COST_COLUMN",
     "CSV_COLUMNS",
     "EVALUATOR_ROLE",
     "METRICS",
@@ -115,10 +120,12 @@ __all__ = [
     "evaluate",
     "evaluate_run",
     "facts_without_effects",
+    "load_prices",
     "load_results",
     "load_run",
     "markdown_report",
     "result_json",
+    "run_cost",
     "run_verdict",
     "runs_csv",
     "stack_knowledge",

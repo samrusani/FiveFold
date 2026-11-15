@@ -12,8 +12,10 @@ the tokens its model calls used.
   scripted reply does (0009). A call the spend cap refused was never sent, so it has no
   tokens and counts 0 too.
 
-Each property's own metrics are in its module. Recovery latency, and cost and cost per
-passing run, are not computed yet.
+Each property's own metrics are in its module. Cost and cost per passing run need a price
+file, which a run's result does not hold, so the report across runs computes them from
+the tokens (`fivefold.evaluator.report`). Recovery latency is not computed yet: it waits
+for record 0014.
 """
 
 from __future__ import annotations

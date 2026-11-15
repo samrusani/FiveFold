@@ -1,15 +1,24 @@
 """The evaluator's command line: `python -m fivefold.evaluator`.
 
     python -m fivefold.evaluator report results/ --csv runs.csv --markdown report.md
+    python -m fivefold.evaluator report results/ --markdown report.md \
+        --prices prices/example.yaml
 
 `report` reads saved run results, each a JSON file as `result_json` writes it: the files
 given, and every `.json` file directly in each directory given. It writes the CSV across
 runs, the Markdown report, or both (record 0004, Metrics; `fivefold.evaluator.report`).
 The same results give the same bytes whatever order they are given in.
 
-A refused input, such as a file that is not a valid run result, ends the command with one
+`--prices` names a price file, in the format of `prices/example.yaml`
+(`fivefold.domain.prices`). With it, the CSV gains each run's cost in USD, and the report
+a cost table with the cost per passing run. Without it, the report says that cost is not
+computed.
+
+A refused input, such as a file that is not a valid run result, a file that is not a
+price file, or a run whose model the price file does not price, ends the command with one
 line on standard error and exit status 1, and nothing is written. So does an output that
-names a result file the command reads, or the other output, through any path or link.
+names a result file the command reads, the price file, or the other output, through any
+path or link.
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ from pathlib import Path
 
 from fivefold.evaluator.report import (
     ReportError,
+    load_prices,
     load_results,
     markdown_report,
     result_files,
@@ -36,9 +46,12 @@ def same_file(path: Path, other: Path) -> bool:
     return path.exists() and other.exists() and path.samefile(other)
 
 
-def check_outputs(outputs: Sequence[Path], inputs: Sequence[Path]) -> None:
-    """Refuse an output that names one of the result files `inputs`, or another output, so
-    that writing a report never replaces a saved result or the other output."""
+def check_outputs(
+    outputs: Sequence[Path], inputs: Sequence[Path], prices: Path | None = None
+) -> None:
+    """Refuse an output that names one of the result files `inputs`, the price file
+    `prices`, or another output, so that writing a report never replaces a file it reads
+    or the other output."""
     for number, output in enumerate(outputs):
         for other in outputs[number + 1 :]:
             if same_file(output, other):
@@ -46,6 +59,8 @@ def check_outputs(outputs: Sequence[Path], inputs: Sequence[Path]) -> None:
         for source in inputs:
             if same_file(output, source):
                 raise ReportError(f"{output} would replace the result file {source}")
+        if prices is not None and same_file(output, prices):
+            raise ReportError(f"{output} would replace the price file {prices}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -72,22 +87,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     report.add_argument(
         "--markdown", type=Path, metavar="PATH", help="where to write the Markdown report"
     )
+    report.add_argument(
+        "--prices",
+        type=Path,
+        metavar="PATH",
+        help="a price file, as prices/example.yaml: adds each run's cost to the CSV and the"
+        " cost per passing run to the report",
+    )
     args = parser.parse_args(argv)
     csv_path: Path | None = args.csv
     markdown_path: Path | None = args.markdown
+    prices_path: Path | None = args.prices
     if csv_path is None and markdown_path is None:
         report.error("give --csv, --markdown or both")
     if csv_path is not None and markdown_path is not None and csv_path == markdown_path:
         report.error("--csv and --markdown name the same file")
     try:
         targets = [path for path in (csv_path, markdown_path) if path is not None]
-        check_outputs(targets, result_files(args.results))
+        check_outputs(targets, result_files(args.results), prices_path)
         results = load_results(args.results)
+        prices = None if prices_path is None else load_prices(prices_path)
         outputs: list[tuple[Path, str]] = []
         if csv_path is not None:
-            outputs.append((csv_path, runs_csv(results)))
+            outputs.append((csv_path, runs_csv(results, prices)))
         if markdown_path is not None:
-            outputs.append((markdown_path, markdown_report(results)))
+            outputs.append((markdown_path, markdown_report(results, prices)))
         for path, text in outputs:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(text.encode("utf-8"))

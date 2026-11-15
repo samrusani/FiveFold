@@ -16,8 +16,9 @@ always be enforced (`fivefold.agents.live`). A price file is YAML:
   million output tokens. A price is an exact decimal, at least 0. Quote model names: YAML
   reads some unquoted names, such as `1:30`, as numbers.
 
-`prices/example.yaml` is the example the repository ships. The evaluator will compute
-record 0004's cost metrics from the same format, so this module reads only plain data.
+`prices/example.yaml` is the example the repository ships. The evaluator's report computes
+record 0004's cost metrics from the same format (`fivefold.evaluator.report`), so this
+module reads only plain data.
 
 Checked in pydantic 2.14.3: `Field` takes `ge` and `allow_inf_nan` (`fields.py`), and a
 `Decimal` field passes them to `decimal_schema` (`pydantic_core/core_schema.py`). Observed
