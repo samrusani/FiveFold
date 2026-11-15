@@ -26,7 +26,11 @@ JsonValue = object
 
 Kind = Literal["request", "answer", "notification"]
 Fate = Literal["delivered", "dropped"]
-DropReason = Literal["fault", "receiver_down", "caller_timed_out", "caller_crashed"]
+DropReason = Literal[
+    "fault", "receiver_down", "caller_timed_out", "caller_crashed", "answer_to_copy"
+]
+"""Why a message was dropped. `answer_to_copy` is the answer to a request the transport
+delivered a second time (F4): the transport never delivers it to the sender (0006)."""
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,9 @@ class MessageRecord:
     drop_reason: DropReason | None = None
     delivered_seq: int | None = None
     delivered_vt: int | None = None
+    copy_of: int | None = None
+    """For a copy that the transport made of a request (F4), the seq of that request. Its
+    sender sent the request once; the copy is the second delivery (0006)."""
 
 
 @dataclass(frozen=True)
@@ -298,8 +305,8 @@ class PgHarnessLog(HarnessLog):
             raise ValueError("a message has no fate when it is sent")
         self._conn.execute(
             "INSERT INTO harness.message_log (seq, hop, kind, sender, receiver, api,"
-            " correlation, intent_id, idempotency_key, answer_class, body, sent_vt)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " correlation, intent_id, idempotency_key, answer_class, body, sent_vt, copy_of)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 record.seq,
                 record.hop,
@@ -313,6 +320,7 @@ class PgHarnessLog(HarnessLog):
                 record.answer_class,
                 Jsonb(record.body),
                 record.sent_vt,
+                record.copy_of,
             ),
         )
 

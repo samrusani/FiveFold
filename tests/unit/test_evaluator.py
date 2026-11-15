@@ -349,6 +349,20 @@ class World:
         self.messages[message.seq] = dropped
         return dropped
 
+    def copy(self, request: Message, *, deliver: bool = True) -> Message:
+        """A copy the transport made of `request` when it delivered it twice (F4)."""
+        copied = dataclasses.replace(
+            request,
+            seq=self.next(),
+            copy_of=request.seq,
+            fate=None,
+            drop_reason=None,
+            delivered_seq=None,
+            delivered_vt=None,
+        )
+        self.messages[copied.seq] = copied
+        return self.deliver(copied) if deliver else copied
+
     def request(
         self,
         intent_id: str = "REQ-1",
@@ -1196,6 +1210,68 @@ def test_knowledge_is_computed_for_every_task_intent_in_scenario_order() -> None
     assert list(found) == ["REQ-1", "REQ-2"]
     assert found["REQ-1"].knowledge is Knowledge.NOT_COMMITTED
     assert found["REQ-2"].known_effects == ("RS-0001",)
+
+
+# Copies (F4) -----------------------------------------------------------------------------
+
+
+def test_a_copy_of_a_write_is_not_a_request_the_stack_sent() -> None:
+    """F4 at C0: the transport delivered the order twice and the destination committed
+    both. The stack sent one request, heard of one effect, and claims it."""
+    world = World(Config.G2, Contract.C0)
+    order = world.request()
+    world.committed(order, world.commit(order))
+    copy = world.copy(order)
+    world.committed(copy, world.commit(copy), fate="dropped")
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
+    result = world.evaluate()
+    assert result.report is not None
+    assert [finding.seq for finding in result.report.claims[0].requests] == [order.seq]
+    assert _claim(result) == (Knowledge.COMMITTED, True)
+    assert _failing(result) == (1, 2, 3)
+
+
+def test_not_done_after_a_rejection_stays_justified_when_a_copy_went_unanswered() -> None:
+    """The stack's request was rejected. Its copy was rejected too, but the copy's answer
+    never reaches the stack; it was never the stack's request, so it leaves nothing
+    unknown."""
+    world = World(Config.G2, Contract.C3)
+    order = world.request()
+    world.rejected(order)
+    world.rejected(world.copy(order), fate="dropped")
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _claim(result) == (Knowledge.NOT_COMMITTED, True)
+    assert result.property_result(5).verdict is PropertyVerdict.PASS
+
+
+def test_an_answer_to_a_copy_is_never_evidence_even_if_logged_as_delivered() -> None:
+    """The transport never delivers it (0006); a log that says otherwise proves nothing."""
+    world = World(Config.G2, Contract.C0)
+    order = world.request()
+    world.committed(order, world.commit(order), fate="dropped")
+    copy = world.copy(order)
+    world.committed(copy, world.commit(copy))
+    world.report({"REQ-1": ("unknown", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _claim(result) == (Knowledge.UNKNOWABLE, True)
+    assert result.report is not None and result.report.claims[0].known_effects == ()
+
+
+def test_a_report_that_a_copy_carried_never_counts() -> None:
+    """B0: the sink recorded the report twice, once from the copy. The stack submitted it
+    once, so evidence that reached it after that submission cannot judge the report."""
+    world = World(Config.B0)
+    order = world.request()
+    first = world.report({"REQ-1": ("unknown", ()), **DONE_NOTHING}, vt=1_100)
+    world.committed(order, world.commit(order), vt=1_200)
+    carried = world.messages[first.message_seq or 0]
+    copy = world.copy(carried)
+    world.reports.append(dataclasses.replace(first, seq=world.next(), message_seq=copy.seq))
+    result = world.evaluate()
+    assert result.report is not None
+    assert (result.report.seq, result.report.message_seq) == (first.seq, carried.seq)
+    assert _claim(result) == (Knowledge.UNKNOWABLE, True)
 
 
 # Property 2 ------------------------------------------------------------------------------

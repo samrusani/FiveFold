@@ -14,6 +14,9 @@ The harness's conventions that the property checks rely on (0006, 0008):
   in G modes, `agent_sim` in baselines.
 - A message's body is the request or answer as sent. On `gw_sim` and `agent_sim` it is
   the simulator API's JSON (`fivefold.domain.api`).
+- A message with `copy_of` set is a copy the transport made of that request when it
+  delivered it twice (F4, 0006). Its sender sent the request once, so a copy is never a
+  request the stack sent, and the answer to a copy is never evidence.
 - The approvals service records a decision that policy makes on arrival with the actor
   `policy` (`fivefold.domain.authority.POLICY_ACTOR`). Any other actor that decides is a
   human: the scripted approver in deterministic runs (0002, rules 6 and 7).
@@ -260,6 +263,7 @@ class Message:
 
     `seq` numbers its send and `delivered_seq` its delivery, on the harness's one event
     counter. `correlation` is, for an answer, the seq of the request it answers.
+    `copy_of` is, for a copy the transport made (F4), the seq of the request it repeats.
     """
 
     seq: int
@@ -278,6 +282,7 @@ class Message:
     drop_reason: str | None = None
     delivered_seq: int | None = None
     delivered_vt: int | None = None
+    copy_of: int | None = None
 
     def delivered_before(self, seq: int) -> bool:
         """Whether the message was delivered before harness event `seq`."""

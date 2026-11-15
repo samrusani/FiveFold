@@ -69,6 +69,9 @@ class Action(StrEnum):
     START_WORKER = "start_worker"
     """Start another agent worker on the same task (F9). In the `different_args`
     variant, it chooses the second-cheapest acceptable option."""
+    DUPLICATE = "duplicate"
+    """Deliver the request a second time, `copy_delay_ms` after the first (F4). The
+    transport never delivers the answer to the copy."""
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,9 @@ class FaultKind:
     baseline_points: frozenset[str] = frozenset()
     """Points where only the fault's B0 equivalent fires (0006, B0 equivalent column),
     beyond those on the B0-only hop: a G-mode plan may not use them."""
+    seeded: Mapping[str, tuple[int, int]] = field(default_factory=dict)
+    """Parameters whose default the run draws from its `faults` generator, with the
+    lowest and highest value it may draw (0009). A plan may also set them."""
 
 
 EARLY_POINTS = frozenset({"gw.dispatch.before_check", "net.agent_sim.answer"})
@@ -176,6 +182,15 @@ BUILT: Mapping[FaultId, FaultKind] = {
         frozenset({"net.agent_gw.request", "net.gw_sim.request", "net.agent_sim.request"}),
         Action.DROP,
         {},
+    ),
+    FaultId.F4: FaultKind(
+        FaultId.F4,
+        "Duplicate delivery",
+        frozenset({"net.agent_gw.request", "net.gw_sim.request", "net.agent_sim.request"}),
+        Action.DUPLICATE,
+        {},
+        minimums={"copy_delay_ms": 0},
+        seeded={"copy_delay_ms": (5, 50)},
     ),
 }
 """The faults this build can inject, with the points 0006 allows for each."""

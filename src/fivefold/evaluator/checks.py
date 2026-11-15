@@ -123,9 +123,12 @@ def counted_report(records: RunRecords) -> Counted | None:
     """The last valid report before the run stopped, or None when there is none (0004).
 
     Validity is the report schema (`fivefold.domain.report`) against the task's intents.
-    The harness's report sink records its own verdict; the two must agree.
+    The harness's report sink records its own verdict; the two must agree. A report that
+    a copy carried (F4) is not one the stack submitted, so it never counts: the stack
+    submitted that report once, in the request the copy repeats.
     """
     intents = [intent.id for intent in records.scenario.intents]
+    copies = {message.seq for message in records.messages if message.copy_of is not None}
     found: tuple[SubmittedReport, FinalReport] | None = None
     for record in sorted(records.reports, key=lambda record: record.seq):
         try:
@@ -137,7 +140,7 @@ def counted_report(records: RunRecords) -> Counted | None:
                 f"report {record.seq} is marked {'valid' if record.valid else 'invalid'},"
                 " but the report schema says otherwise"
             )
-        if parsed is not None:
+        if parsed is not None and record.message_seq not in copies:
             found = (record, parsed)
     if found is None:
         return None

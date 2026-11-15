@@ -8,7 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from fivefold.faults.catalog import BUILT, POINTS, FaultId
-from fivefold.faults.plan import FaultInjector, check_configuration, parse_plan
+from fivefold.faults.plan import (
+    FaultInjector,
+    check_configuration,
+    parse_plan,
+    seed_parameters,
+)
+from fivefold.harness.rng import Generators
 
 DEMO_1 = [
     {
@@ -256,3 +262,71 @@ def test_each_fault_is_accepted_where_its_configuration_has_the_point() -> None:
     )
     check_configuration(gateway, gateway=True)
     check_configuration(baseline, gateway=False)
+
+
+# F4: duplicate delivery ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "point", ["net.agent_gw.request", "net.gw_sim.request", "net.agent_sim.request"]
+)
+def test_f4_is_built_at_each_hops_request_point(point: str) -> None:
+    (planned,) = parse_plan([{"fault": "F4", "at": {"point": point}}])
+    assert point in planned.kind.points
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ({"fault": "F4", "at": {"point": "net.gw_sim.answer"}}, "F4 does not fire at"),
+        ({"fault": "F4", "variant": "gw_sim", "at": {"point": "net.gw_sim.request"}}, "no variant"),
+        (
+            {"fault": "F4", "at": {"point": "net.gw_sim.request"}, "params": {"copy_delay_ms": -1}},
+            "copy_delay_ms must be at least 0",
+        ),
+    ],
+)
+def test_f4_where_or_how_the_catalog_does_not_allow_is_refused(
+    entry: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        parse_plan([entry])
+
+
+def test_f4s_copy_delay_is_drawn_from_the_runs_fault_generator_when_the_plan_omits_it() -> None:
+    """0006: `copy_delay_ms` defaults to a seeded draw from 5 to 50 (0009, never global)."""
+    plan = parse_plan(
+        [
+            {"fault": "F4", "at": {"point": "net.gw_sim.request"}},
+            {"fault": "F4", "at": {"point": "net.agent_gw.request"}},
+            {"fault": "F4", "at": {"point": "net.gw_sim.request"}, "params": {"copy_delay_ms": 0}},
+            {"fault": "F2", "at": {"point": "net.gw_sim.answer"}},
+        ]
+    )
+    with pytest.raises(ValueError, match="drawn when the run starts"):
+        plan[0].param("copy_delay_ms")
+    seeded = seed_parameters(plan, Generators(7).get("faults"))
+    drawn = [planned.param("copy_delay_ms") for planned in seeded[:3]]
+    assert all(5 <= delay <= 50 for delay in drawn[:2]) and drawn[2] == 0
+    assert seeded[3] == plan[3], "a fault without seeded parameters is left as it is"
+    again = seed_parameters(plan, Generators(7).get("faults"))
+    assert [planned.params for planned in again] == [planned.params for planned in seeded]
+    others = {
+        seed_parameters(plan, Generators(seed).get("faults"))[0].param("copy_delay_ms")
+        for seed in range(30)
+    }
+    assert len(others) > 1, "the delay follows the seed"
+
+
+@pytest.mark.parametrize(
+    ("point", "gateway"),
+    [
+        ("net.agent_gw.request", False),
+        ("net.gw_sim.request", False),
+        ("net.agent_sim.request", True),
+    ],
+)
+def test_f4_copies_only_on_the_configurations_hops(point: str, gateway: bool) -> None:
+    plan = parse_plan([{"fault": "F4", "at": {"point": point}}])
+    with pytest.raises(ValueError, match=re.escape(f"F4 at {point}")):
+        check_configuration(plan, gateway=gateway)

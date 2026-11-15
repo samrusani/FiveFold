@@ -29,6 +29,7 @@ BELOW_C3 = (Contract.C0, Contract.C1, Contract.C2)
 G2_LIMITS: dict[tuple[str, str | None, Contract], tuple[str, tuple[int, ...]]] = {
     ("F1", "b", Contract.C0): ("fail", (4,)),
     ("F12", "gw_sim", Contract.C0): ("fail", (4,)),
+    **{("F4", "gw_sim", level): ("fail", (1, 2, 3)) for level in (Contract.C0, Contract.C1)},
     **{("F6", "late", level): ("fail", (2,)) for level in BELOW_C3},
     **{("F7", "late_price_up", level): ("fail", (3,)) for level in BELOW_C3},
     ("F2", None, Contract.C0): ("pass_unresolved", ()),
@@ -44,6 +45,10 @@ because it checks nothing before writing."""
 B0_PASSES = frozenset({"F1", "F10", "F12"})
 """0006: B0 should pass F1, F7 `harmless`, F10 and F12."""
 
+HOP_VARIANTS = frozenset({"F4", "F12"})
+"""Faults whose cells name a hop. B0's hop, `agent_sim`, is the B0 equivalent of either
+G-mode hop (0006), so their B0 and G2 cells compare by contract level alone."""
+
 
 def test_the_expected_outcomes_name_the_dev_scenario_and_what_is_evaluated() -> None:
     assert EXPECTED.scenario == load_scenario_file(DEV_001).id
@@ -55,17 +60,15 @@ def test_the_expected_outcomes_name_the_dev_scenario_and_what_is_evaluated() -> 
 def test_each_fault_but_f1_f10_and_f12_has_a_cell_where_b0_fails_and_g2_passes() -> None:
     """CLAUDE.md, Tests; 0006: the comparison the suite exists to show."""
     faults = {cell.fault for cell in EXPECTED.cells} - {"F1", "F10", "F12"}
+
+    def where(cell: Cell) -> tuple[str | None, str]:
+        return (None if cell.fault in HOP_VARIANTS else cell.variant, str(cell.contract))
+
     for fault in sorted(faults):
-        outcomes = {
-            (cell.variant, str(cell.contract), cell.config): cell.verdict
-            for cell in EXPECTED.cells
-            if cell.fault == fault
-        }
-        assert any(
-            outcomes.get((variant, contract, "B0")) == "fail" and verdict == "pass"
-            for (variant, contract, config), verdict in outcomes.items()
-            if config == "G2"
-        ), fault
+        cells = [cell for cell in EXPECTED.cells if cell.fault == fault]
+        b0_fails = {where(c) for c in cells if c.config == "B0" and c.verdict == "fail"}
+        g2_passes = {where(c) for c in cells if c.config == "G2" and c.verdict == "pass"}
+        assert b0_fails & g2_passes, fault
 
 
 def test_the_cells_agree_with_the_outcomes_record_0006_fixes() -> None:

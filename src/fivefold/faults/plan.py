@@ -4,12 +4,17 @@ A plan is a fixed list. Each entry names a fault, a point, an optional match on 
 event's fields and an occurrence number: the fault fires the Nth time the point is
 reached with a matching event in this run. Each entry keeps its own counter, so new
 unrelated events never shift a plan, and faults never fire on wall-clock time.
+
+Before a run starts, `check_configuration` refuses a plan that the run's configuration
+cannot carry out, and `seed_parameters` draws each seeded parameter the plan leaves
+unset, such as F4's `copy_delay_ms`, from the run's `faults` generator (0009). The run
+records the plan with the values it drew.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -45,11 +50,13 @@ class PlannedFault(BaseModel):
             raise ValueError(f"{self.fault} cannot be injected by this build yet")
         if self.at.point not in kind.points:
             raise ValueError(f"{self.fault} does not fire at {self.at.point} (0006)")
-        unknown = sorted(set(self.params) - set(kind.params))
+        unknown = sorted(set(self.params) - set(kind.params) - set(kind.seeded))
         if unknown:
             raise ValueError(f"{self.fault} has no parameters {unknown}")
         for name, least in kind.minimums.items():
-            value = self.params.get(name, kind.params[name])
+            value = self.params.get(name, kind.params.get(name))
+            if value is None:
+                continue
             if not isinstance(value, int) or value < least:
                 raise ValueError(f"{self.fault} parameter {name} must be at least {least}")
         if self.variant is not None:
@@ -69,8 +76,17 @@ class PlannedFault(BaseModel):
         return BUILT[self.fault]
 
     def param(self, name: str) -> int:
-        """A numeric parameter, or its catalog default."""
-        value = self.params.get(name, self.kind.params[name])
+        """A numeric parameter, or its catalog default.
+
+        A seeded parameter the plan leaves unset has no value until `seed_parameters`
+        draws one.
+        """
+        if name in self.params:
+            value = self.params[name]
+        elif name in self.kind.seeded:
+            raise ValueError(f"{self.fault} parameter {name} is drawn when the run starts")
+        else:
+            value = self.kind.params[name]
         if not isinstance(value, int):
             raise ValueError(f"{self.fault} parameter {name} must be an integer")
         return value
@@ -95,6 +111,33 @@ def check_configuration(plan: Sequence[PlannedFault], *, gateway: bool) -> None:
     if wrong:
         where = "with a gateway" if gateway else "without a gateway"
         raise ValueError(f"not in a configuration {where}: {', '.join(wrong)} (0006, 0008)")
+
+
+class Draws(Protocol):
+    """A seeded generator, as the run's named generators are (0009)."""
+
+    def randint(self, a: int, b: int) -> int:
+        """A whole number from `a` to `b`, both included."""
+        ...
+
+
+def seed_parameters(plan: Sequence[PlannedFault], draws: Draws) -> tuple[PlannedFault, ...]:
+    """The plan, with each seeded parameter it leaves unset drawn from `draws` (0009).
+
+    Entries are seeded in plan order, and each entry's parameters in name order, so a
+    seed always gives the same values. A value the plan sets is kept.
+    """
+    seeded: list[PlannedFault] = []
+    for planned in plan:
+        drawn = {
+            name: draws.randint(low, high)
+            for name, (low, high) in sorted(planned.kind.seeded.items())
+            if name not in planned.params
+        }
+        if drawn:
+            planned = planned.model_copy(update={"params": {**planned.params, **drawn}})
+        seeded.append(planned)
+    return tuple(seeded)
 
 
 class Fired:

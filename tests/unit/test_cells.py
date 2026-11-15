@@ -6,15 +6,15 @@ from __future__ import annotations
 import pytest
 
 from fivefold.domain.contracts import Contract
-from fivefold.faults.plan import parse_plan
+from fivefold.faults.plan import check_configuration, parse_plan
 from fivefold.harness.cells import Cell, cell_plan, load_expected
 
 
-def cell(fault: str, variant: str | None, config: str) -> Cell:
+def cell(fault: str, variant: str | None, config: str, contract: Contract = Contract.C2) -> Cell:
     return Cell(
         fault=fault,
         variant=variant,
-        contract=Contract.C2,
+        contract=contract,
         config=config,
         verdict="pass",
         failing=(),
@@ -22,9 +22,10 @@ def cell(fault: str, variant: str | None, config: str) -> Cell:
 
 
 @pytest.mark.parametrize("expected", load_expected().cells, ids=lambda expected: expected.name)
-def test_every_committed_cells_plan_is_one_the_catalog_accepts(expected: Cell) -> None:
-    (planned,) = parse_plan(cell_plan(expected))
-    assert str(planned.fault) == expected.fault
+def test_every_committed_cells_plan_is_one_the_catalog_and_the_run_accept(expected: Cell) -> None:
+    planned = parse_plan(cell_plan(expected))
+    assert expected.fault in {str(entry.fault) for entry in planned}
+    check_configuration(planned, gateway=expected.config != "B0")
 
 
 @pytest.mark.parametrize(
@@ -85,3 +86,29 @@ def test_a_cell_fires_its_fault_where_record_0006_says(
 def test_a_cell_with_no_plan_is_refused(fault: str, variant: str, config: str) -> None:
     with pytest.raises(ValueError):
         cell_plan(cell(fault, variant, config))
+
+
+# F4 ----------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("variant", "config"), [("gw_sim", "G2"), ("agent_gw", "G2"), ("agent_sim", "B0")]
+)
+def test_f4_cells_copy_the_order_on_the_named_hop(variant: str, config: str) -> None:
+    (entry,) = cell_plan(cell("F4", variant, config))
+    assert entry == {
+        "fault": "F4",
+        "at": {
+            "point": f"net.{variant}.request",
+            "match": {"api": "submit_purchase_order"},
+            "occurrence": 1,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("variant", "config"), [("agent_sim", "G2"), ("gw_sim", "B0"), ("agent_gw", "B0")]
+)
+def test_an_f4_cell_on_a_hop_its_configuration_lacks_is_refused(variant: str, config: str) -> None:
+    with pytest.raises(ValueError, match="F4 cannot copy the order"):
+        cell_plan(cell("F4", variant, config))

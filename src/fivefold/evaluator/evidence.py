@@ -43,6 +43,9 @@ Readings of the harness's records that the decision records leave open:
 - A crash's `voided` list names message seqs; a voided message is never evidence.
 - A request's intent and idempotency key are read from its body, the request as sent;
   the log's columns must agree when both are set.
+- A copy the transport made of a request it delivered twice (F4, `copy_of` set) is not a
+  request the stack sent, and the answer to a copy is never evidence, even if a log
+  showed it delivered: the transport never delivers it (0006, transport rules).
 """
 
 from __future__ import annotations
@@ -190,6 +193,7 @@ def evidence_messages(records: RunRecords, t_r: int) -> list[Message]:
     delivery order."""
     config = records.run.config
     voided = {seq for fault in records.faults for seq in fault.voided}
+    copies = {message.seq for message in records.messages if message.copy_of is not None}
     found = [
         message
         for message in records.messages
@@ -199,6 +203,7 @@ def evidence_messages(records: RunRecords, t_r: int) -> list[Message]:
         and config.is_stack(message.receiver)
         and message.delivered_before(t_r)
         and message.seq not in voided
+        and message.correlation not in copies
     ]
     return sorted(found, key=lambda message: (message.delivered_seq or 0, message.seq))
 
@@ -210,6 +215,7 @@ def sent_writes(records: RunRecords, t_r: int) -> list[SentWrite]:
     for message in sorted(records.messages, key=lambda message: message.seq):
         if (
             message.kind != "request"
+            or message.copy_of is not None
             or message.hop != config.stack_hop
             or message.receiver != SIMULATOR
             or not config.is_stack(message.sender)
