@@ -35,10 +35,11 @@ ACTION_EVENTS: LiteralString = (
 
 
 def run(conn: Connection) -> dict[str, Any]:
-    """The run (`harness.run`) and when it stopped (`harness.run_stop`), if it has."""
+    """The run (`harness.run`), with its seed as its decimal text (`fivefold.viewer.app`),
+    and when it stopped (`harness.run_stop`), if it has."""
     row = conn.execute(
-        "SELECT run_id, scenario_id, scenario_digest, config, contract, seed, topology,"
-        " model_adapter, model, cassette_digest, parent_run_id, branch_point, params"
+        "SELECT run_id, scenario_id, scenario_digest, config, contract, seed::text AS seed,"
+        " topology, model_adapter, model, cassette_digest, parent_run_id, branch_point, params"
         " FROM harness.run"
     ).fetchone()
     if row is None:

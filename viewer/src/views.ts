@@ -154,6 +154,7 @@ export interface Pair {
  * side (record 0006). When the G2 run's database is named as the B0 run's with g2 for b0,
  * as the demos name theirs, that run is the only one paired; otherwise every G2 run that
  * fits is. A branch is a new experiment, not one of a demo's runs, so it is never paired.
+ * Seeds are compared as text: two seeds past 2**53 - 1 can be one JavaScript number.
  */
 export function pairs(listed: ListedRun[]): Pair[] {
   const found: Pair[] = [];

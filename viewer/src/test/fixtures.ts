@@ -329,7 +329,7 @@ export function registryRun(database: string, config: string): RegistryRun {
     scenario_id: "dev-001-single-po",
     config,
     contract: "C2",
-    seed: 7,
+    seed: "7",
     created_wall_at: "2026-11-15T09:59:32+00:00",
   };
 }
@@ -361,7 +361,7 @@ export function summary(database: string, config: string, card: Scorecard | null
       scenario_digest: "d",
       config,
       contract: "C2",
-      seed: 7,
+      seed: "7",
       topology: "inproc",
       model_adapter: "scripted",
       model: "scripted",

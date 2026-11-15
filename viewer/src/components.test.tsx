@@ -15,6 +15,7 @@ import {
   summary,
   timeline,
 } from "./test/fixtures";
+import type { RunList } from "./types";
 
 const PARENT = { run_id: "dev-001-single-po.G2.C2.7", branch_point: 4 };
 
@@ -163,5 +164,32 @@ describe("the run page of an experimental branch (record 0009)", () => {
   it("says nothing of the kind for a run that is no branch", () => {
     render(<RunHeader summary={summary("demo_1_g2", "G2", null)} />);
     expect(screen.queryByText(/new experiment/)).toBeNull();
+  });
+});
+
+describe("a seed past 2**53 - 1, which a JavaScript number cannot hold", () => {
+  const b0 = { ...listedRun("study_0001", "B0"), seed: "9223372036854775806" };
+  const g2 = { ...listedRun("study_0002", "G2"), seed: "9223372036854775807" };
+
+  it("shows exactly in the run list, which pairs B0 only with the G2 run of its seed", async () => {
+    const twin = { ...listedRun("study_0003", "G2"), seed: b0.seed };
+    const list: RunList = { registry: "fivefold_registry", runs: [b0, g2, twin] };
+    vi.stubGlobal("fetch", async () => ({ ok: true, status: 200, json: async () => list }));
+    render(<App />);
+    const rows = await screen.findAllByTestId("run-row");
+    expect(rows.map((row) => row.querySelectorAll("td")[6]?.textContent)).toEqual([
+      "9223372036854775806",
+      "9223372036854775807",
+      "9223372036854775806",
+    ]);
+    const pair = screen.getByRole("link", { name: /B0 beside G2/ });
+    expect(pair.textContent).toBe("dev-001-single-po, C2, seed 9223372036854775806: B0 beside G2");
+    expect(pair.getAttribute("href")).toBe("#/compare/study_0001/study_0003");
+  });
+
+  it("shows exactly on the run page", () => {
+    const plain = summary("study_0002", "G2", null);
+    render(<RunHeader summary={{ ...plain, run: { ...plain.run, seed: g2.seed } }} />);
+    expect(screen.getByText(/, seed 9223372036854775807;/)).toBeTruthy();
   });
 });

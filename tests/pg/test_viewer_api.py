@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +24,9 @@ from starlette.testclient import TestClient
 
 from fivefold.harness.demo import demo_1_spec
 from fivefold.harness.migrations import drop_database, recreate_database, registry_database
-from fivefold.harness.registry import RegistryEntry, forget, register
+from fivefold.harness.registry import RegistryEntry, database_of, forget, register
 from fivefold.harness.run import Config, InprocRun
+from fivefold.harness.study import MAX_SEED
 from fivefold.recorder.playback import records
 from fivefold.viewer.app import create_app
 from fivefold.viewer.source import RunSource
@@ -86,9 +87,24 @@ def test_the_run_list_lists_both_runs_of_the_demo_from_the_registry(
             "dev-001-single-po",
             config,
         )
-        assert (run["contract"], run["seed"]) == ("C2", 7)
+        assert (run["contract"], run["seed"]) == ("C2", "7")
         assert run["created_wall_at"].startswith("20"), "wall-clock time, as ISO 8601 text"
         assert (run["parent_run_id"], run["branch_point"]) == (None, None), "no branch"
+
+
+def test_a_seed_goes_as_its_exact_decimal_text_even_the_largest_a_study_takes(
+    client: TestClient, run_database: Callable[[str], str]
+) -> None:
+    """A seed is a bigint, and a study takes seeds up to 2**63 - 1. A browser reads a JSON
+    number as a double, exact only up to 2**53 - 1, so every seed goes as text: in the run
+    list, and in a run's registry row and `harness.run`."""
+    dsn = run_database("viewer_max_seed")
+    asyncio.run(InprocRun(demo_1_spec("G2", MAX_SEED), dsn).execute())
+    database = database_of(dsn)
+    listed = {run["database"]: run for run in get(client, "/api/runs")["runs"]}
+    assert listed[database]["seed"] == "9223372036854775807"
+    summary = get(client, f"/api/runs/{database}")
+    assert summary["registry"]["seed"] == summary["run"]["seed"] == "9223372036854775807"
 
 
 def test_b0_s_scorecard_fails_properties_1_2_and_3_with_their_reason_codes(

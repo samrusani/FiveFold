@@ -8,7 +8,8 @@ export interface RegistryRun {
   scenario_id: string;
   config: string;
   contract: string;
-  seed: number;
+  /** The seed, a bigint, as its decimal text: a JavaScript number is exact only up to 2**53 - 1. */
+  seed: string;
   created_wall_at: string;
 }
 
@@ -33,7 +34,8 @@ export interface Run {
   scenario_digest: string;
   config: string;
   contract: string;
-  seed: number;
+  /** As in `RegistryRun`: decimal text. */
+  seed: string;
   topology: string;
   model_adapter: string;
   model: string;
