@@ -21,8 +21,10 @@ from fivefold.harness.migrations import (
     MigrationError,
     bootstrap,
     create_database,
+    database_lock,
     discover,
     drop_database,
+    drop_database_locked,
     migrate,
     recreate_database,
 )
@@ -314,6 +316,47 @@ def test_a_drop_by_oid_leaves_a_database_made_under_the_same_name_since(
         assert database_count(admin_dsn, name) == 0
         drop_database(admin_dsn, name, oid=second.oid)
     finally:
+        drop_database(admin_dsn, name)
+
+
+def database_oid(admin_dsn: str, name: str) -> int | None:
+    with psycopg.connect(admin_dsn) as conn:
+        row = conn.execute(
+            "SELECT oid FROM pg_catalog.pg_database WHERE datname = %s", (name,)
+        ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def test_a_drop_by_oid_leaves_a_database_replaced_while_it_waited_for_the_lock(
+    admin_dsn: str, db_prefix: str, await_database_lock: Callable[[str], None]
+) -> None:
+    """`DROP DATABASE` cannot run in a transaction, so the OID check and the drop are two
+    statements. A drop takes the database lock first and checks the OID only once it
+    holds it, so no process that goes through the module can replace the database in
+    between. Here another process holds the lock, and replaces the database while the
+    drop waits: the drop then finds another OID and leaves the new database."""
+    name = f"{db_prefix}_drop_waits"
+    waiter = f"{db_prefix}_drop_waiter"
+    drop_database(admin_dsn, name)
+    first = create_database(admin_dsn, name)
+    dropped: list[bool] = []
+    drop = threading.Thread(
+        target=lambda: dropped.append(
+            drop_database(make_conninfo(admin_dsn, application_name=waiter), name, oid=first.oid)
+        )
+    )
+    try:
+        with database_lock(admin_dsn) as conn:
+            drop.start()
+            await_database_lock(waiter)
+            assert drop_database_locked(conn, name)
+            conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        drop.join(timeout=BARRIER_TIMEOUT_S)
+        assert dropped == [False], "the waiting drop left the replacement"
+        replacement = database_oid(admin_dsn, name)
+        assert replacement is not None and replacement != first.oid
+    finally:
+        drop.join(timeout=BARRIER_TIMEOUT_S)
         drop_database(admin_dsn, name)
 
 

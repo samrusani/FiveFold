@@ -16,7 +16,8 @@ from __future__ import annotations
 import csv
 import io
 import json
-from collections.abc import Iterator
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from fivefold.evaluator.__main__ import main as report
 from fivefold.evaluator.report import load_result, planned_faults
 from fivefold.harness import study as study_module
 from fivefold.harness.cells import load_expected
-from fivefold.harness.migrations import drop_database, registry_database
+from fivefold.harness.migrations import create_database, drop_database, registry_database
 from fivefold.harness.registry import RegistryEntry, forget, register
 from fivefold.harness.study import Study
 from fivefold.harness.study import main as study_main
@@ -278,6 +279,60 @@ def test_a_database_another_study_creates_after_the_check_is_neither_dropped_nor
     finally:
         drop_database(admin_dsn, other)
         forget(admin_dsn, other)
+
+
+def registered_run(admin_dsn: str, database: str) -> str | None:
+    """The run id the run registry lists for `database`, if any."""
+    with psycopg.connect(make_conninfo(admin_dsn, dbname=registry_database())) as conn:
+        row = conn.execute(
+            "SELECT run_id FROM registry.run WHERE database_name = %s", (database,)
+        ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def test_no_study_takes_the_name_between_the_drop_and_the_registry_row_s_removal(
+    admin_dsn: str,
+    db_prefix: str,
+    monkeypatch: pytest.MonkeyPatch,
+    await_database_lock: Callable[[str], None],
+) -> None:
+    """A study drops its episode's database and removes its registry row under the
+    database lock that every create takes. Here another study creates the same name and
+    registers its run while the row is being removed: it waits for the lock, so its row
+    comes after the removal and stays."""
+    name = f"{db_prefix}_study_forget"
+    other = f"{db_prefix}_other_study"
+    drop_database(admin_dsn, name)
+    forget(admin_dsn, name)
+    created = create_database(admin_dsn, name)
+    register(admin_dsn, RegistryEntry(name, "mine", "dev-001-single-po", "G2", "C2", 7))
+    failed: list[BaseException] = []
+
+    def other_study() -> None:
+        try:
+            create_database(make_conninfo(admin_dsn, application_name=other), name)
+            entry = RegistryEntry(name, "theirs", "dev-001-single-po", "G2", "C2", 8)
+            register(admin_dsn, entry)
+        except BaseException as error:  # reported by the assertion below
+            failed.append(error)
+
+    thread = threading.Thread(target=other_study)
+
+    def remove_while_the_other_study_creates(dsn: str, database: str) -> None:
+        thread.start()
+        await_database_lock(other)
+        forget(dsn, database)
+
+    monkeypatch.setattr(study_module, "forget", remove_while_the_other_study_creates)
+    try:
+        study_module.drop_own_database(admin_dsn, created)
+        thread.join(timeout=30)
+        assert failed == []
+        assert registered_run(admin_dsn, name) == "theirs", "the other study's row stays"
+    finally:
+        thread.join(timeout=30)
+        drop_database(admin_dsn, name)
+        forget(admin_dsn, name)
 
 
 def test_the_study_keeps_each_episode_s_database_when_asked(

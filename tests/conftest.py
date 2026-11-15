@@ -22,6 +22,7 @@ import copy
 import hashlib
 import os
 import re
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,7 @@ from fivefold.gateway.pg_store import PgStore
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.twin import TwinStore
 from fivefold.harness.migrations import (
+    DATABASE_LOCK_KEY,
     DEFAULT_ADMIN_DSN,
     REGISTRY_ENV,
     bootstrap,
@@ -106,6 +108,40 @@ def admin_dsn() -> Iterator[str]:
         patch.setenv(REGISTRY_ENV, REGISTRY)
         yield dsn
     drop_database(dsn, REGISTRY)
+
+
+LOCK_WAIT_TIMEOUT_S = 30.0
+"""How long `await_database_lock` waits for a session to wait for the database lock."""
+
+
+@pytest.fixture(scope="session")
+def await_database_lock(admin_dsn: str) -> Callable[[str], None]:
+    """Wait until the session with the given `application_name` waits for the database
+    lock (`fivefold.harness.migrations.database_lock`).
+
+    Other test runs on the server take the same lock, so only the named session counts.
+    PostgreSQL shows a bigint advisory key with its high half in `classid`, its low half in
+    `objid`, and `objsubid` 1 (`pg_locks`).
+    """
+
+    def wait(application_name: str) -> None:
+        deadline = time.monotonic() + LOCK_WAIT_TIMEOUT_S
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            while time.monotonic() < deadline:
+                row = conn.execute(
+                    "SELECT count(*) FROM pg_catalog.pg_locks AS l"
+                    " JOIN pg_catalog.pg_stat_activity AS a ON a.pid = l.pid"
+                    " WHERE l.locktype = 'advisory' AND NOT l.granted"
+                    " AND l.classid = %s AND l.objid = %s AND l.objsubid = 1"
+                    " AND a.application_name = %s",
+                    (DATABASE_LOCK_KEY >> 32, DATABASE_LOCK_KEY & 0xFFFFFFFF, application_name),
+                ).fetchone()
+                if row is not None and row[0] > 0:
+                    return
+                time.sleep(0.01)
+        raise AssertionError(f"{application_name} never waited for the database lock")
+
+    return wait
 
 
 @pytest.fixture

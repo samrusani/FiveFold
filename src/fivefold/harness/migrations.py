@@ -17,6 +17,11 @@ has migrations of its own, in `db/registry/`, applied by the same runner.
 `bootstrap_server` creates the roles and the registry, and leaves an existing registry's
 rows alone. `fivefold.harness.registry` writes the rows.
 
+Every run database this module creates or drops changes under one advisory lock
+(`database_lock`), so another fivefold process on the server never sees a name between its
+check and its change. `DROP DATABASE` cannot run in a transaction, so the check and the
+drop are two statements, and the lock is what joins them.
+
 Command line, from the repository root:
 
     python -m fivefold.harness.migrations bootstrap
@@ -31,7 +36,7 @@ import contextlib
 import hashlib
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +53,10 @@ MIGRATION_FILE = re.compile(r"^(?P<number>\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$"
 
 ADVISORY_LOCK_KEY = 5_000_005
 """Session advisory lock held while migrating, so two runners never interleave."""
+
+DATABASE_LOCK_KEY = 5_000_007
+"""Session advisory lock held, in the admin database, while this module creates or drops a
+run database (`database_lock`). The gateway's lock is 5_000_006."""
 
 DATABASE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 """Database names this runner creates or drops: lowercase ASCII, at most 63 bytes.
@@ -181,26 +190,48 @@ def migrate(conn: Connection, directory: Path) -> list[str]:
         conn.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
 
 
+@contextlib.contextmanager
+def database_lock(admin_dsn: str) -> Iterator[Connection]:
+    """An autocommit connection to the admin database that holds the database lock
+    (`DATABASE_LOCK_KEY`) until the block ends.
+
+    Every create and drop in this module takes it, so a name's check and its change are
+    one step to any other process that goes through this module. Advisory locks belong to
+    the database they are taken in, so the processes must share the admin database; one
+    that creates or drops databases another way is not held back.
+    """
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        conn.execute("SELECT pg_advisory_lock(%s)", (DATABASE_LOCK_KEY,))
+        try:
+            yield conn
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(%s)", (DATABASE_LOCK_KEY,))
+
+
 def recreate_database(admin_dsn: str, name: str) -> str:
     """Drop the database `name` if it exists, create it empty, and return its DSN.
 
-    The database always uses UTF-8 with C collation, as `create_database` makes it.
+    Both happen under the database lock (`database_lock`). The database always uses
+    UTF-8 with C collation, as `create_database` makes it.
     """
     check_database_name(name)
-    drop_database(admin_dsn, name)
-    return create_database(admin_dsn, name).dsn
+    with database_lock(admin_dsn) as conn:
+        drop_database_locked(conn, name)
+        _create_database(conn, name)
+    return make_conninfo(admin_dsn, dbname=name)
 
 
 def create_database(admin_dsn: str, name: str) -> CreatedDatabase:
     """Create the empty database `name`, and never drop anything to do it.
 
-    Raises `DatabaseExists` when the name is taken; that database is left as it was.
+    Raises `DatabaseExists` when the name is taken; that database is left as it was. It
+    holds the database lock (`database_lock`).
 
     Checked in psycopg 3.3.9 (`psycopg/errors.py`): `CREATE DATABASE` of a taken name
     raises `DuplicateDatabase`, SQLSTATE 42P04.
     """
     check_database_name(name)
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+    with database_lock(admin_dsn) as conn:
         try:
             _create_database(conn, name)
         except psycopg.errors.DuplicateDatabase:
@@ -278,16 +309,24 @@ def drop_database(admin_dsn: str, name: str, *, oid: int | None = None) -> bool:
 
     With `oid`, drop it only while `name` is still the database with that OID, as
     `create_database` reported it: a database someone made under the same name since is
-    left alone.
+    left alone. The check and the drop happen under the database lock (`database_lock`),
+    so no process that goes through this module can replace the database between them.
     """
     check_database_name(name)
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
-        if row is None or (oid is not None and int(row[0]) != oid):
-            return False
-        conn.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
-        )
+    with database_lock(admin_dsn) as conn:
+        return drop_database_locked(conn, name, oid=oid)
+
+
+def drop_database_locked(conn: Connection, name: str, *, oid: int | None = None) -> bool:
+    """`drop_database` on `conn`, an admin connection that holds the database lock
+    (`database_lock`), so that the caller can do more under the same lock: a study
+    removes the dropped database's registry row before any other study can create the
+    name again (`fivefold.harness.study`)."""
+    check_database_name(name)
+    row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
+    if row is None or (oid is not None and int(row[0]) != oid):
+        return False
+    conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
     return True
 
 
