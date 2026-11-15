@@ -6,7 +6,8 @@ request, and the gateway checks the approval, and no fact, before its one send. 
 with no answer fails the call with `gateway_timeout`, so the framework's retry places
 the order again. The final report goes to the harness's report sink unchanged.
 
-The outcomes asserted here are ground truth; verdicts are in `faults/expected.yaml`.
+Each test checks the records the run leaves, which are ground truth, and the verdict the
+run gets; `faults/expected.yaml` holds the verdict of every G1 fault cell.
 """
 
 from __future__ import annotations
