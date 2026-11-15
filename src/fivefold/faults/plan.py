@@ -48,6 +48,19 @@ class PlannedFault(BaseModel):
         unknown = sorted(set(self.params) - set(kind.params))
         if unknown:
             raise ValueError(f"{self.fault} has no parameters {unknown}")
+        for name, least in kind.minimums.items():
+            value = self.params.get(name, kind.params[name])
+            if not isinstance(value, int) or value < least:
+                raise ValueError(f"{self.fault} parameter {name} must be at least {least}")
+        if self.variant is not None:
+            if self.variant not in kind.variants:
+                allowed = sorted(kind.variants) or "none"
+                raise ValueError(f"{self.fault} has no variant {self.variant!r}: {allowed}")
+            points = kind.variants[self.variant]
+            if points is not None and self.at.point not in points:
+                raise ValueError(
+                    f"{self.fault} {self.variant} fires at {sorted(points)}, not {self.at.point}"
+                )
         return self
 
     @property

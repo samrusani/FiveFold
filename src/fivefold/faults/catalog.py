@@ -9,7 +9,7 @@ believe a fault fired when it did not.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 HOPS = ("agent_gw", "gw_sim", "agent_sim")
@@ -76,16 +76,20 @@ class FaultKind:
     action: Action
     params: Mapping[str, int]
     """Parameters and their defaults."""
+    variants: Mapping[str, frozenset[str] | None] = field(default_factory=dict)
+    """The fault's variants (0006), each with the points it fires at, or None for any of
+    the fault's points. A fault with no variants takes none."""
+    minimums: Mapping[str, int] = field(default_factory=dict)
+    """The smallest value each parameter may take."""
 
 
-AUTHORITY_POINTS = frozenset(
-    {
-        "gw.dispatch.before_check",
-        "net.gw_sim.request",
-        "net.agent_sim.answer",
-        "net.agent_sim.request",
-    }
-)
+EARLY_POINTS = frozenset({"gw.dispatch.before_check", "net.agent_sim.answer"})
+"""F6 and F7 early: at the gateway's check, or as B0's approval answer reaches it."""
+
+LATE_POINTS = frozenset({"net.gw_sim.request", "net.agent_sim.request"})
+"""F6 and F7 late: as the write leaves for the simulator."""
+
+AUTHORITY_POINTS = EARLY_POINTS | LATE_POINTS
 """Where F6 and F7 fire (0006): early, at the gateway's check or as B0's approval answer
 reaches it; late, as the write request leaves for the simulator."""
 
@@ -103,6 +107,11 @@ BUILT: Mapping[FaultId, FaultKind] = {
         frozenset({"agent.after_tool_call", "agent.after_tool_result"}),
         Action.KILL,
         {"restart_delay_ms": 1_000},
+        variants={
+            "after_tool_call": frozenset({"agent.after_tool_call"}),
+            "after_tool_result": frozenset({"agent.after_tool_result"}),
+        },
+        minimums={"restart_delay_ms": 0},
     ),
     FaultId.F6: FaultKind(
         FaultId.F6,
@@ -110,6 +119,7 @@ BUILT: Mapping[FaultId, FaultKind] = {
         AUTHORITY_POINTS,
         Action.REVOKE,
         {},
+        variants={"early": EARLY_POINTS, "late": LATE_POINTS},
     ),
     FaultId.F7: FaultKind(
         FaultId.F7,
@@ -117,6 +127,8 @@ BUILT: Mapping[FaultId, FaultKind] = {
         AUTHORITY_POINTS,
         Action.CHANGE_QUOTE,
         {"percent": 5},
+        variants={"price_up": None, "harmless": None},
+        minimums={"percent": 1},
     ),
     FaultId.F12: FaultKind(
         FaultId.F12,

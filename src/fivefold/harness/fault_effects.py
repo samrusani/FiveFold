@@ -83,13 +83,16 @@ class SimulatorFaults:
         if current is None:
             raise FaultEffectError(f"{fired.fault}: there is no quote {key}")
         changes: dict[str, str | int]
-        if fired.planned.variant == "harmless":
+        variant = fired.planned.variant
+        if variant == "harmless":
             changes = {"lead_time_days": int(str(current.data["lead_time_days"])) + 1}
-        else:
+        elif variant in (None, "price_up"):
             price = int(str(current.data["unit_price_minor"]))
             percent = fired.planned.param("percent")
             raised = -(-price * (100 + percent) // 100)
             changes = {"unit_price_minor": min(raised, self._ceiling(context, price))}
+        else:
+            raise FaultEffectError(f"{fired.fault} has no variant {variant!r}")
         self._control.change_fact(key, changes, actor=FAULT_ACTOR, vt=self._scheduler.now)
 
     def _ceiling(self, context: Mapping[str, object], price: int) -> int:

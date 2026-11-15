@@ -168,3 +168,34 @@ def test_f7_harmless_changes_nothing_a_rule_reads(run_database: Callable[[str], 
         " WHERE key = 'quote/S-1/W-100' ORDER BY version DESC LIMIT 1",
     )
     assert lead == "6"
+
+
+def test_f12_on_the_gateway_hop_the_agent_sends_the_write_again(
+    run_database: Callable[[str], str],
+) -> None:
+    """An MCP request lost on its way to the gateway: the tool times out and LangGraph
+    retries it over the same connection."""
+    dsn = run_database("f12_agent_gw")
+    inproc = run(dsn, "G2", [fault("F12", "net.agent_gw.request", ORDER)])
+    assert effects(dsn) == [("PO-0001", "APR-0001", "540")]
+    calls = rows(
+        dsn,
+        "SELECT fate, drop_reason FROM harness.message_log WHERE hop = 'agent_gw'"
+        " AND kind = 'request' AND api = 'submit_purchase_order' ORDER BY seq",
+    )
+    assert calls == [("dropped", "fault"), ("delivered", None)]
+    assert claim(dsn) == ("done", ["PO-0001"])
+    assert inproc.result.ends["agent-1"][0] == "finished"
+
+
+def test_f12_on_the_mcp_handshake_ends_the_worker_with_an_error(
+    run_database: Callable[[str], str],
+) -> None:
+    """A lost `initialize` request: the worker cannot connect, ends with an error and
+    reports nothing; the run still ends and is scored."""
+    dsn = run_database("f12_initialize")
+    inproc = run(dsn, "G2", [fault("F12", "net.agent_gw.request", {"api": "initialize"})])
+    ((end, why),) = inproc.result.ends.values()
+    assert end == "error" and "initialize" in why
+    assert effects(dsn) == []
+    assert rows(dsn, "SELECT count(*) FROM harness.final_report") == [(0,)]

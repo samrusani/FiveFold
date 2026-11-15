@@ -24,9 +24,10 @@ Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -57,8 +58,8 @@ from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
-from fivefold.harness.scheduler import Scheduler
-from fivefold.harness.transport import Envelope, Stage, Transport
+from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
+from fivefold.harness.transport import Envelope, Stage, Transport, TransportTimeout
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
@@ -324,15 +325,28 @@ class InprocRun:
         self.scheduler.spawn(GATEWAY, serve(self.tools, link), name=f"mcp server for {worker}")
         try:
             async with ClientSession(link.client_read, link.client_write) as session:
-                await session.initialize()
-                listed = await session.list_tools()
+                await self._within(session.initialize(), "initialize")
+                listed = await self._within(session.list_tools(), "tools/list")
                 tools = gateway_tools(session, listed, self.scheduler, self.timeouts)
                 graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
                 self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # A worker that cannot connect, or fails otherwise, ends without a report (0008).
+            self.result.ends[worker] = (WorkerEnd.ERROR, _describe(error))
         finally:
             # After a crash the link ends the connection itself, once in-flight requests
             # have reached the gateway; this closes it only when the worker finishes.
             link.close_after_flight(worker, link.server_read)
+
+    async def _within[T](self, call: Awaitable[T], what: str) -> T:
+        """Wait for an MCP call outside a tool for at most T, as for a tool call (0005)."""
+        timeout_ms = self.spec.scenario.params.dispatch_timeout_ms
+        try:
+            return await self.scheduler.wait_for(call, timeout_ms)
+        except SchedulerTimeout:
+            raise TransportTimeout(f"{what}: no answer within {timeout_ms} ms") from None
 
     # Fault points of the agent (0006) -----------------------------------------------------
 
@@ -390,6 +404,14 @@ class InprocRun:
         await settle()
         for resource in reversed(self._closing):
             resource.close()
+
+
+def _describe(error: BaseException) -> str:
+    """The error that ended a worker; the first one inside an exception group, as the
+    MCP session's task group wraps them."""
+    while isinstance(error, BaseExceptionGroup) and error.exceptions:
+        error = error.exceptions[0]
+    return f"{type(error).__name__}: {error}"
 
 
 def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:
