@@ -204,6 +204,14 @@ def test_required_check_per_attempt_and_contract() -> None:
         required_check(Contract.C2, 0)
 
 
+def test_g1_checks_the_approval_only_and_never_retries() -> None:
+    """0008: G1 checks the approval before its one send, at every contract level."""
+    for contract in Contract:
+        assert required_check(contract, 1, authorization_only=True) is CheckKind.AUTHORITY_ONLY
+        with pytest.raises(GatewayRuleError, match="G1 never retries"):
+            required_check(contract, 2, authorization_only=True)
+
+
 def test_reconcile_how() -> None:
     assert reconcile_how(Contract.C0, escalated=False) is ReconcileHow.ESCALATED_TO_HUMAN
     assert reconcile_how(Contract.C1, escalated=False) is ReconcileHow.QUERYING_STATUS

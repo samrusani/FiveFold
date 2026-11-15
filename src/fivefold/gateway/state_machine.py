@@ -282,14 +282,27 @@ class CheckKind(StrEnum):
     EXEMPT = "exempt"
     """No gateway check: a retry at C3, where the destination checks atomically."""
 
+    AUTHORITY_ONLY = "authority_only"
+    """Authority only: G1's one check before its one send, which reads no fact (0008)."""
 
-def required_check(contract: Contract, attempt_no: int) -> CheckKind:
+
+def required_check(
+    contract: Contract, attempt_no: int, *, authorization_only: bool = False
+) -> CheckKind:
     """Return the check that must pass before attempt `attempt_no` is sent (I3, 0002 rule 17).
 
-    Raises `GatewayRuleError` for a retry on a contract without idempotency keys (I4).
+    `authorization_only` is G1 (0008): it checks the approval and no fact before its one
+    send, and never retries.
+
+    Raises `GatewayRuleError` for a retry in G1, or on a contract without idempotency
+    keys (I4).
     """
     if attempt_no < 1:
         raise ValueError("attempt numbers start at 1")
+    if authorization_only:
+        if attempt_no > 1:
+            raise GatewayRuleError("G1 never retries (0008)")
+        return CheckKind.AUTHORITY_ONLY
     if attempt_no == 1:
         return CheckKind.FULL
     if not contract.has(Capability.IDEMPOTENCY_KEY):

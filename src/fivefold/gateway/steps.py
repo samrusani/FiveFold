@@ -10,6 +10,12 @@ operations in `store.py`, so each rule exists once.
 Steps raise `StepRefused` when a step does not apply (wrong state, too early, already
 escalated). Malformed inputs raise `ValueError`. In both cases nothing changes.
 
+G1's actions, those with identity off, follow the same table with fewer steps (0008). No
+basis is checked: the approval request is filed at once (T2), and an approval moves the
+action to Authorized (T4). The check before the one send covers the approval only, with
+its own check kind. G1 never retries, probes or escalates, so an action that enters
+OutcomeUnknown stays there, and the agent is told nothing about reconciling it.
+
 Ids that depend on one action are derived from its id: grant `G-0007` and escalation
 `ESC-0007` belong to action `A-0007`, and its attempts are `A-0007/1`, `A-0007/2` and so
 on. One grant and at most one escalation per action follow from the rules (I2; an
@@ -202,6 +208,12 @@ def _full_basis(basis: BasisCheck) -> BasisCheck:
     return basis
 
 
+def _no_basis_in_g1(action: Action, basis: BasisCheck | None) -> None:
+    """G1 checks no basis (0008), so its steps never come with a basis check."""
+    if action.authorization_only and basis is not None:
+        raise ValueError(f"{action.action_id} is G1's, which checks no basis (0008)")
+
+
 def _escalate(
     action: Action, trigger: EscalationTrigger, vt: int, details: Mapping[str, object]
 ) -> tuple[Escalation, NewEvent]:
@@ -214,9 +226,15 @@ def _escalate(
 
 
 def _trigger_on_unknown(
-    contract: Contract, attempts_sent: int, settings: GatewaySettings
+    action: Action, attempts_sent: int, settings: GatewaySettings
 ) -> EscalationTrigger | None:
-    """When entering OutcomeUnknown escalates at once (0003, escalation; 0005)."""
+    """When entering OutcomeUnknown escalates at once (0003, escalation; 0005).
+
+    G1 never escalates: it has no recovery, so its action stays OutcomeUnknown (0008).
+    """
+    if action.authorization_only:
+        return None
+    contract = action.contract
     if not contract.capabilities:
         return EscalationTrigger.AT_ONCE
     if contract.has(Capability.IDEMPOTENCY_KEY) and attempts_sent >= settings.max_attempts:
@@ -233,7 +251,7 @@ def _enter_unknown(
 ) -> Change:
     attempt_no = len(view.attempts)
     action, event = _move(view, _S.OUTCOME_UNKNOWN, reason, vt, {"attempt_no": attempt_no})
-    trigger = _trigger_on_unknown(action.contract, attempt_no, settings)
+    trigger = _trigger_on_unknown(action, attempt_no, settings)
     if trigger is None:
         return Change(action, (event,), attempt=attempt)
     escalation, note = _escalate(action, trigger, vt, NO_DETAILS)
@@ -250,6 +268,7 @@ def _retry_allowed(view: ActionView, settings: GatewaySettings) -> int:
     """Check the conditions for any retry (I4, 0005) and return the next attempt number."""
     action = view.action
     _require(action.state is _S.OUTCOME_UNKNOWN, f"{action.action_id} is {action.state}")
+    _require(not action.authorization_only, f"{action.action_id} is G1's; G1 never retries (0008)")
     _require(
         action.contract.has(Capability.IDEMPOTENCY_KEY),
         f"{action.contract} allows no retries (I4)",
@@ -369,7 +388,12 @@ def attach(view: ActionView, proposal: Proposal) -> Change | None:
 
 
 def file_approval(
-    view: ActionView, basis: BasisCheck, approval_id: str | None, vt: int, *, seen_seq: int
+    view: ActionView,
+    basis: BasisCheck | None,
+    approval_id: str | None,
+    vt: int,
+    *,
+    seen_seq: int,
 ) -> Change | None:
     """T2 or T3: check the basis; if fresh, record the filed approval request as a grant.
 
@@ -378,19 +402,25 @@ def file_approval(
     latest event when the gateway began its check, which reads facts over the network
     and so runs without a lock. If the action has a newer event, such as a newer basis
     from an attaching proposal, nothing is written (0003, dispatch).
+
+    G1 checks no basis (0008): for its actions `basis` is None, and the request is filed
+    at once (T2). Every other action needs a full basis check.
     """
     if seen_seq != view.last_seq:
         return None
     action = view.action
     _require(action.state is _S.PROPOSED, f"{action.action_id} is {action.state}")
     _require(view.grant is None, f"{action.action_id} already has a grant")
-    if not _full_basis(basis).fresh:
+    _no_basis_in_g1(action, basis)
+    if basis is None and not action.authorization_only:
+        raise ValueError("the approval request is filed only after a basis check (T2, T3)")
+    if basis is not None and not _full_basis(basis).fresh:
         if approval_id is not None:
             raise ValueError("no approval request is filed for a stale basis")
         rejected, event = _move(view, _S.REJECTED, Reason.STALE_INPUT, vt, {"stale": basis.stale})
         return Change(rejected, (event,))
     if approval_id is None:
-        raise ValueError("a fresh basis comes with the filed approval request's id")
+        raise ValueError("T2 comes with the filed approval request's id")
     check_grant_transition(None, GrantState.PENDING)
     grant = Grant(
         grant_id_for(action.action_id), action.action_id, approval_id, GrantState.PENDING, vt, None
@@ -416,12 +446,16 @@ def poll_approval(
     (denied, or revoked or expired before the gateway saw it, 0010) is named before a
     stale basis. Nothing is written if the action has an event newer than `seen_seq`, as
     in `file_approval`.
+
+    G1 checks no basis (0008): for its actions `basis` is always None, and an approval
+    alone moves the action to Authorized (T4).
     """
     if seen_seq != view.last_seq:
         return None
     action = view.action
     _require(action.state is _S.PENDING_APPROVAL, f"{action.action_id} is {action.state}")
     grant = _grant_in(view, GrantState.PENDING)
+    _no_basis_in_g1(action, basis)
     if basis is not None:
         _full_basis(basis)
     if approval is ApprovalStatus.DENIED:
@@ -439,9 +473,12 @@ def poll_approval(
             return None
         rejected, event = _move(view, _S.REJECTED, Reason.STALE_INPUT, vt, stale)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.RELEASED))
-    if basis is None:
-        raise ValueError("an approved request is acted on only with a basis check (T4)")
     active = _grant_to(grant, GrantState.ACTIVE)
+    if basis is None:
+        if not action.authorization_only:
+            raise ValueError("an approved request is acted on only with a basis check (T4)")
+        authorized, event = _move(view, _S.AUTHORIZED, Reason.APPROVED, vt)
+        return Change(authorized, (event,), grant=active)
     if basis.fresh:
         authorized, event = _move(view, _S.AUTHORIZED, Reason.APPROVED, vt)
         return Change(authorized, (event,), grant=active)
@@ -487,13 +524,15 @@ def begin_check(view: ActionView, settings: GatewaySettings) -> CheckTicket:
     """Start a dispatch check: say which check is due and from which event (0003, dispatch).
 
     The dispatcher runs the check without a lock, then calls `dispatch` or `retry`, which
-    commit only if the action has no event newer than `seen_seq`.
+    commit only if the action has no event newer than `seen_seq`. G1's one check covers
+    the approval only (0008).
     """
     action = view.action
     if action.state is _S.AUTHORIZED:
         _grant_in(view, GrantState.ACTIVE)
         _require(not view.attempts, f"{action.action_id} is Authorized but has attempts")
-        return CheckTicket(action.action_id, 1, CheckKind.FULL, view.last_seq, action.updated_vt)
+        kind = required_check(action.contract, 1, authorization_only=action.authorization_only)
+        return CheckTicket(action.action_id, 1, kind, view.last_seq, action.updated_vt)
     attempt_no = _retry_allowed(view, settings)
     due = _latest_sent_vt(view) + settings.backoff_ms(len(view.attempts))
     kind = required_check(action.contract, attempt_no)
@@ -534,13 +573,15 @@ def dispatch(
 
     The send is at `vt`, so an approval that expires by `vt + S` counts as expired
     (0010, change 4). Returns None, committing nothing, if the action has a newer event
-    than the check saw.
+    than the check saw. G1's check covers the approval only (0008), so G1 rejects only
+    for dead authority.
     """
     if check.seen_seq != view.last_seq:
         return None
     action = view.action
     _require(action.state is _S.AUTHORIZED, f"{action.action_id} is {action.state}")
-    _require(check.kind is CheckKind.FULL, "the first send needs a full check (I3)")
+    needed = required_check(action.contract, 1, authorization_only=action.authorization_only)
+    _require(check.kind is needed, f"the first send needs the {needed} check (I3)")
     _require(check.check_vt <= vt, "the check must come before the send")
     grant = _grant_in(view, GrantState.ACTIVE)
     approval = check.approval_at_send(vt, settings.settle_ms)
@@ -551,10 +592,10 @@ def dispatch(
         details = _expiry_details(check)
         rejected, event = _move(view, _S.REJECTED, Reason.APPROVAL_EXPIRED, vt, details)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.EXPIRED))
-    if approval is not ApprovalStatus.APPROVED or check.basis is None:
+    if approval is not ApprovalStatus.APPROVED:
         raise ValueError(f"an active grant's approval cannot be {check.approval}")
     if not check.passes(vt, settings.settle_ms):
-        stale = {"stale": check.basis.stale}
+        stale = {"stale": check.basis.stale if check.basis is not None else ()}
         rejected, event = _move(view, _S.REJECTED, Reason.STALE_INPUT, vt, stale)
         return Change(rejected, (event,), grant=_grant_to(grant, GrantState.RELEASED))
     sent, event = _move(view, _S.DISPATCHED, Reason.DISPATCHED, vt, {"attempt_no": 1})
@@ -665,6 +706,7 @@ def probe(view: ActionView, result: ProbeAnswer, vt: int, settings: GatewaySetti
     """
     action = view.action
     _require(action.state is _S.OUTCOME_UNKNOWN, f"{action.action_id} is {action.state}")
+    _require(not action.authorization_only, f"{action.action_id} is G1's; G1 never probes (0008)")
     _require(action.contract.has(Capability.STATUS), f"{action.contract} has no status lookup")
     _require(view.escalation is None, f"{action.action_id} is escalated; a human resolves it")
     if result.as_of_vt is not None and result.as_of_vt > vt:
@@ -753,7 +795,12 @@ def close(view: ActionView, vt: int) -> Change | None:
 
 
 def result_for(view: ActionView) -> ActionResult:
-    """The agent-facing result for the action as it is now (0003, what the agent is told)."""
+    """The agent-facing result for the action as it is now (0003, what the agent is told).
+
+    `reconcile` says how an unknown outcome is being resolved. G1 resolves none (0008), so
+    a G1 action in OutcomeUnknown is reported without it: none of 0003's three ways would
+    be true.
+    """
     action = view.action
     last = next(e for e in reversed(view.events) if e.kind is EventKind.TRANSITION)
     if not isinstance(last.reason, Reason):
@@ -764,7 +811,7 @@ def result_for(view: ActionView) -> ActionResult:
         if isinstance(found, tuple):
             stale = tuple(item for item in found if isinstance(item, StaleFact))
     reconcile = None
-    if action.state is _S.OUTCOME_UNKNOWN:
+    if action.state is _S.OUTCOME_UNKNOWN and not action.authorization_only:
         escalation = view.escalation
         escalated = escalation is not None and escalation.resolved_vt is None
         reconcile = Reconcile(

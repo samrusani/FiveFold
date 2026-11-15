@@ -145,6 +145,10 @@ def test_responses_round_trip(result: ActionResult | Refusal | ReportAccepted) -
             40,
         ),
         CheckRecord(CheckKind.EXEMPT, None, None, 11, 50),
+        CheckRecord(
+            CheckKind.AUTHORITY_ONLY, ApprovalStatus.APPROVED, None, 13, 60, approval_expires_at=90
+        ),
+        CheckRecord(CheckKind.AUTHORITY_ONLY, ApprovalStatus.REVOKED, None, 15, 70),
     ],
 )
 def test_check_records_round_trip(check: CheckRecord) -> None:
@@ -159,6 +163,22 @@ def test_check_records_round_trip(check: CheckRecord) -> None:
         check.approval_expires_at,
     )
     assert rebuilt == check
+
+
+def test_an_authority_only_check_records_the_approval_and_no_basis() -> None:
+    """G1's check (0008) reads no fact, so it records no basis. It records the approval it
+    found, with the expiry exactly when approved, and passes only for an approval that
+    outlives the send by the settle time (0010)."""
+    kind, approved = CheckKind.AUTHORITY_ONLY, ApprovalStatus.APPROVED
+    with pytest.raises(ValueError, match="no basis"):
+        CheckRecord(kind, approved, BasisCheck(True, True), 1, 1, approval_expires_at=100)
+    with pytest.raises(ValueError, match="no basis"):
+        CheckRecord(kind, None, None, 1, 1)
+    with pytest.raises(ValueError, match="expiry"):
+        CheckRecord(kind, approved, None, 1, 1)
+    check = CheckRecord(kind, approved, None, 1, 1, approval_expires_at=100)
+    assert check.passes(10, 50) and not check.passes(50, 50)
+    assert not CheckRecord(kind, ApprovalStatus.REVOKED, None, 1, 1).passes(10, 50)
 
 
 def test_arguments_and_bases_keep_their_types() -> None:

@@ -195,7 +195,9 @@ class ActionStore(ABC):
     """One run's gateway records, changed only through the operations below.
 
     `identity` is on for G2. With it off (G1), every proposal creates a new action
-    (0008); the other G1 differences belong to the gateway, not to the records.
+    (0008), and the step functions apply G1's rules to it (`Action.authorization_only`):
+    no basis check, an authority-only check before the one send, and no retries, probes
+    or escalation. G1 has no report check and no run closing, so this store refuses both.
     """
 
     def __init__(
@@ -231,6 +233,11 @@ class ActionStore(ABC):
     def settings(self) -> GatewaySettings:
         """The settings every step runs with."""
         return self._settings
+
+    @property
+    def authorization_only(self) -> bool:
+        """Whether this is G1's store, whose actions have identity off (0008)."""
+        return not self._identity
 
     def snapshot(self) -> Snapshot:
         """Every record as it is now."""
@@ -432,13 +439,16 @@ class ActionStore(ABC):
     def file_approval(
         self,
         action_id: str,
-        basis: BasisCheck,
+        basis: BasisCheck | None,
         approval_id: str | None,
         vt: int,
         *,
         seen_seq: int,
     ) -> None:
-        """T2 or T3 (0002, 0003). `seen_seq`: the action's latest event when the check began."""
+        """T2 or T3 (0002, 0003). `seen_seq`: the action's latest event when the check began.
+
+        `basis` is None for a G1 action, which files its request with no basis check (0008).
+        """
         self._step(
             action_id,
             vt,
@@ -511,7 +521,12 @@ class ActionStore(ABC):
         self._vt = vt
 
     def close_run(self, vt: int) -> None:
-        """Refuse new proposals and reject every action not yet dispatched (0003)."""
+        """Refuse new proposals and reject every action not yet dispatched (0003).
+
+        Only G2 closes the run (0008), so a store with action identity off refuses this.
+        """
+        if not self._identity:
+            raise ValueError("G1 has no report check and no run closing (0008)")
         self._clock(vt)
         with self._transaction() as tx:
             tx.lock_intents()

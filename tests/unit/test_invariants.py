@@ -15,13 +15,16 @@ from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.gateway.invariants import check_invariants
 from fivefold.gateway.memory import MemoryStore
 from fivefold.gateway.records import (
+    ActionEvent,
     ActionResult,
+    Admission,
     Answer,
     ApprovalStatus,
     BasisCheck,
     Claim,
     ClaimConflict,
     ClaimStatus,
+    Escalation,
     RecordedAction,
     Refusal,
     RefusalReason,
@@ -308,16 +311,41 @@ def test_i6_time_that_runs_backwards(snapshot: Snapshot) -> None:
     assert "I6" in labels(replace(snapshot, events=tuple(events)))
 
 
-def test_i7_two_live_actions_for_one_intent() -> None:
-    store = MemoryStore(
-        task_id="TASK-1", intents=INTENTS, contract=Contract.C2, settings=SETTINGS, identity=False
+def _send_g1(store: MemoryStore, intent: str, vt: int) -> str:
+    """Propose, approve and send one G1 action for `intent`, with G1's steps (0008): no
+    basis check, and a check of the approval only before the send."""
+    result = _write(store, intent, f"key-{intent}", 1, vt)
+    assert isinstance(result, ActionResult)
+    action_id = result.action_id
+    store.file_approval(
+        action_id, None, f"AP-{action_id}", vt + 1, seen_seq=store.view(action_id).last_seq
     )
-    _send(store, "REQ-1", 0)
-    _send(store, "REQ-1", 10)
+    store.poll_approval(
+        action_id, ApprovalStatus.APPROVED, None, vt + 2, seen_seq=store.view(action_id).last_seq
+    )
+    ticket = store.begin_check(action_id)
+    check = ticket.record(
+        approval=ApprovalStatus.APPROVED, basis=None, check_vt=vt + 3, expires_at=FAR
+    )
+    assert store.dispatch(action_id, check, vt + 3) is not None
+    return action_id
+
+
+def g1_store(contract: Contract = Contract.C2) -> MemoryStore:
+    return MemoryStore(
+        task_id="TASK-1", intents=INTENTS, contract=contract, settings=SETTINGS, identity=False
+    )
+
+
+def test_i7_two_live_actions_for_one_intent() -> None:
+    store = g1_store()
+    _send_g1(store, "REQ-1", 0)
+    _send_g1(store, "REQ-1", 10)
     g1 = store.snapshot()
     assert check_invariants(g1, SETTINGS) == []
     identity_on = {k: replace(a, identity=True) for k, a in g1.actions.items()}
-    assert labels(replace(g1, actions=frozen(identity_on))) == {"I7"}
+    # With identity on, the same records also break G2's I3: G1 checked the approval only.
+    assert labels(replace(g1, actions=frozen(identity_on))) == {"I3", "I7"}
 
 
 def with_attempt(snapshot: Snapshot, action_id: str, index: int, **changes: object) -> Snapshot:
@@ -499,3 +527,171 @@ def test_admission_reads_numbered_with_a_gap(snapshot: Snapshot) -> None:
     reads = {k: v for k, v in snapshot.reads.items() if k != "R-0002"}
     found = messages(replace(snapshot, reads=frozen(reads)))
     assert "records: read ids are not numbered 1 to n" in found
+
+
+# G1: the checks scoped to rules G1 follows (0003, 0008) ------------------------------------
+
+
+@pytest.fixture
+def g1_snapshot() -> Snapshot:
+    """A valid G1 run at C2. REQ-1's order is confirmed. REQ-2's send timed out, and the
+    action stays OutcomeUnknown: no retry and no escalation. The agent was told both."""
+    store = g1_store()
+    first = _send_g1(store, "REQ-1", 0)
+    store.answer(first, 1, Answer(AnswerClass.COMMITTED, Reason.COMMITTED, "PO-0001"), 10)
+    second = _send_g1(store, "REQ-2", 20)
+    store.answer(second, 1, Answer(AnswerClass.UNKNOWN, Reason.TIMEOUT), 23 + 200)
+    store.status(first, 300)
+    store.status(second, 300)
+    return store.snapshot()
+
+
+def test_g1_the_fixture_is_valid(g1_snapshot: Snapshot) -> None:
+    assert check_invariants(g1_snapshot, SETTINGS) == []
+    actions = g1_snapshot.actions
+    assert [(a.state, a.identity) for a in actions.values()] == [
+        (S.CONFIRMED, False),
+        (S.OUTCOME_UNKNOWN, False),
+    ]
+    assert not g1_snapshot.escalations
+    kinds = {t.check.kind for attempts in g1_snapshot.attempts.values() for t in attempts}
+    assert kinds == {CheckKind.AUTHORITY_ONLY}
+
+
+def test_i3_g1_checks_the_approval_only_and_g2_still_checks_the_basis(
+    snapshot: Snapshot, g1_snapshot: Snapshot
+) -> None:
+    (g1_attempt,) = g1_snapshot.attempts["A-0001"]
+    full = replace(g1_attempt.check, kind=CheckKind.FULL, basis=FRESH)
+    assert messages(with_attempt(g1_snapshot, "A-0001", 0, check=full)) == [
+        "I3: attempt 1 had a full check, not authority_only"
+    ]
+    g2_attempt = snapshot.attempts["A-0001"][0]
+    approval_only = replace(g2_attempt.check, kind=CheckKind.AUTHORITY_ONLY, basis=None)
+    assert messages(with_attempt(snapshot, "A-0001", 0, check=approval_only)) == [
+        "I3: attempt 1 had a authority_only check, not full"
+    ]
+
+
+def test_i3_g1_never_sends_after_a_failing_authority_check(g1_snapshot: Snapshot) -> None:
+    (attempt,) = g1_snapshot.attempts["A-0001"]
+    revoked = replace(attempt.check, approval=ApprovalStatus.REVOKED, approval_expires_at=None)
+    expiring = replace(attempt.check, approval_expires_at=attempt.sent_vt + SETTINGS.settle_ms)
+    for failing in (revoked, expiring):
+        assert messages(with_attempt(g1_snapshot, "A-0001", 0, check=failing)) == [
+            "I3: attempt 1 was sent after a failing check"
+        ]
+
+
+@pytest.mark.parametrize("contract", [Contract.C2, Contract.C3])
+def test_i4_g1_never_retries_even_where_the_contract_has_keys(
+    g1_snapshot: Snapshot, contract: Contract
+) -> None:
+    """A second attempt is fine for G2 at C2 and C3 (the `snapshot` fixture's REQ-1)."""
+    (attempt,) = g1_snapshot.attempts["A-0001"]
+    second = replace(attempt, attempt_id="A-0001/2", attempt_no=2)
+    attempts = {**g1_snapshot.attempts, "A-0001": (attempt, second)}
+    actions = {k: replace(a, contract=contract) for k, a in g1_snapshot.actions.items()}
+    found = messages(replace(g1_snapshot, attempts=frozen(attempts), actions=frozen(actions)))
+    assert "I4: 2 attempts; G1 never retries (0008)" in found
+    assert "I3: attempt 2 is a retry, which G1 forbids" in found
+
+
+def test_i5_a_g1_result_never_says_how_it_is_reconciled(
+    snapshot: Snapshot, g1_snapshot: Snapshot
+) -> None:
+    """G2 must say how (`test_i5_outcome_unknown_reported_without_how_it_is_reconciled`);
+    G1 reconciles nothing, so saying any way would be untrue."""
+    calls = list(g1_snapshot.tool_calls)
+    index = next(i for i, c in enumerate(calls) if c.action_id == "A-0002")
+    result = calls[index].result
+    assert isinstance(result, ActionResult)
+    assert (result.state, result.reconcile) == (S.OUTCOME_UNKNOWN, None)
+    g2_result = next(c.result for c in snapshot.tool_calls if c.action_id == "A-0002")
+    assert isinstance(g2_result, ActionResult) and g2_result.reconcile is not None
+    calls[index] = replace(calls[index], result=replace(result, reconcile=g2_result.reconcile))
+    assert messages(replace(g1_snapshot, tool_calls=tuple(calls))) == [
+        "I5: reconcile on a G1 result; G1 reconciles nothing"
+    ]
+
+
+def test_g1_actions_are_never_escalated_and_write_no_notes(g1_snapshot: Snapshot) -> None:
+    """The `snapshot` fixture's G2 run escalates REQ-2 and takes a newer basis for REQ-3,
+    both with notes, and is valid."""
+    note = ActionEvent(
+        g1_snapshot.events[-1].seq + 1,
+        "A-0002",
+        EventKind.NOTE,
+        S.OUTCOME_UNKNOWN,
+        S.OUTCOME_UNKNOWN,
+        Note.ESCALATED,
+        frozen({"escalation_id": "ESC-0002", "trigger": "at_once"}),
+        300,
+    )
+    escalation = Escalation("ESC-0002", "A-0002", 300, None, None, None, None)
+    escalated = replace(
+        g1_snapshot,
+        events=(*g1_snapshot.events, note),
+        escalations=frozen({"ESC-0002": escalation}),
+    )
+    assert messages(escalated) == [
+        f"G1: note {note.seq} (escalated); G1 writes no notes",
+        "G1: escalated; G1 has no recovery",
+    ]
+
+
+def test_nothing_attaches_to_a_g1_action(g1_snapshot: Snapshot) -> None:
+    """The `snapshot` fixture's G2 run attaches its fourth write call to REQ-3's action."""
+    first = g1_snapshot.proposals[0]
+    attached = replace(first, proposal_id="P-0003", admission=Admission.ATTACHED, vt=300)
+    busy = replace(
+        first,
+        proposal_id="P-0004",
+        admission=Admission.REFUSED,
+        reason=RefusalReason.INTENT_DONE,
+        vt=300,
+    )
+    found = messages(replace(g1_snapshot, proposals=(*g1_snapshot.proposals, attached, busy)))
+    assert found == [
+        "G1: matched A-0001; G1 has no action identity",
+        "G1: matched A-0001; G1 has no action identity",
+    ]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"run_closed": True},
+        {"closed_intents": frozenset({"REQ-2"})},
+    ],
+)
+def test_a_run_with_g1_actions_never_closes(
+    g1_snapshot: Snapshot, change: dict[str, object]
+) -> None:
+    """The `snapshot` fixture's G2 run closes REQ-3 and the run, and is valid."""
+    found = messages(replace(g1_snapshot, **change))  # type: ignore[arg-type]
+    assert found == ["G1: closed or reported; G1 has no report check or run closing"]
+
+
+def test_a_run_has_one_configuration(snapshot: Snapshot) -> None:
+    assert "G1" in labels(with_action(snapshot, "A-0003", identity=False))
+
+
+def test_g1_never_rejects_for_stale_input_or_a_closed_run() -> None:
+    """G1 checks no fact and never closes the run (0008); G2 uses both reasons."""
+    store = g1_store()
+    result = _write(store, "REQ-1", "k", 1, 0)
+    assert isinstance(result, ActionResult)
+    proposed = store.snapshot()
+    for reason in (Reason.STALE_INPUT, Reason.RUN_CLOSED):
+        seq = proposed.events[-1].seq + 1
+        rejected = ActionEvent(
+            seq, "A-0001", EventKind.TRANSITION, S.PROPOSED, S.REJECTED, reason, frozen({}), 5
+        )
+        broken = with_action(
+            replace(proposed, events=(*proposed.events, rejected)),
+            "A-0001",
+            state=S.REJECTED,
+            updated_vt=5,
+        )
+        assert messages(broken) == [f"G1: event {seq} has reason {reason}"]

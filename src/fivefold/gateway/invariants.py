@@ -38,6 +38,23 @@ What each check covers:
 Two parts are checked elsewhere. That the log is append-only and that an effect id
 never changes compare two snapshots, so the Hypothesis suites check them between steps.
 Row locks and privileges are database properties, checked in the Postgres suites.
+
+The invariants are claimed for G2 only (0003). G1's actions, those with identity off,
+are held to every check above that G1 follows, and to G1's own rules where G2's do not
+apply (0008):
+
+- I1, I2, I6 and the records and admission checks apply to G1 as they are.
+- I3: G1's one check before its send covers the approval only, so its kind is
+  `authority_only`; it must pass, come before the send, with no event in between.
+- I4: G1 never retries, so a G1 action has at most one attempt at every contract level.
+- I5: every response reports the records truthfully, but G1 reconciles nothing, so a G1
+  result never carries `reconcile`. G1 checks no report and logs none.
+- I7: G1's actions are exempt (0003).
+- G1's own rules: one configuration per run, so every action has the same identity; a
+  G1 action has no notes (no attached basis, no probes) and no escalation, and no
+  transition for stale input or a closed run; nothing attaches to a G1 action and no
+  `intent_busy` or `intent_done` refusal names one; and a run with G1 actions never
+  closes the run or an intent and records no report.
 """
 
 from __future__ import annotations
@@ -83,8 +100,14 @@ _S = ActionState
 _G = GrantState
 
 
-def _expected_check(contract: Contract, attempt_no: int) -> CheckKind | None:
-    """The check a send needs (I3), or None for a retry the contract forbids (I4)."""
+def _expected_check(action: Action, attempt_no: int) -> CheckKind | None:
+    """The check a send needs (I3), or None for a retry the contract or G1 forbids (I4).
+
+    G1 checks the approval and no fact before its one send, and never retries (0008).
+    """
+    contract = action.contract
+    if not action.identity:
+        return CheckKind.AUTHORITY_ONLY if attempt_no == 1 else None
     if attempt_no == 1:
         return CheckKind.FULL
     if not contract.has(Capability.IDEMPOTENCY_KEY):
@@ -143,6 +166,7 @@ def check_invariants(snapshot: Snapshot, settings: GatewaySettings) -> list[Viol
     found += _i2_global(snapshot)
     found += _i5(snapshot, events_by_action)
     found += _i7(snapshot)
+    found += _g1(snapshot, events_by_action)
     return found
 
 
@@ -246,9 +270,10 @@ def _i3(
     for attempt in attempts:
         n = attempt.attempt_no
         check = attempt.check
-        expected = _expected_check(action.contract, n)
+        expected = _expected_check(action, n)
         if expected is None:
-            yield Violation("I3", a, f"attempt {n} is a retry, which {action.contract} forbids")
+            forbids = action.contract if action.identity else "G1"
+            yield Violation("I3", a, f"attempt {n} is a retry, which {forbids} forbids")
             continue
         if check.kind is not expected:
             yield Violation("I3", a, f"attempt {n} had a {check.kind} check, not {expected}")
@@ -291,6 +316,8 @@ def _i4(
             yield Violation("I4", a, f"attempt {attempt.attempt_id} belongs to {attempt.action_id}")
     if not action.contract.has(Capability.IDEMPOTENCY_KEY) and len(attempts) > 1:
         yield Violation("I4", a, f"{len(attempts)} attempts at {action.contract}")
+    elif not action.identity and len(attempts) > 1:
+        yield Violation("I4", a, f"{len(attempts)} attempts; G1 never retries (0008)")
     if len(attempts) > settings.max_attempts:
         yield Violation("I4", a, f"{len(attempts)} attempts, above max_attempts")
 
@@ -370,9 +397,13 @@ def _i5_result(
         )
     if result.effect_id != derived.effect_id:
         yield Violation("I5", subject, "the effect id differs from the records")
+    action = snapshot.actions.get(result.action_id)
+    if action is not None and not action.identity:
+        if result.reconcile is not None:
+            yield Violation("I5", subject, "reconcile on a G1 result; G1 reconciles nothing")
+        return
     if (result.reconcile is not None) != (derived.state is _S.OUTCOME_UNKNOWN):
         yield Violation("I5", subject, "reconcile must appear exactly with outcome_unknown")
-    action = snapshot.actions.get(result.action_id)
     if result.reconcile is not None and action is not None:
         escalated = derived.escalation_id is not None
         if result.reconcile.how is not _expected_how(action.contract, escalated=escalated):
@@ -518,6 +549,46 @@ def _i7(snapshot: Snapshot) -> Iterator[Violation]:
     for intent_id, ids in holders.items():
         if len(ids) > 1:
             yield Violation("I7", intent_id, f"live or Confirmed actions {', '.join(sorted(ids))}")
+
+
+# G1 -----------------------------------------------------------------------------------
+
+_MATCHED = (RefusalReason.INTENT_BUSY, RefusalReason.INTENT_DONE)
+"""Refusals that name the action a proposal matched (0001, item 10)."""
+
+_NOT_IN_G1 = frozenset({Reason.STALE_INPUT, Reason.RUN_CLOSED})
+"""Reasons G1 never records: it checks no fact and never closes the run (0008)."""
+
+
+def _g1(
+    snapshot: Snapshot, events_by_action: Mapping[str, list[ActionEvent]]
+) -> Iterator[Violation]:
+    """G1's own rules, for its actions: those with identity off (0008)."""
+    if len({action.identity for action in snapshot.actions.values()}) > 1:
+        yield Violation("G1", "run", "actions with and without identity; a run has one config")
+    g1 = {a for a, action in snapshot.actions.items() if not action.identity}
+    if not g1:
+        return
+    for action_id in sorted(g1):
+        for event in events_by_action.get(action_id, []):
+            if event.kind is EventKind.NOTE:
+                yield Violation(
+                    "G1", action_id, f"note {event.seq} ({event.reason}); G1 writes no notes"
+                )
+            elif event.reason in _NOT_IN_G1:
+                yield Violation("G1", action_id, f"event {event.seq} has reason {event.reason}")
+    for escalation in snapshot.escalations.values():
+        if escalation.action_id in g1:
+            yield Violation("G1", escalation.action_id, "escalated; G1 has no recovery")
+    for call in snapshot.proposals:
+        if call.action_id in g1 and (
+            call.admission is Admission.ATTACHED or call.reason in _MATCHED
+        ):
+            yield Violation(
+                "G1", call.proposal_id, f"matched {call.action_id}; G1 has no action identity"
+            )
+    if snapshot.run_closed or snapshot.closed_intents or snapshot.reports:
+        yield Violation("G1", "run", "closed or reported; G1 has no report check or run closing")
 
 
 # Records ------------------------------------------------------------------------------
