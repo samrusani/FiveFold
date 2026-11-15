@@ -42,7 +42,7 @@ It depends on:
 - the agent citing reads that cover the operation's dependencies; G2 refuses a proposal that does not (`missing_basis`, 0001);
 - the dependency rules, which are code shared by the gateway, the C3 destination and the evaluator, and change only by decision record (0004);
 - at C0 to C2, no change to a cited fact between the check and the commit (F7 late, `price_up`, 0006);
-- at C2, a first attempt that landed: a retry does not re-check the budget, so if the first attempt never landed and the budget changed, the retry can overdraw it (0005);
+- at C2, no change to the budget between a first attempt that never landed and its retry: a retry does not re-check the budget, so it can overdraw it (0005);
 - at C3, the destination's atomic check of the basis at commit (0005).
 
 ### 4. Actually committed
@@ -116,7 +116,7 @@ Scenarios can override each value, and each run records the values it used (0005
 
 ## Escalations
 
-When G2 cannot settle an outcome safely, it escalates to a human, and its automatic recovery for that action ends (0003; 0010, reading 7). Only the human's attestation, committed or not committed, then moves the action. Without one, the action stays OutcomeUnknown at the end of the run, and the honest report says "unknown" (0003). Nothing checks that an attestation is true: the scripted resolver always tells the truth (0009), and a person must check the destination first.
+When G2 cannot settle an outcome safely, it escalates to a human, and its automatic recovery for that action ends (0003; 0010, reading 7). Only the human's attestation, committed or not committed, then moves the action. Without one, the action stays OutcomeUnknown at the end of the run, and the honest report says "unknown" (0003). The human checks the destination out of band, as the scripted resolver does (0008), and the scripted resolver always tells the truth (0009). A false attestation can make G2 wrong; the evaluator still compares the report with the ledger (0004).
 
 ## The agent framework
 
