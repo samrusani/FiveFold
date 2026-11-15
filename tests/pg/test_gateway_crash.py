@@ -248,6 +248,33 @@ def test_f3_voids_the_answer_and_recovery_retries_into_the_stored_result_at_c2(
     assert claim(dsn) == ("done", ["PO-0001"])
 
 
+def test_f3_after_a_lost_answer_waits_for_an_answer_that_arrives(
+    run_database: Callable[[str], str],
+) -> None:
+    """F2 drops the order's first answer, so the first send times out and no answer reaches
+    the gateway. F3 waits for the retry's answer, the first that arrives, and voids it."""
+    dsn = run_database("f3_after_f2")
+    f2 = {
+        "fault": "F2",
+        "at": {
+            "point": "net.gw_sim.answer",
+            "match": {**ORDER, "answer": "committed"},
+            "occurrence": 1,
+        },
+    }
+    run(dsn, Contract.C2, [f2, *f3()])
+    answers = rows(
+        dsn,
+        "SELECT seq, fate FROM harness.message_log WHERE hop = 'gw_sim' AND kind = 'answer'"
+        " AND api = 'submit_purchase_order' ORDER BY seq",
+    )
+    assert [fate for _, fate in answers] == ["dropped", "delivered", "delivered"]
+    fired = rows(dsn, "SELECT fault, voided FROM harness.fault_log ORDER BY seq")
+    assert fired == [("F2", []), ("F3", [answers[1][0]])]
+    assert effects(dsn) == [("PO-0001", "APR-0001", "A-0001")]
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
 def test_f3_at_c1_a_probe_finds_the_order_the_crash_forgot(
     run_database: Callable[[str], str],
 ) -> None:

@@ -34,7 +34,7 @@ from fivefold.gateway.records import (
     BasisCheck,
     CheckRecord,
 )
-from fivefold.gateway.state_machine import FINAL_STATES, ActionState, CheckKind
+from fivefold.gateway.state_machine import FINAL_STATES, ActionState, CheckKind, Reason
 from fivefold.gateway.store import ActionStore
 from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
 
@@ -269,7 +269,10 @@ class Dispatcher:
         if grant is None:
             raise RuntimeError(f"{action.action_id} sends with no grant")
         answer = await self._destination.send(action, attempt, grant.approval_id)
-        self._hook("gw.dispatch.after_answer", action)
+        if answer.reason is not Reason.TIMEOUT:
+            # A timeout is no answer, so the point after the answer is reached only when
+            # one arrived (0006: a crash there voids the answer just received).
+            self._hook("gw.dispatch.after_answer", action)
         self._store.answer(action.action_id, attempt.attempt_no, answer, self._now())
 
     # OutcomeUnknown: recover by the contract (T11 to T13, escalation) ----------------------
