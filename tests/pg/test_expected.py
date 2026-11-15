@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
+import psycopg
 import pytest
 
 from fivefold.domain.scenario import load_scenario_file
@@ -48,15 +49,21 @@ def test_each_fault_but_f1_f10_and_f12_has_a_cell_where_b0_fails_and_g2_passes()
 @pytest.mark.parametrize("cell", EXPECTED.cells, ids=lambda cell: cell.name)
 def test_the_cell_gets_its_expected_verdict(run_database: Callable[[str], str], cell: Cell) -> None:
     dsn = run_database(cell.name.lower().replace("-", "_"))
+    plan = cell_plan(cell)
     spec = RunSpec(
         load_scenario_file(DEV_001),
         cell.config,  # type: ignore[arg-type]
         cell.contract,
         EXPECTED.seed,
-        plan=cell_plan(cell),
+        plan=plan,
     )
     run = InprocRun(spec, dsn)
     asyncio.run(run.execute())
+    with psycopg.connect(dsn) as conn:
+        fired = conn.execute("SELECT fault, variant, point FROM harness.fault_log").fetchall()
+    for entry in plan:
+        planned = (entry["fault"], entry.get("variant"), entry["at"]["point"])
+        assert planned in fired, f"{cell.name}: {planned} never fired, so the cell tests nothing"
     evaluation = run.result.evaluation
     assert evaluation is not None
     assert tuple(evaluation.evaluated) == EXPECTED.evaluated

@@ -15,6 +15,7 @@ YAML parsing sits behind `parse_yaml`, the loader's only use of a YAML library.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -507,6 +508,16 @@ def load_scenario_file(path: str | Path) -> Scenario:
 def json_schema_text() -> str:
     """The scenario format's JSON Schema, as committed in `scenarios/scenario.schema.json`."""
     return json.dumps(Scenario.model_json_schema(), indent=2) + "\n"
+
+
+def scenario_digest(scenario: Scenario) -> str:
+    """The SHA-256 of the scenario's canonical JSON, as a run records it (0009).
+
+    The evaluator compares it with the run's record, so a run is never scored against a
+    scenario that changed since it ran.
+    """
+    text = json.dumps(scenario.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 if __name__ == "__main__":

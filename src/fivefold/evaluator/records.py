@@ -27,7 +27,7 @@ from pydantic import JsonValue
 from fivefold.domain.api import ApiName
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.rules import Operation
-from fivefold.domain.scenario import Scenario
+from fivefold.domain.scenario import Scenario, scenario_digest
 
 GATEWAY = "gateway"
 SIMULATOR = "simulator"
@@ -246,7 +246,8 @@ class RunRecords:
     reports: tuple[SubmittedReport, ...] = ()
 
     def check_scenario(self) -> None:
-        """Refuse records that belong to another scenario than the one given."""
+        """Refuse records that belong to another scenario than the one given, or to a
+        version of it that has changed since the run: the digests must match."""
         expected = (self.scenario.id, self.scenario.id, self.scenario.task_id)
         found = (self.run.scenario_id, self.destination.scenario_id, self.destination.task_id)
         if found != expected:
@@ -254,4 +255,11 @@ class RunRecords:
                 f"the run is of scenario {self.run.scenario_id} (simulator:"
                 f" {self.destination.scenario_id}, task {self.destination.task_id}), but the"
                 f" scenario given is {self.scenario.id} (task {self.scenario.task_id})"
+            )
+        digest = scenario_digest(self.scenario)
+        if self.run.scenario_digest != digest:
+            raise RecordsError(
+                f"the run's scenario {self.run.scenario_id} has digest"
+                f" {self.run.scenario_digest}, but the scenario given has {digest}: it"
+                " changed since the run"
             )

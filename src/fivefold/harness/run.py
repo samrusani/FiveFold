@@ -27,8 +27,6 @@ Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -43,7 +41,7 @@ from fivefold.agents.scripted import ScriptedModel
 from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
 from fivefold.agents.worker import WorkerEnd, WorkerSpec, build_graph, run_worker
 from fivefold.domain.contracts import Capability, Contract
-from fivefold.domain.scenario import Scenario
+from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import evaluate_run
 from fivefold.faults.catalog import Action
@@ -128,12 +126,6 @@ class RunResult:
     ends: dict[str, tuple[WorkerEnd, str]] = field(default_factory=dict)
     stopped_vt: int = 0
     evaluation: Evaluation | None = None
-
-
-def scenario_digest(scenario: Scenario) -> str:
-    """The SHA-256 of the scenario's canonical JSON."""
-    text = json.dumps(scenario.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def drain_window_ms(scenario: Scenario) -> int:

@@ -27,7 +27,7 @@ from fivefold.domain.api import (
 )
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.rules import Operation
-from fivefold.domain.scenario import Scenario, scenario_from_data
+from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
 from fivefold.evaluator import (
     ActorAction,
     Config,
@@ -420,7 +420,7 @@ class World:
             run=RunInfo(
                 run_id="RUN-1",
                 scenario_id=self.scenario.id,
-                scenario_digest="sha256:test",
+                scenario_digest=scenario_digest(self.scenario),
                 config=self.config,
                 contract=self.contract,
                 seed=7,
@@ -975,6 +975,19 @@ def test_records_of_another_scenario_are_refused() -> None:
     other = dataclasses.replace(records, run=dataclasses.replace(records.run, scenario_id="x"))
     with pytest.raises(RecordsError, match="scenario"):
         evaluate(other)
+
+
+def test_a_scenario_that_changed_since_the_run_is_refused() -> None:
+    """Same id and task, different contents: the run's digest no longer matches."""
+    world = World()
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    records = world.records()
+    data = records.scenario.model_dump(mode="json")
+    data["params"]["think_ms"] += 1
+    changed = scenario_from_data(data)
+    assert (changed.id, changed.task_id) == (records.scenario.id, records.scenario.task_id)
+    with pytest.raises(RecordsError, match="changed since the run"):
+        evaluate(dataclasses.replace(records, scenario=changed))
 
 
 def test_knowledge_is_computed_for_every_task_intent_in_scenario_order() -> None:

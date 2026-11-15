@@ -31,7 +31,7 @@ from fivefold.domain.api import (
 )
 from fivefold.domain.contracts import Contract
 from fivefold.domain.rules import Operation
-from fivefold.domain.scenario import Scenario, scenario_from_data
+from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
 from fivefold.evaluator import (
     Config,
     Knowledge,
@@ -75,10 +75,11 @@ class Recorder:
         self.harness.execute(
             "INSERT INTO harness.run (run_id, scenario_id, scenario_digest, config, contract,"
             " seed, topology, model_adapter, model, params)"
-            " VALUES ('RUN-golden', %s, 'sha256:golden', %s, %s, 7, 'inproc', 'scripted',"
+            " VALUES ('RUN-golden', %s, %s, %s, %s, 7, 'inproc', 'scripted',"
             " 'scripted-policy', %s)",
             (
                 self.scenario.id,
+                scenario_digest(self.scenario),
                 str(config),
                 str(contract),
                 Jsonb(self.scenario.params.model_dump()),
@@ -806,7 +807,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
             "params": run.scenario.params.model_dump(),
             "parent_run_id": None,
             "run_id": "RUN-golden",
-            "scenario_digest": "sha256:golden",
+            "scenario_digest": scenario_digest(run.scenario),
             "scenario_id": "dev-001-single-po",
             "seed": 7,
             "topology": "inproc",
