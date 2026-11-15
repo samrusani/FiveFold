@@ -12,8 +12,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from fivefold.domain.contracts import Contract, ContractParams
+from fivefold.faults.plan import FaultInjector, Fired, parse_plan
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
-from fivefold.gateway.dispatcher import Dispatcher, Timing
+from fivefold.gateway.dispatcher import Dispatcher, FaultHandler, Timing
 from fivefold.gateway.memory import MemoryStore
 from fivefold.gateway.records import (
     Action,
@@ -130,7 +131,13 @@ class Fresh:
 
 
 class Run:
-    def __init__(self, contract: Contract = Contract.C2) -> None:
+    def __init__(
+        self,
+        contract: Contract = Contract.C2,
+        *,
+        faults: FaultInjector | None = None,
+        on_fault: FaultHandler | None = None,
+    ) -> None:
         self.scheduler = Scheduler()
         self.world = World(self.scheduler)
         self.store = MemoryStore(
@@ -140,7 +147,13 @@ class Run:
             settings=SETTINGS,
         )
         self.dispatcher = Dispatcher(
-            self.scheduler, self.store, self.world, Fresh(self.world), timing=Timing()
+            self.scheduler,
+            self.store,
+            self.world,
+            Fresh(self.world),
+            timing=Timing(),
+            faults=faults,
+            on_fault=on_fault,
         )
 
     def propose(self) -> str:
@@ -346,3 +359,58 @@ def test_the_approval_timeout_needs_no_fact_read() -> None:
     action_id = _pending_then(run, lambda approval_id: None, 1_000)
     view = run.store.view(action_id)
     assert (view.action.state, run.reasons(action_id)[-1]) == (S.REJECTED, "approval_timeout")
+
+
+# A gateway crash at a dispatch point (F1, 0006) ------------------------------------------------
+
+
+class Crash:
+    """Crashes the gateway when F1 fires, and notes what the restart finds."""
+
+    def __init__(self, point: str) -> None:
+        self.faults = FaultInjector(parse_plan([{"fault": "F1", "at": {"point": point}}]))
+        self.run = Run(faults=self.faults, on_fault=self.handle)
+        self.contexts: list[Mapping[str, object]] = []
+        self.at_restart: list[tuple[ActionState, int, int]] = []
+
+    def handle(self, fired: Fired, point: str, context: Mapping[str, object]) -> None:
+        self.contexts.append(dict(context))
+        self.run.scheduler.crash("gateway", restart_after_ms=1_000, restart=self.restart)
+
+    def restart(self) -> None:
+        (action_id,) = self.run.store.snapshot().actions
+        view = self.run.store.view(action_id)
+        self.at_restart.append((view.action.state, len(view.attempts), len(self.run.world.ledger)))
+        self.run.dispatcher.start()
+
+
+def test_f1a_a_crash_after_the_check_records_no_attempt() -> None:
+    crash = Crash("gw.dispatch.after_check")
+    action_id = crash.run.go()
+    assert crash.at_restart == [(S.AUTHORIZED, 0, 0)], "the step stopped at the point"
+    view = crash.run.store.view(action_id)
+    assert view.action.state is S.CONFIRMED
+    assert len(view.attempts) == 1, "after recovery, a fresh check and one send"
+    assert crash.run.world.ledger == {action_id: "PO-0001"}
+
+
+def test_f1b_a_crash_after_the_record_sends_nothing_and_recovery_retries() -> None:
+    crash = Crash("gw.dispatch.after_record")
+    action_id = crash.run.go()
+    assert crash.at_restart == [(S.DISPATCHED, 1, 0)], "an open attempt, and nothing sent"
+    view = crash.run.store.view(action_id)
+    assert view.action.state is S.CONFIRMED
+    assert "recovered_open_attempt" in crash.run.reasons(action_id)
+    assert [a.idempotency_key for a in view.attempts] == [action_id, action_id]
+    assert crash.run.world.ledger == {action_id: "PO-0001"}
+
+
+def test_a_fault_at_a_dispatch_point_is_told_the_request_it_stopped() -> None:
+    crash = Crash("gw.dispatch.after_record")
+    action_id = crash.run.go()
+    (context,) = crash.contexts
+    assert {k: context[k] for k in ("intent_id", "api", "idempotency_key")} == {
+        "intent_id": "REQ-1",
+        "api": "submit_purchase_order",
+        "idempotency_key": action_id,
+    }

@@ -14,6 +14,13 @@ What a crash means for a connection (0006, 0010 change 3):
   sending it; the answers are dropped. The gateway's end reads end-of-stream once every
   such request has arrived, `max_hop_latency_ms` after the crash. A restarted agent
   opens a new connection.
+- A crashed gateway's connections are gone too (F1). Answers it sent before the crash
+  still arrive; then the agent's end reads end-of-stream, `max_hop_latency_ms` after the
+  crash, and a call still waiting fails as a closed connection. What the agent sends on
+  the old connection is dropped, even after the gateway restarts: the restarted gateway
+  never knew it. The agent opens a new connection, with a new MCP handshake.
+- A connection opened while the gateway is down is never served: what the agent sends
+  on it is dropped, as messages to a component that is down are.
 - A component that is down sends nothing (`Transport.post`).
 """
 
@@ -21,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import TracebackType
 
@@ -157,7 +165,7 @@ class Outbox:
             correlation=correlation,
             intent_id=intent_id,
             answer_class=answer_class,
-            wanted=self._link.answer_wanted if kind == "answer" else None,
+            wanted=self._link.wanted(self._sender, kind),
         )
         if envelope is not None and kind == "request":
             self._own.sent[message_id] = (envelope.seq, api, intent_id)
@@ -211,6 +219,8 @@ class Link:
         self.agent = agent
         self.gateway = gateway
         self._agent_incarnation = scheduler.incarnation(agent)
+        self._gateway_incarnation = scheduler.incarnation(gateway)
+        self._served = scheduler.is_up(gateway)
         self.client_read = Inbox()
         self.server_read = Inbox()
         agent_requests, gateway_requests = _Requests(), _Requests()
@@ -244,10 +254,37 @@ class Link:
         sent = self._agent_requests.sent.get(request_id)
         return None if sent is None else sent[0]
 
+    @property
+    def ended(self) -> bool:
+        """Whether the agent's end of the connection has ended, or is about to."""
+        return self.client_read.closed
+
+    def close(self) -> None:
+        """End the connection from the agent's side, once its messages have arrived."""
+        self.close_after_flight(self.agent, self.server_read)
+
+    def wanted(self, sender: str, kind: Kind) -> Callable[[], DropReason | None]:
+        """The check on arrival for a message `sender` sends on this connection."""
+        if kind == "answer":
+            return self.answer_wanted
+        if sender == self.agent:
+            return self.gateway_wanted
+        return _always_wanted
+
     def answer_wanted(self) -> DropReason | None:
         """Drop answers sent to an agent that has crashed since it opened this link."""
         if self._scheduler.incarnation(self.agent) != self._agent_incarnation:
             return "caller_crashed"
+        return None
+
+    def gateway_wanted(self) -> DropReason | None:
+        """Drop what the agent sends once the gateway's end is gone: the gateway was down
+        when the connection opened, or has crashed since, restarted or not."""
+        if (
+            not self._served
+            or self._scheduler.incarnation(self.gateway) != self._gateway_incarnation
+        ):
+            return "receiver_down"
         return None
 
     def close_after_flight(self, sender: str, inbox: Inbox) -> None:
@@ -268,3 +305,13 @@ class Link:
                 self.server_read.close,
                 label=f"{self.agent}'s connection ends",
             )
+        elif component == self.gateway and self._served and not self.client_read.closed:
+            self._scheduler.call_later(
+                self._transport.max_hop_latency_ms + 1,
+                self.client_read.close,
+                label=f"{self.agent}'s connection to the gateway ends",
+            )
+
+
+def _always_wanted() -> DropReason | None:
+    return None

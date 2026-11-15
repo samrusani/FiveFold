@@ -6,6 +6,9 @@ LangGraph's retry policy applies, as it would to an HTTP client (0008):
 
 - no answer within the call's timeout raises `TransportTimeout`, which is not an
   `OSError`, so the default retry predicate retries it;
+- in G modes, a connection to the gateway that closes while a call waits raises
+  `ConnectionError`, which the default predicate also retries; the next call opens a new
+  connection (`fivefold.agents.connection`);
 - the gateway's `gateway_timeout` tool error, its 504, raises `ServerError`.
 
 The timeout of a call is the tool's declared server-side wait plus T (0005, 0008): T for
@@ -27,9 +30,9 @@ from typing import Any
 
 import mcp_types as types
 from langchain_core.tools import BaseTool, StructuredTool
-from mcp.client.session import ClientSession
 from pydantic import BaseModel
 
+from fivefold.agents.connection import GatewayConnection
 from fivefold.domain.api import (
     GetApprovalStatus,
     GetBudget,
@@ -43,8 +46,8 @@ from fivefold.domain.api import (
     SubmitPurchaseOrder,
 )
 from fivefold.domain.report import FinalReport
-from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
-from fivefold.harness.transport import Transport, TransportTimeout
+from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.transport import Transport
 
 GATEWAY_WRITES = frozenset({"submit_purchase_order", "reserve_inventory"})
 SIMULATOR = "simulator"
@@ -65,29 +68,19 @@ class Timeouts:
     """How long a gateway write waits before it answers."""
 
 
-async def _within[T](scheduler: Scheduler, call: Awaitable[T], timeout_ms: int, what: str) -> T:
-    try:
-        return await scheduler.wait_for(call, timeout_ms)
-    except SchedulerTimeout:
-        raise TransportTimeout(f"{what}: no answer within {timeout_ms} ms") from None
-
-
 # G modes: the gateway's tools over MCP ------------------------------------------------------
 
 
 def gateway_tools(
-    session: ClientSession,
+    connection: GatewayConnection,
     listed: types.ListToolsResult,
-    scheduler: Scheduler,
     timeouts: Timeouts,
 ) -> list[BaseTool]:
     """The gateway's tools, as `tools/list` described them."""
-    return [_gateway_tool(session, tool, scheduler, timeouts) for tool in listed.tools]
+    return [_gateway_tool(connection, tool, timeouts) for tool in listed.tools]
 
 
-def _gateway_tool(
-    session: ClientSession, tool: types.Tool, scheduler: Scheduler, timeouts: Timeouts
-) -> BaseTool:
+def _gateway_tool(connection: GatewayConnection, tool: types.Tool, timeouts: Timeouts) -> BaseTool:
     name = tool.name
 
     async def call(**arguments: Any) -> str:
@@ -95,7 +88,7 @@ def _gateway_tool(
             timeout = timeouts.tool_wait_ms + timeouts.t_ms
         else:
             timeout = int(arguments.get("wait_ms", 0) or 0) + timeouts.t_ms
-        result = await _within(scheduler, session.call_tool(name, arguments), timeout, name)
+        result = await connection.call_tool(name, arguments, timeout)
         text = "".join(c.text for c in result.content if isinstance(c, types.TextContent))
         if result.is_error and _error_code(text) == "gateway_timeout":
             raise ServerError(f"{name}: {text}")

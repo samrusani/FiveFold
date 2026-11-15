@@ -314,8 +314,11 @@ class Dispatcher:
     def _hook(self, point: str, action: Action) -> None:
         """A fault point (0006): faults that fire here take effect before the step goes on.
 
-        What a fault acts on is the action: its intent, its business arguments and the
-        approval its grant names.
+        What a fault acts on is the action: its intent, its business arguments, its
+        operation and idempotency key, and the approval its grant names. A fault that
+        crashes the gateway (F1) stops the step at the point: nothing after it runs, so
+        a crash after the check records no attempt, and one after the record sends
+        nothing.
         """
         fired = self._faults.at(point, {"intent_id": action.intent_id, "api": action.operation})
         if not fired:
@@ -323,11 +326,18 @@ class Dispatcher:
         if self._on_fault is None:
             raise NotImplementedError(f"{[f.fault for f in fired]} at {point}: no fault handler")
         grant = self._store.view(action.action_id).grant
-        context: dict[str, object] = {**dict(action.args), "intent_id": action.intent_id}
+        context: dict[str, object] = {
+            **dict(action.args),
+            "intent_id": action.intent_id,
+            "api": action.operation,
+            "idempotency_key": action.idempotency_key,
+        }
         if grant is not None:
             context["approval_id"] = grant.approval_id
         for one in fired:
             self._on_fault(one, point, context)
+            if not self._scheduler.is_up(self._component):
+                raise asyncio.CancelledError
 
 
 def _action_number(action_id: str) -> int:

@@ -10,8 +10,11 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    tools, one MCP server per agent connection;
 3. starts each agent worker with its own checkpoint thread, and the scripted approver,
    which decides queued approval requests by the scenario's rules (0002, rule 7);
-4. fires the plan's faults: the transport fires those on its hops, and this module those
-   at the agent's points (F11), with the restart from the worker's last checkpoint;
+4. fires the plan's faults: the transport fires those on its hops, the dispatcher those
+   at its points (F1, F6 and F7 early), and this module those at the agent's points (F1's
+   B0 equivalent, F11). A crashed gateway restarts through startup recovery (0003), and
+   each agent worker then opens a new MCP connection to it; a crashed worker restarts
+   from its last checkpoint;
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
@@ -27,15 +30,15 @@ Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import psycopg
-from mcp.client.session import ClientSession
 from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.checkpoint import InlinePostgresSaver, connect
+from fivefold.agents.connection import GatewayConnection
 from fivefold.agents.policy import Mode, scripted_policy
 from fivefold.agents.scripted import ScriptedModel
 from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
@@ -45,7 +48,7 @@ from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import evaluate_run
 from fivefold.faults.catalog import Action
-from fivefold.faults.plan import FaultInjector, Fired, parse_plan
+from fivefold.faults.plan import FaultInjector, Fired, check_configuration, parse_plan
 from fivefold.gateway.dispatcher import Dispatcher, Timing
 from fivefold.gateway.freshness import RuleFreshness
 from fivefold.gateway.pg_store import PgStore
@@ -60,8 +63,8 @@ from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
-from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
-from fivefold.harness.transport import Envelope, Stage, Transport, TransportTimeout
+from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.transport import Envelope, Outgoing, Stage, Transport
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
@@ -70,6 +73,9 @@ Config = Literal["B0", "G2"]
 GATEWAY = "gateway"
 SIMULATOR = "simulator"
 REPORT_SINK = "report_sink"
+
+POSSIBLY_SENT_POINT = "gw.dispatch.after_record"
+"""A gateway crash here leaves a request that may or may not have left (0006, crashes)."""
 
 GATEWAY_TOOL_NAMES = frozenset(
     {
@@ -142,6 +148,8 @@ class InprocRun:
         if spec.config not in ("B0", "G2"):
             raise ValueError(f"this build runs B0 and G2, not {spec.config}")
         self.spec = spec
+        self._plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(spec.scenario))
+        check_configuration(self._plan, gateway=spec.config != "B0")
         self._dsn = dsn
         self.scheduler = Scheduler()
         self.result = RunResult(spec.run_id)
@@ -159,7 +167,7 @@ class InprocRun:
         harness_conn = psycopg.connect(self._conninfo("ff_harness"), autocommit=True)
         self._closing.append(harness_conn)
         self.log = PgHarnessLog(harness_conn)
-        plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(scenario))
+        plan = self._plan
         self.log.run_recorded(
             RunRecord(
                 run_id=spec.run_id,
@@ -187,6 +195,7 @@ class InprocRun:
             faults=self.faults,
         )
         self.transport.observe(self._agent_points)
+        self.transport.before_send(self._before_tool_call)
         credentials = (GATEWAY,) if spec.config == "G2" else tuple(self._workers)
         config = SimConfig.preset(
             spec.contract, credentials=credentials, params=params.contract_params()
@@ -210,6 +219,7 @@ class InprocRun:
             ),
         )
         intents = {intent.id: str(intent.operation) for intent in scenario.intents}
+        self._intents = intents
         self.sink = ReportSink(self.scheduler, self.log, intents)
         if spec.config == "B0":
             self.transport.serve(REPORT_SINK, sink_endpoint(self.sink))
@@ -219,22 +229,29 @@ class InprocRun:
         self.checkpointer.setup()
         self.timeouts = Timeouts(t_ms=params.dispatch_timeout_ms, tool_wait_ms=params.tool_wait_ms)
         if spec.config == "G2":
-            self._start_gateway(intents)
+            self._start_gateway()
         for worker in self._workers:
             self._start_worker(worker, resume=False)
-        await self.scheduler.run(until=lambda: len(self.result.ends) == len(self._workers))
-        if spec.config == "G2" and not self.store.snapshot().run_closed:
-            self.store.close_run(self.scheduler.now)
+        await self.scheduler.run(until=self._agents_done)
+        self._close_run()
         await self.scheduler.run(deadline_ms=self.scheduler.now + drain_window_ms(scenario))
         self.result.stopped_vt = self.scheduler.now
         await self._stop()
         self.result.evaluation = evaluate_run(self._conninfo("ff_eval"), scenario)
         return self.result
 
+    def _agents_done(self) -> bool:
+        return len(self.result.ends) == len(self._workers)
+
     # The gateway --------------------------------------------------------------------------
 
-    def _start_gateway(self, intents: Mapping[str, str]) -> None:
+    def _start_gateway(self) -> None:
+        """Start the gateway: its store, startup recovery and its dispatcher (0003).
+
+        Also how a crashed gateway restarts: everything it had in memory is new.
+        """
         scenario, params = self.spec.scenario, self.spec.scenario.params
+        intents = self._intents
         settings = GatewaySettings(
             approval_wait_ms=scenario.authority.approval_wait_ms,
             params=params.contract_params(),
@@ -277,8 +294,31 @@ class InprocRun:
         )
         self.dispatcher.start()
 
+    def _close_run(self) -> None:
+        """In G2, once the agents' phase is over, close the run if no report did (0003).
+
+        A gateway that is down then closes it when it restarts.
+        """
+        if self.spec.config != "G2" or not self.scheduler.is_up(GATEWAY):
+            return
+        if not self.store.snapshot().run_closed:
+            self.store.close_run(self.scheduler.now)
+
     def _gateway_fault(self, fired: Fired, point: str, context: Mapping[str, object]) -> None:
-        """A fault at a dispatch point: record it, then apply it (F6 and F7 early)."""
+        """A fault at a dispatch point: record it, then apply it: F6 and F7 early through
+        the simulator, F1 by crashing the gateway.
+
+        A crash after the attempt is recorded leaves a request that may have left (0006):
+        the fault's record names it, for the evaluator (0004, property 5).
+        """
+        action = fired.planned.kind.action
+        params: dict[str, object] = dict(fired.planned.params)
+        if action is Action.KILL and point == POSSIBLY_SENT_POINT:
+            params["request"] = {
+                "intent_id": context["intent_id"],
+                "api": context["api"],
+                "idempotency_key": context["idempotency_key"],
+            }
         self.log.fault_fired(
             FaultRecord(
                 seq=self.log.next_seq(),
@@ -286,13 +326,44 @@ class InprocRun:
                 variant=fired.planned.variant,
                 point=point,
                 occurrence=fired.occurrence,
-                action=str(fired.planned.kind.action),
+                action=str(action),
                 vt=self.scheduler.now,
                 component=GATEWAY,
-                params=dict(fired.planned.params),
+                params=params,
             )
         )
-        self.effects.apply(fired, context)
+        if action is Action.KILL:
+            self._crash_gateway(fired.planned.param("restart_delay_ms"))
+        else:
+            self.effects.apply(fired, context)
+
+    def _crash_gateway(self, restart_after_ms: int) -> None:
+        """Stop the gateway now and start it again later (0006, crashes).
+
+        Its memory goes, and so does its database connection, with any open
+        transaction and the run's lock; its tasks are cancelled. The restart builds a new
+        gateway, which recovers from its records before it serves anything (0003).
+        """
+        self.store.close()
+        self.scheduler.crash(
+            GATEWAY, restart_after_ms=restart_after_ms, restart=self._restart_gateway
+        )
+
+    def _restart_gateway(self) -> None:
+        self._start_gateway()
+        if self._agents_done():
+            self._close_run()
+
+    def _connect(self, worker: str) -> Link:
+        """Open a new MCP connection from `worker` to the gateway.
+
+        A gateway that is up serves it, with the tools of its current incarnation; one
+        that is down never does.
+        """
+        link = Link(self.scheduler, self.transport, agent=worker, gateway=GATEWAY)
+        if self.scheduler.is_up(GATEWAY):
+            self.scheduler.spawn(GATEWAY, serve(self.tools, link), name=f"mcp server for {worker}")
+        return link
 
     # Agent workers ------------------------------------------------------------------------
 
@@ -320,15 +391,17 @@ class InprocRun:
             graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
             return
-        link = Link(self.scheduler, self.transport, agent=worker, gateway=GATEWAY)
-        self.scheduler.spawn(GATEWAY, serve(self.tools, link), name=f"mcp server for {worker}")
+        connection = GatewayConnection(
+            self.scheduler,
+            lambda: self._connect(worker),
+            worker=worker,
+            timeout_ms=scenario.params.dispatch_timeout_ms,
+        )
         try:
-            async with ClientSession(link.client_read, link.client_write) as session:
-                await self._within(session.initialize(), "initialize")
-                listed = await self._within(session.list_tools(), "tools/list")
-                tools = gateway_tools(session, listed, self.scheduler, self.timeouts)
-                graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
-                self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
+            listed = await connection.list_tools()
+            tools = gateway_tools(connection, listed, self.timeouts)
+            graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
+            self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -337,17 +410,39 @@ class InprocRun:
         finally:
             # After a crash the link ends the connection itself, once in-flight requests
             # have reached the gateway; this closes it only when the worker finishes.
-            link.close_after_flight(worker, link.server_read)
-
-    async def _within[T](self, call: Awaitable[T], what: str) -> T:
-        """Wait for an MCP call outside a tool for at most T, as for a tool call (0005)."""
-        timeout_ms = self.spec.scenario.params.dispatch_timeout_ms
-        try:
-            return await self.scheduler.wait_for(call, timeout_ms)
-        except SchedulerTimeout:
-            raise TransportTimeout(f"{what}: no answer within {timeout_ms} ms") from None
+            connection.close()
 
     # Fault points of the agent (0006) -----------------------------------------------------
+
+    def _before_tool_call(self, outgoing: Outgoing) -> None:
+        """F1's B0 equivalent: kill a worker just before it sends a tool call (0006).
+
+        The call is never sent. The worker resumes from its last checkpoint, which comes
+        before the tool node, so it sends the call once it resumes.
+        """
+        worker = outgoing.sender
+        if outgoing.kind != "request" or worker not in self._workers:
+            return
+        if outgoing.api not in self._tool_names:
+            return
+        fields = {"api": outgoing.api, "tool": outgoing.api, "intent_id": outgoing.intent_id}
+        for fired in self.faults.at("agent.before_tool_call", fields):
+            if fired.planned.kind.action is not Action.KILL:
+                continue
+            self.log.fault_fired(
+                FaultRecord(
+                    seq=self.log.next_seq(),
+                    fault=str(fired.fault),
+                    variant=fired.planned.variant,
+                    point="agent.before_tool_call",
+                    occurrence=fired.occurrence,
+                    action=str(Action.KILL),
+                    vt=self.scheduler.now,
+                    component=worker,
+                    params=dict(fired.planned.params),
+                )
+            )
+            self._kill(worker, fired.planned.param("restart_delay_ms"))
 
     def _agent_points(self, envelope: Envelope, stage: Stage) -> None:
         """F11: kill a worker after it sends a tool call, or as a tool result reaches it."""

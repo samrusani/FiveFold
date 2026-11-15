@@ -58,7 +58,9 @@ class Action(StrEnum):
     DROP = "drop"
     """Drop the message at the point (F2 drops an answer, F12 a request)."""
     KILL = "kill"
-    """Stop the component at the point; it restarts after `restart_delay_ms` (F11)."""
+    """Stop the component at the point; it restarts after `restart_delay_ms`: the gateway
+    through startup recovery (F1), an agent worker from its last checkpoint (F1's B0
+    equivalent, F11)."""
     REVOKE = "revoke"
     """Revoke the approval the action or the message cites (F6)."""
     CHANGE_QUOTE = "change_quote"
@@ -81,6 +83,9 @@ class FaultKind:
     the fault's points. A fault with no variants takes none."""
     minimums: Mapping[str, int] = field(default_factory=dict)
     """The smallest value each parameter may take."""
+    baseline_points: frozenset[str] = frozenset()
+    """Points where only the fault's B0 equivalent fires (0006, B0 equivalent column),
+    beyond those on the B0-only hop: a G-mode plan may not use them."""
 
 
 EARLY_POINTS = frozenset({"gw.dispatch.before_check", "net.agent_sim.answer"})
@@ -94,6 +99,21 @@ AUTHORITY_POINTS = EARLY_POINTS | LATE_POINTS
 reaches it; late, as the write request leaves for the simulator."""
 
 BUILT: Mapping[FaultId, FaultKind] = {
+    FaultId.F1: FaultKind(
+        FaultId.F1,
+        "Gateway crash before dispatch",
+        frozenset(
+            {"gw.dispatch.after_check", "gw.dispatch.after_record", "agent.before_tool_call"}
+        ),
+        Action.KILL,
+        {"restart_delay_ms": 1_000},
+        variants={
+            "a": frozenset({"gw.dispatch.after_check", "agent.before_tool_call"}),
+            "b": frozenset({"gw.dispatch.after_record", "agent.before_tool_call"}),
+        },
+        minimums={"restart_delay_ms": 0},
+        baseline_points=frozenset({"agent.before_tool_call"}),
+    ),
     FaultId.F2: FaultKind(
         FaultId.F2,
         "Reply lost after commit",
@@ -139,6 +159,26 @@ BUILT: Mapping[FaultId, FaultKind] = {
     ),
 }
 """The faults this build can inject, with the points 0006 allows for each."""
+
+
+GATEWAY_ONLY_PREFIXES = ("gw.", "net.agent_gw.", "net.gw_sim.")
+"""Points that exist only where there is a gateway: G1 and G2."""
+
+BASELINE_ONLY_PREFIXES = ("net.agent_sim.",)
+"""Points that exist only where agents call the simulator directly: B0 (0008)."""
+
+
+def point_exists(kind: FaultKind, point: str, *, gateway: bool) -> bool:
+    """Whether `kind` can fire at `point` in a configuration with or without a gateway.
+
+    The gateway's points and hops exist only in G modes, the agent's hop to the
+    simulator only in B0. A fault's B0-equivalent points, such as F1's
+    `agent.before_tool_call`, are refused in G modes: there the fault means something
+    else (0006).
+    """
+    if gateway:
+        return not point.startswith(BASELINE_ONLY_PREFIXES) and point not in kind.baseline_points
+    return not point.startswith(GATEWAY_ONLY_PREFIXES)
 
 
 def point_hop(point: str) -> str | None:

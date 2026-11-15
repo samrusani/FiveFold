@@ -8,11 +8,12 @@ from typing import Any
 import mcp_types as types
 from mcp.client.session import ClientSession
 from mcp.server.lowlevel.server import Server
+from mcp.shared.exceptions import MCPError
 
 from fivefold.harness.log import MemoryHarnessLog, MessageRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.rng import Generators
-from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
 from fivefold.harness.transport import Transport
 
 
@@ -177,3 +178,129 @@ def test_a_request_in_flight_at_a_crash_is_still_served() -> None:
         "receiver_down",
     ), "the gateway answered; the dead agent never got it"
     assert rig.results == []
+
+
+# A gateway crash (F1, 0006) ------------------------------------------------------------------
+
+
+class GatewayCrashRig(Rig):
+    """An agent that records how its calls end, and a gateway that can crash."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.outcomes: list[tuple[int, str]] = []
+
+    def serve(self, link: Link) -> None:
+        server = self.server()
+        self.scheduler.spawn(
+            "gateway",
+            server.run(link.server_read, link.server_write, server.create_initialization_options()),
+            name="mcp server",
+        )
+
+    def agent(self, link: Link, calls: int) -> None:
+        async def run() -> None:
+            async with ClientSession(link.client_read, link.client_write) as session:
+                await session.initialize()
+                # A session lists the tools before its first call returns, to check the
+                # result against the tool's output schema; list them now, while the
+                # gateway is up.
+                await session.list_tools()
+                for n in range(calls):
+                    try:
+                        await session.call_tool("propose", {"intent_id": f"REQ-{n + 1}"})
+                        self.outcomes.append((self.scheduler.now, "answered"))
+                    except MCPError as error:
+                        self.outcomes.append((self.scheduler.now, f"error {error.code}"))
+
+        self.scheduler.spawn("agent-1", run(), name="agent")
+
+
+def test_a_gateway_crash_ends_the_agents_connection() -> None:
+    rig = GatewayCrashRig()
+    rig.delay_ms = 5_000
+    links: list[Link] = []
+
+    def start() -> None:
+        link = Link(rig.scheduler, rig.transport, agent="agent-1", gateway="gateway")
+        links.append(link)
+        rig.serve(link)
+        rig.agent(link, calls=2)
+        rig.scheduler.call_at(1_000, lambda: rig.scheduler.crash("gateway"))
+
+    rig.go(start)
+    closed = f"error {types.CONNECTION_CLOSED}"
+    assert rig.outcomes == [(1_051, closed), (1_051, closed)], (
+        "the waiting call fails once nothing can still arrive; the next one cannot be sent"
+    )
+    assert links[0].ended
+    (call,) = [m for m in rig.log.messages if m.api == "propose"]
+    assert call.kind == "request" and call.fate == "delivered", "it reached the gateway"
+
+
+def test_an_answer_the_gateway_sent_before_it_crashed_still_arrives() -> None:
+    rig = GatewayCrashRig()
+
+    def on_sent(envelope: Any, stage: str) -> None:
+        if stage == "sent" and envelope.kind == "answer" and envelope.api == "propose":
+            rig.scheduler.call_later(0, lambda: rig.scheduler.crash("gateway"))
+
+    def start() -> None:
+        link = Link(rig.scheduler, rig.transport, agent="agent-1", gateway="gateway")
+        rig.transport.observe(on_sent)
+        rig.serve(link)
+        rig.agent(link, calls=1)
+
+    rig.go(start)
+    assert [outcome for _, outcome in rig.outcomes] == ["answered"]
+
+
+def test_what_the_agent_sends_on_the_old_connection_never_reaches_the_restarted_gateway() -> None:
+    """The gateway restarts while the agent's call travels: the new gateway never knew the
+    connection, so the call is dropped, and the agent's end still closes."""
+    rig = GatewayCrashRig()
+
+    def on_sent(envelope: Any, stage: str) -> None:
+        if stage == "sent" and envelope.kind == "request" and envelope.api == "propose":
+            rig.scheduler.call_later(
+                0, lambda: rig.scheduler.crash("gateway", restart_after_ms=0, restart=lambda: None)
+            )
+
+    def start() -> None:
+        link = Link(rig.scheduler, rig.transport, agent="agent-1", gateway="gateway")
+        rig.transport.observe(on_sent)
+        rig.serve(link)
+        rig.agent(link, calls=1)
+
+    rig.go(start)
+    (call,) = [m for m in rig.log.messages if m.api == "propose"]
+    assert (call.fate, call.drop_reason) == ("dropped", "receiver_down")
+    assert [outcome for _, outcome in rig.outcomes] == [f"error {types.CONNECTION_CLOSED}"]
+
+
+def test_a_connection_opened_while_the_gateway_is_down_is_never_served() -> None:
+    """Even once the gateway is back: no server ever took the connection."""
+    rig = GatewayCrashRig()
+    timed_out: list[int] = []
+
+    async def handshake(link: Link) -> None:
+        async with ClientSession(link.client_read, link.client_write) as session:
+            try:
+                await rig.scheduler.wait_for(session.initialize(), 2_000)
+            except SchedulerTimeout:
+                timed_out.append(rig.scheduler.now)
+
+    def start() -> None:
+        rig.scheduler.crash("gateway", restart_after_ms=10, restart=lambda: None)
+        link = Link(rig.scheduler, rig.transport, agent="agent-1", gateway="gateway")
+
+        def open_session() -> None:
+            rig.scheduler.spawn("agent-1", handshake(link), name="handshake")
+
+        rig.scheduler.call_at(1_000, open_session)
+
+    rig.go(start)
+    (initialize,) = [m for m in rig.log.messages if m.api == "initialize"]
+    assert initialize.sent_vt == 1_000 and rig.scheduler.is_up("gateway")
+    assert (initialize.fate, initialize.drop_reason) == ("dropped", "receiver_down")
+    assert timed_out == [3_000]
