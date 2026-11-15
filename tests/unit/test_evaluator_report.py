@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import itertools
+import re
 import shutil
 import subprocess
 import sys
@@ -1011,10 +1012,10 @@ def test_the_cost_table_counts_runs_passing_runs_tokens_and_cost_by_model() -> N
         " its model's input price plus its output tokens at its output price, exactly. The"
         " scripted model costs nothing. A reply that reported no usage counts no tokens; a"
         " call the spend cap refused was never sent, so it counts none either. A passing run"
-        " is one whose verdict is pass or pass_unresolved: all five properties hold. Cost per"
-        " passing run is the cost of all the row's runs, passing or not, over its passing"
-        " runs. It is exact when the division ends, and otherwise rounded to 6 significant"
-        ' digits and marked "about".'
+        " is one that evaluated all five properties, and all five hold: its verdict is pass"
+        " or pass_unresolved. Cost per passing run is the cost of all the row's runs, passing"
+        " or not, over its passing runs. It is exact when the division ends, and otherwise"
+        ' rounded to 6 significant digits and marked "about".'
     )
     assert table(report, "Cost") == [
         [
@@ -1036,6 +1037,56 @@ def test_the_cost_table_counts_runs_passing_runs_tokens_and_cost_by_model() -> N
     ]
     assert "Cost is not computed" not in report
     assert markdown_report(COST_RESULTS).split("## Cost")[0] == report.split("## Cost")[0]
+
+
+def test_a_run_that_evaluated_fewer_than_five_properties_is_never_a_passing_run() -> None:
+    """0004: a passing run is one in which all five properties hold. A result that
+    evaluated only properties 1 and 5 can say `pass`, and its cost still counts, but it is
+    no passing run: here one of the two runs passes, so the row's cost of 0.00126 plus
+    0.00051 USD is over one run."""
+    results = [
+        live(config="G2", seed=7, metrics=tokens(7_000, 350)),
+        live(config="G2", seed=8, evaluated=(1, 5), metrics=tokens(3_000, 100)),
+    ]
+    assert [str(result.verdict) for result in results] == ["pass", "pass"]
+    (row,) = table(markdown_report(results, PRICES), "Cost")[1:]
+    assert row == ["fake:m", "G2", "C2", "2", "1", "10000", "450", "0.00177", "0.00177"]
+
+
+@pytest.mark.parametrize(
+    ("verdict", "failing", "why"),
+    [
+        (
+            Verdict.PASS,
+            {2: (ReasonCode.APPROVAL_USED,)},
+            "its verdict is pass, but properties [2] fail",
+        ),
+        (
+            Verdict.PASS_UNRESOLVED,
+            {1: (ReasonCode.DUPLICATE_EFFECTS,), 5: (ReasonCode.DONE_UNSUPPORTED,)},
+            "its verdict is pass_unresolved, but properties [1, 5] fail",
+        ),
+        (Verdict.FAIL, {}, "its verdict is fail, but no property it evaluated fails"),
+    ],
+)
+def test_a_verdict_its_property_results_contradict_is_refused_in_one_line(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    verdict: Verdict,
+    failing: Mapping[int, Sequence[ReasonCode]],
+    why: str,
+) -> None:
+    """0004: the verdict is `fail` exactly when a property fails. A result that says
+    otherwise holds records that disagree, so no table can count it."""
+    result = make_result(failing=failing).model_copy(update={"verdict": verdict})
+    for build in (runs_csv, markdown_report):
+        with pytest.raises(ReportError, match=re.escape(f"run dev-001-single-po.G2.C2.7: {why}")):
+            build([result])
+    path = save(tmp_path / "results", "run.json", result)
+    assert main(["report", str(tmp_path / "results"), "--csv", str(tmp_path / "runs.csv")]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"report failed: {path}: run dev-001-single-po.G2.C2.7: its verdict")
+    assert err.count("\n") == 1 and not (tmp_path / "runs.csv").exists()
 
 
 def test_a_run_whose_model_has_no_price_is_refused_in_one_line() -> None:
@@ -1162,6 +1213,29 @@ def test_a_branch_never_counts_in_its_parent_s_cell() -> None:
         " it replayed, such as `G2, branch point 4`. Its tokens include those of the calls it"
         " replayed, and its cost prices them at its own model's prices."
     )
+
+
+def test_a_branch_that_evaluated_fewer_than_five_properties_is_never_a_passing_run() -> None:
+    """The rule for a passing run holds in a branch's own cost row: two branches say
+    `pass`, but one evaluated only properties 1 and 5, so the row's cost of 0.00036 plus
+    0.00018 USD is over one passing run."""
+    results = [
+        live(seed=7, parent=PARENT, point=4, metrics=tokens(2_000, 100)),
+        live(seed=7, parent=PARENT, point=4, evaluated=(1, 5), metrics=tokens(1_000, 50)),
+    ]
+    assert [str(result.verdict) for result in results] == ["pass", "pass"]
+    (row,) = table(markdown_report(results, PRICES), "Cost")[1:]
+    assert row == [
+        "fake:m",
+        "G2, branch point 4",
+        "C2",
+        "2",
+        "1",
+        "3000",
+        "150",
+        "0.00054",
+        "0.00054",
+    ]
 
 
 def test_the_csv_lists_a_branch_after_the_runs_of_its_configuration() -> None:

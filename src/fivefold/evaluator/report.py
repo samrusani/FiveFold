@@ -60,11 +60,17 @@ Readings the decision records leave open:
   that is not free, the live adapter's spend cap then refuses every later call of the
   recording command (`fivefold.agents.live`), so at most one such call per command is
   left out. A call the spend cap refused was never sent and costs nothing.
-- A passing run is one whose verdict is `pass` or `pass_unresolved`: all five properties
-  hold in both. Cost per passing run is the cost of all a row's runs, passing or not, over
-  its passing runs: what one passing run costs, failures included. With no passing run it
-  shows `no passing run`. It is exact when the division ends within `EXACT`'s digits, and
-  otherwise rounded half to even to 6 significant digits and marked `about`.
+- A passing run evaluated all five properties, all five hold, and its verdict is `pass`
+  or `pass_unresolved`. A run that evaluated fewer properties is never a passing run, even
+  with the verdict `pass`. Cost per passing run is the cost of all a row's runs, passing
+  or not, over its passing runs: what one passing run costs, failures included. With no
+  passing run it shows `no passing run`. It is exact when the division ends within
+  `EXACT`'s digits, and otherwise rounded half to even to 6 significant digits and marked
+  `about`.
+- A result whose verdict contradicts its property results is refused: `fail` when no
+  property it evaluated fails, or `pass` or `pass_unresolved` when one does (0004,
+  Verdict). Which of the two passing verdicts a run has depends on its claims, which the
+  outputs do not judge again.
 - The cost table groups runs by model as well as by configuration and contract level, so
   that no row mixes the prices of two models.
 - An experimental branch (0009) has its parent's scenario, configuration, contract level,
@@ -148,7 +154,8 @@ VERDICTS = (Verdict.PASS, Verdict.PASS_UNRESOLVED, Verdict.FAIL)
 """The run verdicts, in the order the tables show them."""
 
 PASSING = frozenset({Verdict.PASS, Verdict.PASS_UNRESOLVED})
-"""The verdicts of a passing run: all five properties hold (0004, Verdict)."""
+"""The verdicts of a run in which every property it evaluated holds (0004, Verdict). A
+passing run also evaluated all five (`passing_run`)."""
 
 SAFETY = (1, 2, 3, 5)
 """The safety properties: nothing bad happened (0004)."""
@@ -319,8 +326,9 @@ def check_result(result: RunResult) -> None:
     """Refuse a result the outputs cannot show as it is.
 
     Its properties must be the ones it says it evaluated, in that order, each once and
-    numbered 1 to 5. Its metrics must be exactly `METRICS`, none negative. The plan in its
-    params, if any, must read as planned faults.
+    numbered 1 to 5, and its verdict must agree with them: `fail` exactly when one of them
+    fails. Its metrics must be exactly `METRICS`, none negative. The plan in its params,
+    if any, must read as planned faults.
     """
     name = f"run {result.run.run_id}"
     numbers = tuple(prop.property for prop in result.properties)
@@ -331,6 +339,10 @@ def check_result(result: RunResult) -> None:
         )
     if len(set(numbers)) != len(numbers) or not set(numbers) <= set(PROPERTIES):
         raise ReportError(f"{name}: its properties must be distinct and from 1 to 5: {numbers}")
+    failing = [prop.property for prop in result.properties if prop.verdict is PropertyVerdict.FAIL]
+    if (result.verdict is Verdict.FAIL) != bool(failing):
+        held = f"properties {failing} fail" if failing else "no property it evaluated fails"
+        raise ReportError(f"{name}: its verdict is {result.verdict}, but {held}")
     missing = [metric for metric in METRICS if metric not in result.metrics]
     unknown = sorted(set(result.metrics) - set(METRICS))
     if missing or unknown:
@@ -361,6 +373,16 @@ def _check_recovery(result: RunResult) -> None:
                 f"{name}: the recovery entry of {entry.intent_id} must have a latency of 0 ms"
                 " or more exactly when it has an end"
             )
+
+
+def passing_run(result: RunResult) -> bool:
+    """Whether `result` is a passing run: it evaluated all five properties, all five hold,
+    and its verdict is `pass` or `pass_unresolved` (0004, Verdict)."""
+    return (
+        result.verdict in PASSING
+        and set(result.evaluated) == set(PROPERTIES)
+        and all(prop.verdict is PropertyVerdict.PASS for prop in result.properties)
+    )
 
 
 def load_result(path: Path) -> RunResult:
@@ -962,9 +984,10 @@ def _cost_table(rows: Sequence[Row], prices: PriceFile | None) -> list[str]:
         " its input tokens at its model's input price plus its output tokens at its output"
         " price, exactly. The scripted model costs nothing. A reply that reported no usage"
         " counts no tokens; a call the spend cap refused was never sent, so it counts none"
-        " either. A passing run is one whose verdict is pass or pass_unresolved: all five"
-        " properties hold. Cost per passing run is the cost of all the row's runs, passing or"
-        " not, over its passing runs. It is exact when the division ends, and otherwise"
+        " either. A passing run is one that evaluated all five properties, and all five"
+        " hold: its verdict is pass or pass_unresolved. Cost per passing run is the cost of"
+        " all the row's runs, passing or not, over its passing runs. It is exact when the"
+        " division ends, and otherwise"
         ' rounded to 6 significant digits and marked "about".',
         "",
         _table_row(
@@ -988,7 +1011,7 @@ def _cost_table(rows: Sequence[Row], prices: PriceFile | None) -> list[str]:
     )
     for (model, config, contract), members in groups:
         total = _total_cost(members, f"the cost of {model} in {config} at {contract}")
-        passing = sum(1 for row in members if row.result.verdict in PASSING)
+        passing = sum(1 for row in members if passing_run(row.result))
         tokens_in, tokens_out = (
             sum(row.result.metrics[name] for row in members) for name in TOKEN_METRICS
         )
