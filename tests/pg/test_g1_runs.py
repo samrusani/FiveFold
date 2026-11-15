@@ -4,7 +4,8 @@ G1 runs the same agent and scripted policy as G2, with the same tools and schema
 the gateway's behaviour differs. Each write call is a new action with its own approval
 request, and the gateway checks the approval, and no fact, before its one send. A send
 with no answer fails the call with `gateway_timeout`, so the framework's retry places
-the order again. The final report goes to the harness's report sink unchanged.
+the order again. The final report goes to the harness's report sink unchanged. G1 never
+escalates, so a scenario's scripted resolver (0009) starts but never acts.
 
 Each test checks the records the run leaves, which are ground truth, and the verdict the
 run gets; `faults/expected.yaml` holds the verdict of every G1 fault cell.
@@ -20,7 +21,8 @@ import psycopg
 import pytest
 
 from fivefold.domain.contracts import Contract
-from fivefold.domain.scenario import load_scenario_file
+from fivefold.domain.scenario import Scenario, load_scenario_file, scenario_from_data
+from fivefold.harness.cells import Cell, cell_plan
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import InprocRun, RunSpec
 
@@ -29,8 +31,11 @@ pytestmark = pytest.mark.pg
 ORDER = {"api": "submit_purchase_order"}
 
 
-def run(dsn: str, contract: Contract, plan: list[dict[str, Any]]) -> InprocRun:
-    spec = RunSpec(load_scenario_file(DEV_001), "G1", contract, 7, plan=plan)
+def run(
+    dsn: str, contract: Contract, plan: list[dict[str, Any]], scenario: Scenario | None = None
+) -> InprocRun:
+    scenario = scenario if scenario is not None else load_scenario_file(DEV_001)
+    spec = RunSpec(scenario, "G1", contract, 7, plan=plan)
     inproc = InprocRun(spec, dsn)
     asyncio.run(inproc.execute())
     return inproc
@@ -201,3 +206,23 @@ def test_a_g1_run_from_a_seed_is_byte_identical(run_database: Callable[[str], st
     ]
     for query in queries:
         assert rows(first, query) == rows(second, query), query
+
+
+@pytest.mark.parametrize(("fault", "variant"), [("F2", None), ("F12", "gw_sim")])
+def test_the_scripted_resolver_never_acts_in_g1(
+    run_database: Callable[[str], str], fault: str, variant: str | None
+) -> None:
+    """With record 0009's example resolver, G2 escalates these C0 runs at once and the
+    resolver attests the truth 30,000 ms later. G1 never escalates (0008): its action stays
+    OutcomeUnknown, the gateway leaves nothing to a human, and the resolver never acts."""
+    data = load_scenario_file(DEV_001).model_dump(mode="json")
+    data["authority"]["resolver"] = {"after_ms": 30_000, "attests": "truth"}
+    cell = Cell(
+        fault=fault, variant=variant, contract=Contract.C0, config="G1", verdict="", failing=()
+    )
+    dsn = run_database(f"g1_resolver_{fault.lower()}")
+    inproc = run(dsn, Contract.C0, cell_plan(cell), scenario_from_data(data))
+    assert inproc.resolver is not None, "the scenario has a resolver, and G1 starts it"
+    assert rows(dsn, "SELECT count(*) FROM gw.escalation") == [(0,)]
+    assert rows(dsn, "SELECT count(*) FROM harness.actor_log WHERE actor = 'resolver'") == [(0,)]
+    assert actions(dsn)[0] == ("A-0001", False, "outcome_unknown", None)
