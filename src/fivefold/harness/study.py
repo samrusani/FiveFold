@@ -81,7 +81,8 @@ from typing import Final
 
 import psycopg
 
-from fivefold.agents.worker import SPEND_CAP_TEXT, WorkerEnd
+from fivefold.agents.live import SPEND_CAP, refusal
+from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.evaluator import RunResult as Evaluation
@@ -101,7 +102,7 @@ from fivefold.harness.migrations import (
 )
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS, Config, InprocRun, RunSpec
-from fivefold.recorder.cassette import Cassette
+from fivefold.recorder.cassette import Cassette, response_message
 
 ALL: Final = "all"
 """The `--cells` name of every cell of `faults/expected.yaml`."""
@@ -350,18 +351,22 @@ class Outcome:
     """The live episode's cassette; None with the scripted model."""
     calls: int | None
     """The live episode's model calls, refused ones included; None with the scripted model."""
+    refused: int
+    """The model calls the spend cap refused; each ends its worker as `budget`."""
     database: str | None
     """The episode's database, when it is kept."""
 
     @property
     def cut(self) -> bool:
-        """Whether the spend cap refused one of its model calls."""
-        return cut_by_spend_cap(self.ends)
+        """Whether the spend cap cut the episode short: it refused one of its model calls."""
+        return self.refused > 0
 
 
-def cut_by_spend_cap(ends: dict[str, tuple[WorkerEnd, str]]) -> bool:
-    """Whether a worker ended because the spend cap refused its call."""
-    return any(end is WorkerEnd.BUDGET and text == SPEND_CAP_TEXT for end, text in ends.values())
+def refused_calls(cassette: Cassette) -> int:
+    """How many of the cassette's calls the spend cap refused (`fivefold.agents.live`)."""
+    return sum(
+        1 for call in cassette.calls if refusal(response_message(call.response)) == SPEND_CAP
+    )
 
 
 def run_episode(
@@ -389,7 +394,8 @@ def run_episode(
         cassette = run.models.cassette
         if cassette is None:
             raise RuntimeError(f"episode {episode.name} recorded no cassette")
-    folder = out / SPEND_CAP_DIR if cut_by_spend_cap(ends) else out
+    refused = 0 if cassette is None else refused_calls(cassette)
+    folder = out / SPEND_CAP_DIR if refused else out
     folder.mkdir(parents=True, exist_ok=True)
     result = folder / f"{episode.name}.json"
     result.write_bytes(result_json(evaluation).encode("utf-8"))
@@ -405,6 +411,7 @@ def run_episode(
         result=result,
         cassette=saved,
         calls=None if cassette is None else len(cassette.calls),
+        refused=refused,
         database=database if keep else None,
     )
 
@@ -447,7 +454,9 @@ def episode_line(study: Study, outcome: Outcome) -> str:
     line += f"; {ends}"
     meter = study.model.spend if isinstance(study.model, Live) else None
     if outcome.calls is not None and meter is not None:
-        line += f"; {outcome.calls} model calls, {meter.spent_usd} USD spent so far"
+        line += f"; {outcome.calls} model calls"
+        line += f", {outcome.refused} refused" if outcome.refused else ""
+        line += f", {meter.spent_usd} USD spent so far"
     if outcome.cut:
         line += f"; cut short by the spend cap, so its result is in {SPEND_CAP_DIR}/"
     if outcome.database is not None:

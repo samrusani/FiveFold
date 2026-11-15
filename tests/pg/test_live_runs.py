@@ -696,8 +696,8 @@ def test_the_spend_cap_stops_a_live_study_partway_and_the_study_keeps_what_it_ra
     assert printed[1:] == [
         "[1/3] none-C2-B0-seed-7: pass; agent-1 finished; 7 model calls, 0.7 USD spent so far",
         f"[2/3] none-C2-G1-seed-7: fail (4, 5); agent-1 budget ({SPEND_CAP_TEXT}); 2 model"
-        " calls, 0.8 USD spent so far; cut short by the spend cap, so its result is in"
-        " spend-cap/",
+        " calls, 1 refused, 0.8 USD spent so far; cut short by the spend cap, so its result"
+        " is in spend-cap/",
         "Model fake:m; 0.8 USD spent of the 0.75 USD cap on 8 model calls, at prices dated"
         " 2026-11-15.",
         f"The spend cap stopped the study after 2 of 3 episodes. Results are in {out}. Report"
