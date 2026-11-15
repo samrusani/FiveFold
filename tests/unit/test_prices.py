@@ -88,7 +88,12 @@ def test_a_price_file_holds_exact_prices_and_costs_calls_exactly() -> None:
         (
             "price_date: 2026-11-15\nprices: {fake: {1:30: {input_usd_per_million_tokens: 0,"
             " output_usd_per_million_tokens: 0}}}\n",
-            "string",
+            "1:30 is not a decimal integer: YAML reads it in another base",
+        ),
+        (
+            "price_date: 2026-11-15\nprices: {fake: {m: {input_usd_per_million_tokens: 0,"
+            " output_usd_per_million_tokens: 0}}, 7: {}}\n",
+            "Input should be a valid string",
         ),
         ("price_date: [unclosed\n", "not valid YAML"),
     ],
@@ -97,6 +102,61 @@ def test_a_file_that_is_not_a_price_file_is_refused_in_one_line(text: str, probl
     with pytest.raises(PriceFileError, match=problem) as refused:
         price_file_from_text(text)
     assert "\n" not in str(refused.value), "a command prints the refusal as one line"
+
+
+def test_an_unquoted_decimal_price_keeps_every_digit() -> None:
+    """A YAML float would keep about 17 significant digits; a price keeps all of them,
+    quoted or not, and a call costs exactly what they say."""
+    digits = "0.123456789012345678901"
+    for written in (digits, f"'{digits}'", f'"{digits}"'):
+        price = prices(written, "2").price("fake", "m")
+        assert price.input_usd_per_million_tokens == Decimal(digits), written
+        assert price.cost_usd(1_000_000, 0) == Decimal(digits)
+
+
+@pytest.mark.parametrize(
+    ("written", "value"),
+    [
+        ("0", 0),
+        ("2", 2),
+        ("1_000", 1_000),
+        ("0.15", "0.15"),
+        ("1_000.5", "1000.5"),
+        ("1.5e+3", "1500"),
+        (".5", "0.5"),
+        ("'010'", 10),
+    ],
+)
+def test_integers_decimals_and_quoted_prices_read_as_written(
+    written: str, value: int | str
+) -> None:
+    """Integers and decimals in base 10 read as their text says, and so does a quoted
+    price, which pydantic reads as a decimal."""
+    assert prices(written).price("fake", "m").input_usd_per_million_tokens == Decimal(value)
+
+
+@pytest.mark.parametrize(
+    ("written", "why"),
+    [
+        (".inf", ".inf is not a finite decimal"),
+        ("-.inf", "-.inf is not a finite decimal"),
+        (".nan", ".nan is not a finite decimal"),
+        ("1:30.5", "1:30.5 is not a finite decimal"),
+        ("1:30", "1:30 is not a decimal integer: YAML reads it in another base"),
+        ("010", "010 is not a decimal integer: YAML reads it in another base"),
+        ("0x10", "0x10 is not a decimal integer: YAML reads it in another base"),
+        ("0b11", "0b11 is not a decimal integer: YAML reads it in another base"),
+    ],
+)
+def test_a_number_that_is_not_a_finite_decimal_as_written_is_refused_in_one_line(
+    written: str, why: str
+) -> None:
+    """YAML reads these as infinity, not a number, or in base 60, 8, 16 or 2, so the
+    value would not be the one the text shows in base 10."""
+    with pytest.raises(PriceFileError, match=r"^the price file is not a price file: ") as refused:
+        prices(written)
+    assert why in str(refused.value)
+    assert "\n" not in str(refused.value)
 
 
 def test_a_model_missing_from_the_price_file_is_refused() -> None:

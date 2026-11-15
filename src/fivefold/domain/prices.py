@@ -13,29 +13,44 @@ always be enforced (`fivefold.agents.live`). A price file is YAML:
 
 - `price_date`: the day the prices were read, as a date.
 - `prices`: for each provider and model, the price in USD per million input tokens and per
-  million output tokens. A price is an exact decimal, at least 0. Quote model names: YAML
-  reads some unquoted names, such as `1:30`, as numbers.
+  million output tokens. A price is an exact decimal, at least 0: an integer, a decimal
+  such as `0.15`, or either one quoted. Quote model names: YAML reads some unquoted names,
+  such as `1:30`, as numbers.
 
 `prices/example.yaml` is the example the repository ships. The evaluator's report computes
 record 0004's cost metrics from the same format (`fivefold.evaluator.report`), so this
 module reads only plain data.
 
-Checked in pydantic 2.14.3: `Field` takes `ge` and `allow_inf_nan` (`fields.py`), and a
-`Decimal` field passes them to `decimal_schema` (`pydantic_core/core_schema.py`). Observed
-with pydantic 2.14.3 and PyYAML 6.0.3: a YAML float such as 0.15 becomes exactly
-`Decimal("0.15")`; booleans, negative amounts and infinity are refused; PyYAML reads
+The file is read with PyYAML's safe loader, except that a number is read from its text.
+A decimal such as `0.15` becomes the `Decimal` its text writes, every digit kept: the safe
+loader alone would make it a binary float, which keeps about 17 significant digits,
+before any check could see it. An integer such as `2` stays an integer. A number that is
+not a finite decimal as written is refused while the file is read: `.inf`, `.nan`, and a
+number YAML reads in another base, such as `1:30` (base 60, 90), `1:30.5` or `010` (base 8).
+
+Checked in PyYAML 6.0.3: `SafeLoader.add_constructor(tag, constructor)` copies the
+constructor table into the subclass it is called on before it adds one, so the safe
+loader itself is unchanged (`yaml/constructor.py`); `construct_scalar(node)` returns the
+scalar's text; the float tag `tag:yaml.org,2002:float` covers decimals, `.inf`, `.nan` and
+base-60 numbers, and the int tag `tag:yaml.org,2002:int` decimal, binary, octal, hex and
+base-60 integers (`yaml/resolver.py`); `load(stream, Loader)` reads one document. Checked
+in pydantic 2.14.3: `Field` takes `ge` and `allow_inf_nan` (`fields.py`), and a `Decimal`
+field passes them to `decimal_schema` (`pydantic_core/core_schema.py`). Observed with
+pydantic 2.14.3 and PyYAML 6.0.3: booleans and negative amounts are refused; PyYAML reads
 `2026-11-15` as a date, and a `date` field refuses a time of day.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Final
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from yaml.constructor import ConstructorError
 
 MILLION: Final = Decimal(1_000_000)
 
@@ -97,11 +112,54 @@ class PriceFile(_PriceModel):
         return price
 
 
+class _NotADecimal(ConstructorError):
+    """A YAML number that is not a finite decimal as written."""
+
+
+class _PriceLoader(yaml.SafeLoader):
+    """PyYAML's safe loader, but a number is read from its text: a float as an exact
+    decimal, and an integer only in base 10."""
+
+
+def _exact_decimal(loader: _PriceLoader, node: yaml.ScalarNode) -> Decimal:
+    """A YAML float as the `Decimal` its text writes. Underscores between digits are
+    dropped, as the safe loader drops them. Raises `_NotADecimal` for `.inf`, `.nan` and a
+    base-60 number, which no finite decimal writes."""
+    text = loader.construct_scalar(node)
+    try:
+        value = Decimal(text.replace("_", ""))
+    except InvalidOperation:
+        value = None
+    if value is None or not value.is_finite():
+        raise _NotADecimal(None, None, f"{text} is not a finite decimal", node.start_mark)
+    return value
+
+
+_DECIMAL_INTEGER = re.compile(r"[-+]?(?:0|[1-9][0-9_]*)")
+"""A YAML 1.1 integer in base 10, as `yaml/resolver.py` writes that case."""
+
+
+def _decimal_integer(loader: _PriceLoader, node: yaml.ScalarNode) -> int:
+    """A YAML integer written in base 10, as the safe loader reads it. Raises
+    `_NotADecimal` for one YAML reads in another base: binary, octal, hex or base 60."""
+    text = loader.construct_scalar(node)
+    if _DECIMAL_INTEGER.fullmatch(text) is None:
+        problem = f"{text} is not a decimal integer: YAML reads it in another base"
+        raise _NotADecimal(None, None, problem, node.start_mark)
+    return int(text.replace("_", ""))
+
+
+_PriceLoader.add_constructor("tag:yaml.org,2002:float", _exact_decimal)
+_PriceLoader.add_constructor("tag:yaml.org,2002:int", _decimal_integer)
+
+
 def price_file_from_text(text: str, where: str = "the price file") -> PriceFile:
     """Read a price file from its YAML text. Raises `PriceFileError` on any problem, with
     its message on one line, as the commands that read a price file refuse in one line."""
     try:
-        data: object = yaml.safe_load(text)
+        data: object = yaml.load(text, Loader=_PriceLoader)
+    except _NotADecimal as error:
+        raise PriceFileError(f"{where} is not a price file: {_one_line(error)}") from None
     except yaml.YAMLError as error:
         raise PriceFileError(f"{where} is not valid YAML: {_one_line(error)}") from None
     try:
