@@ -8,9 +8,11 @@ that raises records nothing. Each worker incarnation gets its own wrapper, and a
 run's wrappers share one `CassetteRecorder`, which keeps the calls in the order they are
 answered.
 
-It wraps any chat model: the scripted adapter now, the live adapter later (M4). Binding
-tools binds them to the wrapped model, and adds their schemas and what was bound with
-them to every request the wrapper records.
+It wraps any chat model: the scripted adapter when a run asks to record, and the live
+adapter always (`fivefold.agents.live`). Binding tools binds them to the wrapped model,
+and adds their schemas and what was bound with them to every request the wrapper records.
+The agent's graph binds the worker's tools to every adapter (`fivefold.agents.worker`), so
+every recorded request carries their schemas.
 
 Checked in langchain-core 1.8.0 (`language_models/chat_models.py`): `BaseChatModel.ainvoke
 (input, config=None, *, stop=None, **kwargs)` returns the message of the first generation;

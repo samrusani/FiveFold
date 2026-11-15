@@ -21,7 +21,8 @@ The request hash is the SHA-256 of the request's canonical JSON,
   provider fields in `additional_kwargs`. Never their ids: LangChain and LangGraph draw
   those at random.
 - tools are the schemas bound to the model, in the OpenAI tool format that langchain-core
-  writes for every kind of tool.
+  writes for every kind of tool. The agent's graph binds the worker's tools to every
+  adapter, so a run's requests carry them.
 - params are the model's name and parameters, what was bound with the tools (such as
   `tool_choice`), and the call's own arguments, `stop` among them.
 

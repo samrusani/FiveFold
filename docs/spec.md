@@ -95,7 +95,7 @@ Detail: 0007.
 | Database access | psycopg 3 with hand-written SQL; plain SQL migrations, forward only |
 | Gateway interfaces | An MCP server built with the official MCP Python SDK: in-process in tests and demos, streamable HTTP in the split topology. An admin API built with FastAPI |
 | Agent | LangGraph with its Postgres checkpointer |
-| Models | Adapters: scripted (no network), live (one API provider and Ollama), replay (cassettes) |
+| Models | Adapters: scripted (no network), live (Ollama through `langchain-ollama` now; one API provider to come, as one more entry in the live adapter's provider table), replay (cassettes). A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file, and always records a cassette |
 | Tests | pytest; Hypothesis rule-based state machines |
 | Packaging | Docker Compose; `make demo` runs demo 1 with the scripted model and needs no API key |
 | Viewer | React and TypeScript over a read-only API; tooling decided at M3 |
@@ -105,7 +105,7 @@ This spec names no library functions. The decision records cite the library fact
 
 ## Data model
 
-Times used for decisions are virtual milliseconds; wall-clock columns such as `wall_at` are for metrics only. Ids come from per-run counters with readable prefixes, such as `A-0001` for actions and `PO-0001` for purchase orders.
+Times used for decisions are virtual milliseconds; wall-clock columns such as `wall_at` and `wall_ms` are for metrics only. Ids come from per-run counters with readable prefixes, such as `A-0001` for actions and `PO-0001` for purchase orders.
 
 | Schema | Entity | Key fields | Notes |
 | --- | --- | --- | --- |
@@ -127,6 +127,7 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009) |
 | harness | MessageLog | seq, hop, kind, sender, receiver, api, correlation id, intent_id, idempotency_key, sent_vt, fate, drop reason, delivered_seq, delivered_vt, answer class, body, copy_of | Every message and its fate (0004). One counter numbers every harness event, so `seq` and `delivered_seq` order sends and deliveries. When F4 delivers a request twice, the second delivery is a copy that names the request in `copy_of`; the answer to a copy is dropped with reason `answer_to_copy` (0006) |
 | harness | FaultLog, ActorLog, FinalReport | | Faults fired and the deliveries they voided; scripted human actions; submitted reports |
+| harness | ModelCall | call_no, worker, asked_vt, answered_vt, model, input_tokens, output_tokens, refused, wall_ms | One row per model call once it is answered, numbered in the run in cassette order, outside the harness's event counter. Tokens come from the reply's usage and are null when it reports none, as scripted replies do. `refused` is `spend_cap` when the live adapter refused to send the call. Record 0004's token and cost metrics read it; `ff_eval` can select it |
 | eval | RunResult | run_id, verdict, evaluated, metrics, result | One row per run: the verdict over the five properties, the metrics, and the whole result as JSON, including the excused intents |
 | eval | Result | run_id, property, verdict, reason codes, metrics, failures | One row per run and property |
 
@@ -321,16 +322,18 @@ Detail: 0009.
 
 - A run is a scenario, a configuration, a contract level, a seed and a model. It has one agent worker, or two when F9 starts a second.
 - The **inproc** topology runs everything in one process under a deterministic scheduler: one component step at a time, messages delivered in a fixed order with seeded latency of 5 to 50 virtual ms, timers in virtual time, and `think_ms` (1,000) of virtual time per model call. Tests, demos and the live study use it.
+- A live model call first takes its `think_ms`, then waits for its provider in wall time inside the scheduler's real wait. While a real wait is in flight the scheduler fires no event, so virtual time stands still and every timer fires at the virtual time it would with the scripted model.
 - The **split** topology runs the gateway, the simulator and Postgres as separate Compose services, for people who bring their own agent. It is not deterministic.
 - Determinism contract: the same scenario, configuration, contract level, seed and model outputs produce byte-identical logs, ledgers and results, ignoring wall-clock columns. CI runs each demo twice and compares digests.
 - The agents' phase ends when every worker has reported, errored or used up its budget. The scheduler then drains for `2 × (D + max_hop_latency) + L` virtual ms, and the run ends. "Run end" in the property checks means this point, so late commits during the drain count.
+- A worker's budget is counted from its conversation, so it holds across a crash and a replay counts it the same way. Steps are the model's replies. Tokens are each reply's input and output tokens, from its usage; scripted replies report none. Before each model call, a worker whose steps or tokens reached its budget ends as `budget`. The live adapter's spend cap ends a worker the same way: once the spend so far reaches the cap, the next call is refused.
 
 ## Playback and branching
 
 - **Recorded playback** re-executes a run from its scenario, seed and cassette into a fresh run database. It never writes to the original run or to anything outside the simulator.
 - **Cassette:** the run it was recorded from, as `harness.run` records it; the model that answered; and every model call in run order, with the worker that asked, the request's hash and the response. The file is JSON with sorted keys and two-space indents, in one canonical form. Its SHA-256 is the cassette digest that `harness.run` records, for the recording run and for each replay.
-- **Request hash:** the SHA-256 of the canonical JSON of what the model is asked: the messages without their random ids, the schemas of the tools bound to it, and its name and parameters, `stop` and anything bound with the tools among them.
-- **Recording and replay:** a scripted run records a cassette on request; a live run will always record one. The replay adapter serves a cassette's responses in order, after `think_ms` per call like every adapter. The run fails if a request's hash or worker differs from the recorded call, or if the run asks for more or fewer calls than the cassette holds. The error names the call's number and both hashes.
+- **Request hash:** the SHA-256 of the canonical JSON of what the model is asked: the messages without their random ids, the schemas of the tools bound to it, and its name and parameters, `stop` and anything bound with the tools among them. The agent's graph binds the worker's tools to every adapter, so every request carries their schemas.
+- **Recording and replay:** a scripted run records a cassette on request; a live run always records one, including any call the spend cap refused, so a replay ends that worker the same way. The replay adapter serves a cassette's responses in order, after `think_ms` per call like every adapter, with the token usage they recorded. The run fails if a request's hash or worker differs from the recorded call, or if the run asks for more or fewer calls than the cassette holds. The error names the call's number and both hashes.
 - **Checks:** `python -m fivefold.recorder play` refuses a scenario whose digest differs from the cassette's, and an original run that did not record the cassette. After the replay it compares, ignoring wall-clock columns: the message log and the harness's other logs, the effects ledger, the approval events, the action events, and the evaluation JSON without its model adapter, which a replay records as `replay`. It reads the original run only as `ff_viewer`.
 - **Timeline view** reads a stored run's message log without executing anything.
 - **Experimental branch** replays a run to event N, then switches to a live model or another script. It becomes a new run with a parent, labelled a new experiment.
@@ -343,6 +346,7 @@ Detail: 0009.
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.
 - **CI:** deterministic suites and the determinism check on every pull request. Live runs are manual and capped by budget.
+- **Live runs:** `python -m fivefold.recorder record --live ollama:MODEL --spend-cap-usd X --prices PATH` runs one, and refuses unless the environment sets `FIVEFOLD_LIVE=1` and the price file, which records its price date, prices the model. One spend cap holds across a command's runs, and the spend can pass it by at most the cost of the one call in flight. `prices/example.yaml` shows the format with Ollama models at 0 USD, since they run locally, and lists no API provider. Tests use fake chat models and never reach a provider.
 
 ## Later releases
 
@@ -372,6 +376,7 @@ fivefold/
   db/                bootstrap.sql (roles), migrations/
   tests/             unit/, pg/, property/, scenario/
   scenarios/dev/     development scenarios
+  prices/            price files for live runs
   viewer/            React and TypeScript
   tla/               formal model (v0.2)
   docker-compose.yml, Dockerfile, Makefile, pyproject.toml, uv.lock, .python-version

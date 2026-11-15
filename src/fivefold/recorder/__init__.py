@@ -1,8 +1,9 @@
 """Model cassettes and run playback (0009).
 
 A run can record every model request and response into a cassette: scripted runs on
-request, and live runs always (M4). Replay serves them in order, so anyone can re-execute a
-recorded run without an API key, and check that it does the same as before.
+request, and live runs always (`fivefold.agents.live`). Replay serves them in order, so
+anyone can re-execute a recorded run without an API key or a network, and check that it
+does the same as before.
 
 - `cassette`: the cassette format, its digest, and the request hash.
 - `recording`: the recording wrapper, a chat model that records the model it wraps.
