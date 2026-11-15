@@ -165,8 +165,9 @@ class Gateway:
         self.app = admin_app(self.admin, self.store, token=TOKEN)
 
     def escalate(self, **world: int) -> None:
-        """Propose the order at vt 0 and run to vt 1,000: the gateway sends it at 160 and
-        escalates it at 360, when no answer came."""
+        """Propose the order at vt 0 and run the gateway until nothing is left, or vt 1,000
+        at most: it sends the order at 160 and escalates it at 360, when no answer came.
+        At C0 nothing follows the escalation, so the clock stays at 360."""
         for name, value in world.items():
             setattr(self.world, name, value)
 

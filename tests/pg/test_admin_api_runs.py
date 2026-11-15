@@ -6,7 +6,7 @@ At C0 the gateway escalates a lost order at once (0005). Two runs, from the cell
 - F12 on `gw_sim`: the order's request is lost, so nothing commits.
 
 In both, the gateway sends the order at 4,788 and escalates it at 6,788, and the agent
-then waits on the action, from about 7,800 to 67,800. A scripted operator acts twice
+then waits on the action for 60,000 ms, from about 7,900 to 67,900. A scripted operator acts twice
 while it waits. At 10,000 it attests "not committed", which the gateway refuses: S after
 the send is 14,838. At 20,000 it lists the open escalations and attests the truth: PO-0001
 committed after F2, nothing committed after F12. In one run the operator works over HTTP,
