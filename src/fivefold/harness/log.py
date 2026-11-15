@@ -1,9 +1,15 @@
-"""The harness's records of a run: messages, faults, scripted humans and reports (0004).
+"""The harness's records of a run: messages, faults, scripted humans, reports and model
+calls (0004).
 
 The evaluator scores from these records and the simulator's, never from the gateway's
 (0004). One counter numbers every harness event in order: a message's send and its
 delivery, a fault firing, an action of a scripted human and a submitted report. So "this
 message was delivered before that report" is a comparison of two numbers.
+
+Model calls have their own numbers, in the order the model answered them, which is the
+order of the run's cassette (0009). They take none of the event counter's, so logging them
+leaves every other record's numbers as they were. The evaluator will compute record 0004's
+token and cost metrics from them.
 
 `MemoryHarnessLog` keeps the records in memory, for unit tests. `PgHarnessLog` writes them
 to the `harness` schema of the run's database (`db/migrations/0004_harness.sql`) as role
@@ -129,8 +135,29 @@ class ReportRecord:
     message_seq: int | None = None
 
 
+@dataclass(frozen=True)
+class ModelCallRecord:
+    """One model call of an agent worker, as its model answered it (0004, 0009)."""
+
+    call_no: int
+    """The call's number in the run, from 1, in the order the model answered."""
+    worker: str
+    asked_vt: int
+    answered_vt: int
+    model: str
+    """The run's model, as `harness.run.model` names it."""
+    input_tokens: int | None
+    """None when the reply reports no usage, as scripted replies do."""
+    output_tokens: int | None
+    refused: str | None
+    """Why the harness answered instead of the model, such as `spend_cap`; None when the
+    model answered."""
+    wall_ms: float
+    """Wall-clock milliseconds from the call to its answer, for metrics only (0009)."""
+
+
 class HarnessLog(ABC):
-    """Numbers harness events and records messages, faults and reports."""
+    """Numbers harness events and records messages, faults, reports and model calls."""
 
     @abstractmethod
     def run_recorded(self, record: RunRecord) -> None:
@@ -178,6 +205,10 @@ class HarnessLog(ABC):
     def actor_acted(self, record: ActorRecord) -> None:
         """Record what a scripted human did."""
 
+    @abstractmethod
+    def model_called(self, record: ModelCallRecord) -> None:
+        """Record a model call once its model answered."""
+
 
 def _check_fate(fate: Fate, reason: DropReason | None, delivered_seq: int | None) -> None:
     if fate == "delivered" and (delivered_seq is None or reason is not None):
@@ -195,6 +226,7 @@ class MemoryHarnessLog(HarnessLog):
         self.faults: list[FaultRecord] = []
         self.reports: list[ReportRecord] = []
         self.actors: list[ActorRecord] = []
+        self.model_calls: list[ModelCallRecord] = []
         self.run: RunRecord | None = None
         self.stopped_vt: int | None = None
 
@@ -258,6 +290,11 @@ class MemoryHarnessLog(HarnessLog):
 
     def actor_acted(self, record: ActorRecord) -> None:
         self.actors.append(record)
+
+    def model_called(self, record: ModelCallRecord) -> None:
+        if record.call_no != len(self.model_calls) + 1:
+            raise ValueError(f"model call {record.call_no} is not the next call")
+        self.model_calls.append(record)
 
 
 Connection = psycopg.Connection[TupleRow]
@@ -414,5 +451,23 @@ class PgHarnessLog(HarnessLog):
                 record.subject,
                 Jsonb(dict(record.details)),
                 record.vt,
+            ),
+        )
+
+    def model_called(self, record: ModelCallRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO harness.model_call (call_no, worker, asked_vt, answered_vt, model,"
+            " input_tokens, output_tokens, refused, wall_ms)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                record.call_no,
+                record.worker,
+                record.asked_vt,
+                record.answered_vt,
+                record.model,
+                record.input_tokens,
+                record.output_tokens,
+                record.refused,
+                record.wall_ms,
             ),
         )

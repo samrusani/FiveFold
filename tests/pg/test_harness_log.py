@@ -4,21 +4,28 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from typing import LiteralString
+from typing import Any, LiteralString
 
 import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 
-from fivefold.harness.log import FaultRecord, MessageRecord, PgHarnessLog, ReportRecord, RunRecord
+from fivefold.harness.log import (
+    FaultRecord,
+    MessageRecord,
+    ModelCallRecord,
+    PgHarnessLog,
+    ReportRecord,
+    RunRecord,
+)
 from fivefold.harness.reports import TEXT_KEY, ReportSink
 from fivefold.harness.scheduler import Scheduler
 
 pytestmark = pytest.mark.pg
 
 Connection = psycopg.Connection[TupleRow]
-TABLES = ["run", "run_stop", "message_log", "fault_log", "actor_log", "final_report"]
+TABLES = ["run", "run_stop", "message_log", "fault_log", "actor_log", "final_report", "model_call"]
 
 
 def _message(seq: int, *, kind: str = "request", correlation: int | None = None) -> MessageRecord:
@@ -376,3 +383,73 @@ def test_privileges_on_every_harness_table(migrated_database: str, role: str) ->
                 == (True,)
             }
             assert granted == EXPECTED[role][table], (role, table)
+
+
+def _call(call_no: int = 1, **changes: object) -> ModelCallRecord:
+    fields: dict[str, object] = {
+        "call_no": call_no,
+        "worker": "agent-1",
+        "asked_vt": 1_000 * call_no,
+        "answered_vt": 1_000 * call_no + 1_000,
+        "model": "ollama:m",
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "refused": None,
+        "wall_ms": 812.5,
+    }
+    fields.update(changes)
+    return ModelCallRecord(**fields)  # type: ignore[arg-type]
+
+
+def test_model_calls_are_logged_once_and_never_change(migrated_database: str) -> None:
+    """A scripted reply reports no tokens; a refused call names why and has none; the
+    evaluator's role reads them all (0004, 0008)."""
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        log.model_called(_call(1))
+        log.model_called(_call(2, input_tokens=None, output_tokens=None, model="scripted"))
+        log.model_called(_call(3, input_tokens=None, output_tokens=None, refused="spend_cap"))
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            log.model_called(_call(3))
+        _refused(conn, psycopg.errors.InsufficientPrivilege, "DELETE FROM harness.model_call")
+    with psycopg.connect(migrated_database, autocommit=True) as conn:
+        _refused(conn, psycopg.errors.RaiseException, "UPDATE harness.model_call SET model = 'x'")
+        _refused(conn, psycopg.errors.RaiseException, "DELETE FROM harness.model_call")
+    eval_dsn = make_conninfo(migrated_database, user="ff_eval")
+    with psycopg.connect(eval_dsn) as conn:
+        rows = conn.execute(
+            "SELECT call_no, model, input_tokens, output_tokens, refused, wall_ms"
+            " FROM harness.model_call ORDER BY call_no"
+        ).fetchall()
+    assert rows == [
+        (1, "ollama:m", 120, 30, None, 812.5),
+        (2, "scripted", None, None, None, 812.5),
+        (3, "ollama:m", None, None, "spend_cap", 812.5),
+    ]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"call_no": 0},
+        {"answered_vt": 999},
+        {"input_tokens": None},
+        {"input_tokens": -1},
+        {"refused": "spend_cap"},
+        {"refused": "bored", "input_tokens": None, "output_tokens": None},
+        {"wall_ms": -1.0},
+    ],
+)
+def test_a_model_call_must_be_consistent(migrated_database: str, changes: dict[str, Any]) -> None:
+    with _harness(migrated_database) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        PgHarnessLog(conn).model_called(_call(**changes))
+
+
+def test_model_calls_take_no_harness_event_number(migrated_database: str) -> None:
+    """Logging a model call leaves the event counter where it was, so every other record
+    keeps its numbers (0009, Determinism contract)."""
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        log.model_called(_call(1))
+        assert log.next_seq() == 1
+        assert PgHarnessLog(conn).next_seq() == 1
