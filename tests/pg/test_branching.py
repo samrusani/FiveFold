@@ -54,6 +54,7 @@ from fivefold.evaluator.report import load_result
 from fivefold.harness.demo import DEV_001, DEV_002, demo_1_plan, demo_1_spec
 from fivefold.harness.migrations import drop_database
 from fivefold.harness.models import Live
+from fivefold.harness.registry import forget
 from fivefold.harness.run import Config, InprocRun, RunSpec
 from fivefold.recorder.__main__ import main
 from fivefold.recorder.cassette import Cassette, ModelInfo
@@ -145,6 +146,7 @@ def parents(
     finally:
         for name in made:
             drop_database(admin_dsn, name)
+            forget(admin_dsn, name)
 
 
 # Branches to the scripted model ----------------------------------------------------------------
@@ -435,11 +437,13 @@ def test_a_branch_to_a_live_model_records_a_cassette_that_plays_back(
 
 @pytest.fixture
 def cli(admin_dsn: str, db_prefix: str) -> Iterator[tuple[str, str]]:
-    """Names for the command's databases, which it creates; dropped afterwards."""
+    """Names for the command's databases, which it creates and registers; dropped and
+    forgotten afterwards."""
     names = (f"{db_prefix}_cli_branched", f"{db_prefix}_cli_branch_play")
     yield names
     for name in names:
         drop_database(admin_dsn, name)
+        forget(admin_dsn, name)
 
 
 def _exists(admin_dsn: str, name: str) -> bool:
