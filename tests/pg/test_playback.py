@@ -24,6 +24,7 @@ import pytest
 from fivefold.agents.replay import ReplayError
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file, scenario_from_data
+from fivefold.harness.cells import cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001, DEV_002, demo_1_plan, demo_1_spec
 from fivefold.harness.migrations import drop_database
 from fivefold.harness.models import Replay
@@ -34,10 +35,16 @@ from fivefold.recorder.playback import PlaybackError, compare, play, record, rec
 
 pytestmark = pytest.mark.pg
 
+EXPECTED = load_expected()
+
 MESSAGE_LOG: LiteralString = (
     "SELECT seq, hop, kind, sender, receiver, api, correlation, intent_id, idempotency_key,"
-    " answer_class, body, sent_vt, fate, drop_reason, delivered_seq, delivered_vt"
+    " answer_class, body, sent_vt, fate, drop_reason, delivered_seq, delivered_vt, copy_of"
     " FROM harness.message_log ORDER BY seq"
+)
+COPIES: LiteralString = (
+    "SELECT seq, hop, sender, receiver, api, copy_of, fate, drop_reason, delivered_seq"
+    " FROM harness.message_log WHERE copy_of IS NOT NULL ORDER BY seq"
 )
 EFFECTS: LiteralString = "SELECT to_jsonb(e) FROM sim.effect e ORDER BY commit_seq"
 EVALUATION: LiteralString = "SELECT result FROM eval.run_result"
@@ -179,6 +186,54 @@ def test_two_workers_play_back_in_the_order_they_were_recorded(
     playback = play(cassette, load_scenario_file(DEV_001), original=original, replay=replay)
     assert playback.differences == ()
     assert playback.calls == len(cassette.calls)
+
+
+def cell_run(name: str) -> tuple[RunSpec, Scenario]:
+    """The run of the cell `name` of `faults/expected.yaml`, as its own test runs it."""
+    (cell,) = [cell for cell in EXPECTED.cells if cell.name == name]
+    scenario = cell_scenario(cell, load_scenario_file(DEV_001))
+    config: Config = "B0" if cell.config == "B0" else "G2"
+    return RunSpec(scenario, config, cell.contract, EXPECTED.seed, plan=cell_plan(cell)), scenario
+
+
+@pytest.mark.parametrize(
+    ("name", "copies"),
+    [
+        ("F4-agent_gw-C2-G2", 1),
+        ("F4-gw_sim-C2-G2", 1),
+        ("F4-agent_sim-C2-B0", 1),
+        ("F5-in_contract-C2-G2", 0),
+        ("F5-beyond_deadline-C1-G2", 0),
+        ("F10-stale_within_lag-C1-G2", 0),
+    ],
+)
+def test_copies_and_the_simulator_s_faults_play_back_byte_for_byte(
+    run_database: Callable[[str], str], name: str, copies: int
+) -> None:
+    """F4's second delivery is a message of its own, a copy, and F5 and F10 act at the
+    simulator's points: a playback reproduces them with everything else. F4's copy delay
+    is drawn from the seed, and the cassette's plan keeps the value drawn. The F10 cell
+    runs dev-001 with a status lag of 3,000 ms, so its scenario is not the file's."""
+    spec, scenario = cell_run(name)
+    tag = name.lower().replace("-", "_")
+    original, replay = run_database(f"{tag}_rec"), run_database(f"{tag}_play")
+    recorded, cassette = record(spec, original)
+    assert recorded.result.evaluation is not None
+
+    playback = play(cassette, scenario, original=original, replay=replay)
+
+    assert playback.differences == ()
+    assert playback.calls == len(cassette.calls)
+    assert playback.verdict == str(recorded.result.evaluation.verdict)
+    assert len(rows(original, COPIES)) == copies
+    assert rows(replay, COPIES) == rows(original, COPIES)
+    assert rows(replay, MESSAGE_LOG) == rows(original, MESSAGE_LOG)
+    fault = name.split("-")[0]
+    assert (fault,) in rows(replay, "SELECT fault FROM harness.fault_log")
+    plan = cassette.run.params["plan"]
+    assert isinstance(plan, list) and len(plan) == len(spec.plan or ())
+    drawn = [entry["params"] for entry in plan if isinstance(entry, dict)]
+    assert any(isinstance(p, dict) and "copy_delay_ms" in p for p in drawn) == (fault == "F4")
 
 
 def test_playback_checks_the_scenario_before_it_runs(
