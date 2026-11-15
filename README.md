@@ -63,6 +63,10 @@ make help       # every target
 
 Database tests connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose database. Any PostgreSQL 16 server works, as long as the connection is a superuser.
 
+## Results
+
+The evaluator writes each run's result as JSON. `uv run python -m fivefold.harness.demo --out results` saves one file per demo run. `uv run python -m fivefold.evaluator report results --csv runs.csv --markdown report.md` turns them into a CSV with one row per run and a Markdown report: what was run, verdicts by configuration and contract level, failures by property and verdicts by fault plan, each count over its denominator, and metric totals. The report needs no database, and the same results always give the same bytes.
+
 ## Maintainer
 
 [samrusani](https://github.com/samrusani)

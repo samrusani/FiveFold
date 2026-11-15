@@ -313,7 +313,7 @@ Detail: 0004. The evaluator reads simulator and harness records, the scenario an
 - Verdicts: `pass` (all five hold, no claim unknown), `pass_unresolved` (all five hold, some claim unknown) and `fail`.
 - Each run lists its excused intents, with the excuse (`authority_withdrawn` or `infeasible`), and every failed check with its reason code.
 - Metrics: duplicates, unintended, unauthorized and stale effects, missing and excused intents, false and unjustified claims, unknown claims, success claimed with a duplicate, human interventions, approval requests and approvals decided by a human, recovery latency (virtual and wall time), and tokens and cost per passing run. Prices come from a config file that records its price date.
-- Output: JSON per run, a CSV across runs and a Markdown report.
+- Output: JSON per run, a CSV across runs and a Markdown report. `python -m fivefold.evaluator report` builds the last two from saved result files.
 
 ## Runs and determinism
 
