@@ -60,6 +60,30 @@ Live runs are manual and never run in CI. A live run is refused unless the envir
 
 The record command prints the verdict, the cassette's digest and what the run spent. Each model call takes the scenario's `think_ms` of virtual time, however long the model really takes, and `harness.model_call` logs its tokens. `--param NAME=VALUE`, such as `--param temperature=0`, sets a model parameter; the cassette records it. Before each call, the spend so far is checked against the cap, and a refused call ends that agent worker as `budget`. A call the provider has not answered after `--call-limit-s` wall-clock seconds (default 600) fails, and its worker ends with an error, so a stalled server cannot hold the run.
 
+## A study
+
+`python -m fivefold.harness.study` runs a matrix of episodes, the runs of milestone M4, and saves each run's result in a directory for the report (see Results). An episode is a cell of `faults/expected.yaml`, or a cell with no fault, run with one seed. By default the study runs every expected cell of dev-001, in B0, G1 and G2 at C0 to C3, once each, with the scripted model. Each episode runs in a fresh database, dropped once it ends.
+
+```
+uv run python -m fivefold.harness.study --out study --cells none F2 --contracts C0 C2 --episodes 2
+uv run python -m fivefold.evaluator report study --csv study.csv --markdown study.md
+```
+
+`--cells` takes `all`, `none` (no fault), a fault (`F2`), a fault and variant (`F11-after_tool_call`) or a cell (`F2-C2-G2`). `--episodes N` runs each cell with the seeds S to S+N-1, where `--seed S` defaults to 7. Episodes run in a fixed order, by seed and then by cell, and each result is saved as `CELL-seed-SEED.json`, such as `F2-C0-G2-seed-7.json`. The same inputs with the scripted model give the same bytes. The output directory must be new or empty. The cells' fault plans are written for dev-001, so with another scenario only `--cells none` runs. A study refuses to start if any of its episode databases already exists, such as one another study kept, rather than replace it.
+
+A live study takes the options of a live episode (see above) and is refused without them, before it touches any database. It also saves each episode's cassette in `cassettes/`; `python -m fivefold.recorder play` compares a replay with the original run's database, so give `--keep-databases` to play one back. One spend cap holds across the study, and the study stops once the spend reaches it, since every later model call would be refused. An episode the cap cut short keeps its cassette, and its result goes to `spend-cap/`, which a report over the directory leaves out.
+
+The pilot of 10 to 20 live episodes is the maintainer's to size (`docs/plan.md`, M4). For example, no fault and F2, at C2, in B0, G1 and G2, with three seeds each, is 18 episodes. `MODEL` and `CAP` are placeholders: the maintainer has chosen neither yet.
+
+```
+FIVEFOLD_LIVE=1 uv run python -m fivefold.harness.study --out pilot \
+    --cells none F2 --contracts C2 --episodes 3 \
+    --live ollama:MODEL --spend-cap-usd CAP --prices prices.yaml
+uv run python -m fivefold.evaluator report pilot --csv pilot.csv --markdown pilot.md
+```
+
+The study prints each episode's verdict next to the one `faults/expected.yaml` expects for its cell, how each agent worker ended, and in a live study the episode's model calls and the spend so far.
+
 ## Documents
 
 - [docs/product.md](docs/product.md): what and why, scope and non-goals
