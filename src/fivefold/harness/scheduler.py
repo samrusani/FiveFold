@@ -17,8 +17,8 @@ Crashing a component cancels its tasks and discards their memory; it stays down 
 its restart event fires (0006). Each crash starts a new incarnation, so the transport can
 drop answers to requests sent before the crash (0010, change 3). A restart belongs to the
 incarnation its crash started. When the component crashes again before that restart
-fires, as two crash faults at one event make it, the earlier restart does nothing, so a
-component never runs as two copies at once.
+fires, the earlier restart does nothing, so a component never runs as two copies at
+once.
 
 A component that waits on the real world, as the live model adapter waits on its
 provider, awaits it through `hold`. Until the wait ends, the scheduler fires no event: it

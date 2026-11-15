@@ -13,7 +13,8 @@ seeded parameter the plan leaves unset, such as F4's `copy_delay_ms`, from the r
 `parse_plan` also refuses two crash faults with the very same trigger: the same point,
 match and occurrence. They would fire at the same event on the same component, and one
 crash already stops it. Two crashes whose triggers differ can still meet at one event;
-the scheduler then restarts the component once (`fivefold.harness.scheduler`).
+then only the first fires, since a component it stopped reaches no further fault point
+(`fivefold.harness.run`).
 """
 
 from __future__ import annotations

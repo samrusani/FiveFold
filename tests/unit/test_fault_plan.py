@@ -86,8 +86,8 @@ def test_two_crashes_with_the_same_trigger_are_refused(
 )
 def test_crashes_with_different_triggers_are_accepted(second: dict[str, object]) -> None:
     """A later occurrence, another call, another point or another field make another
-    trigger. The last one can still fire with the first at one event; the scheduler then
-    restarts the worker once."""
+    trigger. The last one can still meet the first at one event; then only the first
+    fires (`tests/pg/test_crash_restarts.py`)."""
     assert len(parse_plan([kill("F11", AFTER_CALL, ORDER_CALL), second])) == 2
 
 

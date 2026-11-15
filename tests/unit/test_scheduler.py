@@ -265,9 +265,10 @@ def test_a_crash_cancels_the_components_tasks_and_a_restart_brings_it_back() -> 
 
 
 def test_a_second_crash_before_the_restart_leaves_one_restart_the_latest() -> None:
-    """Two crash faults at one event crash a component twice. Each restart belongs to the
-    crash that queued it, so the earlier one finds a newer incarnation and does nothing:
-    the component never runs as two copies. Later crashes restart as usual."""
+    """A component that crashes again before its restart fires restarts once. Each
+    restart belongs to the crash that queued it, so the earlier one finds a newer
+    incarnation and does nothing: the component never runs as two copies. Later crashes
+    restart as usual."""
     scheduler = Scheduler()
     started: list[tuple[str, int]] = []
 
