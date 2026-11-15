@@ -1,5 +1,91 @@
-"""The evaluator (0004): property checks, metrics and the report.
+"""The evaluator (0004): property checks, metrics and the result of each run.
 
-It decides pass or fail only from simulator and harness records, and never calls a model.
-It imports only `fivefold.domain`: it reads other components' tables, never their code.
+It decides pass or fail only from simulator and harness records and the scenario, and
+never calls a model or reads a transcript. It imports only `fivefold.domain`: it reads
+other components' tables, never their code. Milestone M1 checks properties 1 (exactly
+once) and 5 (truthfully reported); properties 2 to 4 are marked not evaluated.
+
+Typical use, after the run has stopped:
+
+    result = evaluate_run(conninfo_as_ff_eval, load_scenario_file(path))
+    text = result_json(result)
+
+`load_run` and `evaluate` split that into reading and pure scoring; `write_result`
+stores a result in the `eval` schema.
 """
+
+from fivefold.evaluator.checks import CLAIM_METRICS
+from fivefold.evaluator.evaluate import evaluate, run_verdict
+from fivefold.evaluator.evidence import (
+    IntentKnowledge,
+    Knowledge,
+    RequestFinding,
+    SentWrite,
+    Settlement,
+    stack_knowledge,
+)
+from fivefold.evaluator.load import load_run
+from fivefold.evaluator.records import (
+    ActorAction,
+    Config,
+    Destination,
+    Effect,
+    Fault,
+    Message,
+    RecordsError,
+    RunInfo,
+    RunRecords,
+    SubmittedReport,
+)
+from fivefold.evaluator.result import (
+    ClaimJudgment,
+    CountedReport,
+    Failure,
+    PropertyResult,
+    PropertyVerdict,
+    ReasonCode,
+    RequestOutcome,
+    RunResult,
+    RunSummary,
+    Verdict,
+    result_json,
+)
+from fivefold.evaluator.store import EVALUATOR_ROLE, WrongRole, evaluate_run, write_result
+
+__all__ = [
+    "CLAIM_METRICS",
+    "EVALUATOR_ROLE",
+    "ActorAction",
+    "ClaimJudgment",
+    "Config",
+    "CountedReport",
+    "Destination",
+    "Effect",
+    "Failure",
+    "Fault",
+    "IntentKnowledge",
+    "Knowledge",
+    "Message",
+    "PropertyResult",
+    "PropertyVerdict",
+    "ReasonCode",
+    "RecordsError",
+    "RequestFinding",
+    "RequestOutcome",
+    "RunInfo",
+    "RunRecords",
+    "RunResult",
+    "RunSummary",
+    "SentWrite",
+    "Settlement",
+    "SubmittedReport",
+    "Verdict",
+    "WrongRole",
+    "evaluate",
+    "evaluate_run",
+    "load_run",
+    "result_json",
+    "run_verdict",
+    "stack_knowledge",
+    "write_result",
+]
