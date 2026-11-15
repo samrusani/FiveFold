@@ -2,7 +2,12 @@
 
 A run is a scenario, a configuration, a contract level, a seed and a model (0009). This
 build runs B0, G1 and G2 with the scripted model, recorded into a cassette or not, with a
-cassette's replay, or with a live model, always recorded (`fivefold.harness.models`).
+cassette's replay, with a live model, always recorded, or as an experimental branch of a
+recorded run, which replays the parent's first K model calls and then switches to the
+scripted model or a live one, also always recorded (`fivefold.harness.models`). A branch
+runs its parent's run: the same scenario, configuration, contract level, seed, fault plan
+and workers. It is a new run all the same, with its own run id, the parent's with
+`.branch-K` added, and `harness.run` names its parent and its branch point.
 `InprocRun.execute`:
 
 1. records the run, in its run database and in the run registry (0012,
@@ -63,7 +68,7 @@ from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.checkpoint import InlinePostgresSaver, connect
 from fivefold.agents.connection import GatewayConnection
-from fivefold.agents.live import refusal
+from fivefold.agents.live import Think, refusal
 from fivefold.agents.policy import Mode, scripted_policy
 from fivefold.agents.scripted import ScriptedModel
 from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
@@ -94,13 +99,22 @@ from fivefold.harness.clock import settle, wall_ms
 from fivefold.harness.fault_effects import SimulatorFaults, message_context
 from fivefold.harness.log import FaultRecord, ModelCallRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
-from fivefold.harness.models import SCRIPTED, ModelSpec, RunModels
+from fivefold.harness.models import (
+    SCRIPTED,
+    Branch,
+    ModelSpec,
+    Parent,
+    RunModels,
+    branch_run_id,
+    parent_of,
+)
 from fivefold.harness.registry import RegistryEntry, database_of, register
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.sim_points import SimulatorPoints
 from fivefold.harness.transport import Envelope, Outgoing, Stage, Transport
+from fivefold.recorder.cassette import RunHeader, plain_object
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
@@ -162,11 +176,22 @@ class RunSpec:
     plan: Sequence[Mapping[str, Any]] | None = None
     workers: int = 1
     model: ModelSpec = SCRIPTED
-    """The model adapter: scripted, scripted with recording, or replay (0009)."""
+    """The model adapter: scripted, scripted with recording, replay, live, or a branch's
+    (0009)."""
+
+    @property
+    def parent(self) -> Parent | None:
+        """For an experimental branch, or a replay of one, the run it branched from and
+        its branch point (0009); None for any other run."""
+        return parent_of(self.model)
 
     @property
     def run_id(self) -> str:
-        """A readable id that names the run's choices."""
+        """A readable id that names the run's choices. A branch's is its parent's run id
+        with `.branch-K` added, K being its branch point (`branch_run_id`)."""
+        parent = self.parent
+        if parent is not None:
+            return branch_run_id(parent)
         return f"{self.scenario.id}.{self.config}.{self.contract}.{self.seed}"
 
 
@@ -211,6 +236,15 @@ class InprocRun:
         self._tool_names = GATEWAY_TOOL_NAMES if gateway else BASELINE_TOOL_NAMES
         self._closing: list[Any] = []
         self._last_write_answers: dict[tuple[str, str], int] = {}
+        self._params: dict[str, object] = {
+            "params": spec.scenario.params.model_dump(mode="json"),
+            "plan": [entry.model_dump(mode="json") for entry in self._plan],
+            "workers": spec.workers,
+            "agent_workers": self._agent_workers,
+        }
+        """The values the run uses, as `harness.run.params` records them (0009)."""
+        if isinstance(spec.model, Branch):
+            _check_branch(spec, self._params, spec.model.parent.run)
         self.models = RunModels(spec.model)
         self._model_calls = 0
 
@@ -225,6 +259,7 @@ class InprocRun:
         self._closing.append(harness_conn)
         self.log = PgHarnessLog(harness_conn)
         plan = self._plan
+        parent = spec.parent
         self.log.run_recorded(
             RunRecord(
                 run_id=spec.run_id,
@@ -236,12 +271,9 @@ class InprocRun:
                 model_adapter=self.models.adapter,
                 model=self.models.name,
                 cassette_digest=self.models.cassette_digest,
-                params={
-                    "params": scenario.params.model_dump(mode="json"),
-                    "plan": [entry.model_dump(mode="json") for entry in plan],
-                    "workers": spec.workers,
-                    "agent_workers": self._agent_workers,
-                },
+                params=self._params,
+                parent_run_id=None if parent is None else parent.run_id,
+                branch_point=None if parent is None else parent.branch_point,
             )
         )
         register(
@@ -690,9 +722,9 @@ class InprocRun:
         def think() -> Awaitable[None]:
             return self.scheduler.sleep(scenario.params.think_ms)
 
-        def scripted() -> BaseChatModel:
+        def scripted(its_think: Think) -> BaseChatModel:
             return ScriptedModel(
-                lambda: scripted_policy(scenario.intents, mode=mode, rank=rank), think
+                lambda: scripted_policy(scenario.intents, mode=mode, rank=rank), its_think
             )
 
         return self.models.chat_model(
@@ -759,6 +791,29 @@ def _describe(error: BaseException) -> str:
     while isinstance(error, BaseExceptionGroup) and error.exceptions:
         error = error.exceptions[0]
     return f"{type(error).__name__}: {error}"
+
+
+def _check_branch(spec: RunSpec, params: Mapping[str, object], parent: RunHeader) -> None:
+    """Refuse a branch that would not run its parent's run (0009): the same scenario, with
+    the same digest, configuration, contract level, seed and topology, and the same
+    values, which hold the fault plan with the parameters drawn from the seed, and the
+    workers. Otherwise the branch would name a parent it does not continue."""
+    scenario = spec.scenario
+    mine: dict[str, object] = {
+        "scenario_id": scenario.id,
+        "scenario_digest": scenario_digest(scenario),
+        "config": spec.config,
+        "contract": str(spec.contract),
+        "seed": spec.seed,
+        "topology": "inproc",
+        "params": plain_object(params, "the run's params"),
+    }
+    differ = [name for name, value in mine.items() if getattr(parent, name) != value]
+    if differ:
+        raise ValueError(
+            f"a branch runs its parent's run, but it differs from {parent.run_id} in"
+            f" {', '.join(differ)}"
+        )
 
 
 def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:

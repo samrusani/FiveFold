@@ -102,6 +102,11 @@ class RunRecord:
     topology: Literal["inproc", "split"] = "inproc"
     cassette_digest: str | None = None
     """The cassette a replay serves, or the one a recording made (`cassette_recorded`)."""
+    parent_run_id: str | None = None
+    """For an experimental branch, the run id of the run it branched from (0009)."""
+    branch_point: int | None = None
+    """For an experimental branch, K: how many of its parent's model calls it replayed
+    before it switched model (0009). Set exactly when `parent_run_id` is."""
 
 
 @dataclass(frozen=True)
@@ -325,8 +330,8 @@ class PgHarnessLog(HarnessLog):
     def run_recorded(self, record: RunRecord) -> None:
         self._conn.execute(
             "INSERT INTO harness.run (run_id, scenario_id, scenario_digest, config, contract,"
-            " seed, topology, model_adapter, model, cassette_digest, params)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " seed, topology, model_adapter, model, cassette_digest, parent_run_id,"
+            " branch_point, params) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 record.run_id,
                 record.scenario_id,
@@ -338,6 +343,8 @@ class PgHarnessLog(HarnessLog):
                 record.model_adapter,
                 record.model,
                 record.cassette_digest,
+                record.parent_run_id,
+                record.branch_point,
                 Jsonb(dict(record.params)),
             ),
         )

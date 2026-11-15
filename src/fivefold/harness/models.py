@@ -9,12 +9,25 @@
   (`fivefold.agents.replay`).
 - `Live(provider, model, params, spend)`: the live adapter, a provider's chat model
   (`fivefold.agents.live`), always wrapped by the recorder (0009).
+- `Branch(parent, point, model)`: an experimental branch (0009, Playback and branching).
+  The branch adapter replays the first `point` calls of the cassette `parent`, then
+  hands every later call to `model`, the scripted model or a live one
+  (`fivefold.agents.branch`). A branch always records its own cassette, which holds all
+  its calls, the replayed ones included.
 
 `harness.run` records the adapter (`scripted`, `live` or `replay`), the model's name, and
 the cassette's digest: for a replay, the cassette it serves, from the start; for a
 recording, the cassette it made, once the run has stopped and the cassette is complete. A
 recording run and its replays therefore name the same digest. A live model's name says the
 provider and the model, such as `ollama:llama3.1:8b`, and its replays name it too.
+
+A branch records the adapter and the name of the model it switches to, and the digest of
+its own cassette. Its every model call goes into `harness.model_call` under that name, as
+the run's model, and its cassette hashes every call with that model, the replayed calls
+included, so that `play` replays a branch as any other recorded run. The branch's
+`Parent`, its parent's run id and its branch point, goes into `harness.run` as
+`parent_run_id` and `branch_point`, and into its cassette's header; a replay of the
+branch's cassette records the same.
 
 Live runs sit behind an explicit flag and a spend cap (CLAUDE.md). A live run is refused,
 before anything runs, unless the environment sets `FIVEFOLD_LIVE=1`, the run has a spend
@@ -26,18 +39,20 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import JsonValue
 
+from fivefold.agents.branch import BranchModel, BranchPlayer, check_branch_point
 from fivefold.agents.live import (
     CALL_LIMIT_S,
     Hold,
     LiveModel,
     SpendMeter,
+    Think,
     live_name,
     provider_model,
 )
@@ -52,6 +67,10 @@ SCRIPTED_MODEL: Final = ModelInfo(adapter="scripted", name="scripted")
 
 LIVE_FLAG: Final = "FIVEFOLD_LIVE"
 """The environment variable that must be `1` for a live run to start."""
+
+
+async def _no_think() -> None:
+    """The think of a model that answers after the branch adapter has thought for it."""
 
 
 @dataclass(frozen=True)
@@ -90,11 +109,57 @@ class Live:
         return live_name(self.provider, self.model)
 
 
-ModelSpec = Scripted | Replay | Live
-"""Which model adapter a run uses."""
-
 SCRIPTED: Final = Scripted()
 """The scripted adapter, without recording: a run's default."""
+
+
+@dataclass(frozen=True)
+class Branch:
+    """An experimental branch (0009): the first `point` model calls of the run `parent`
+    was recorded from, replayed from it, then `model`, the scripted model or a live one.
+
+    `point` is the branch point, K: how many of the parent's calls the branch replays,
+    from 0 to all of them. The branch always records its own cassette, whatever
+    `model`'s `record` says.
+    """
+
+    parent: Cassette
+    point: int
+    model: Scripted | Live = SCRIPTED
+
+    def __post_init__(self) -> None:
+        check_branch_point(self.parent, self.point)
+
+
+ModelSpec = Scripted | Replay | Live | Branch
+"""Which model adapter a run uses."""
+
+
+@dataclass(frozen=True)
+class Parent:
+    """The run a branch comes from (0009): the parent's run id, and the branch point, K,
+    the number of the parent's model calls the branch replays."""
+
+    run_id: str
+    branch_point: int
+
+
+def branch_run_id(parent: Parent) -> str:
+    """A branch's run id: its parent's run id, `.branch-` and its branch point, such as
+    `dev-001-single-po.G2.C2.7.branch-4`. A branch of a branch adds a second suffix."""
+    return f"{parent.run_id}.branch-{parent.branch_point}"
+
+
+def parent_of(spec: ModelSpec) -> Parent | None:
+    """The parent of a run with the model `spec`: a branch's, or, for a replay of a
+    branch's cassette, the one its header names. None for any other run."""
+    if isinstance(spec, Branch):
+        return Parent(spec.parent.run.run_id, spec.point)
+    if isinstance(spec, Replay):
+        header = spec.cassette.run
+        if header.parent_run_id is not None and header.branch_point is not None:
+            return Parent(header.parent_run_id, header.branch_point)
+    return None
 
 
 class LiveRefused(ValueError):
@@ -133,6 +198,8 @@ def run_header(record: RunRecord) -> RunHeader:
         seed=record.seed,
         topology=record.topology,
         params=plain_object(record.params, "the run's params"),
+        parent_run_id=record.parent_run_id,
+        branch_point=record.branch_point,
     )
 
 
@@ -151,30 +218,41 @@ class RunModels:
 
     def __init__(self, spec: ModelSpec, *, environ: Mapping[str, str] | None = None) -> None:
         """`environ` is where a live run looks for its flag: the process environment by
-        default. A live run is refused here, before the run records anything."""
+        default. A live run is refused here, before the run records anything, and so is a
+        live branch."""
         self.spec = spec
         self._recorder: CassetteRecorder | None = None
         self._player: CassettePlayer | None = None
+        self._branch: BranchPlayer | None = None
         self._live: _LiveSetup | None = None
         self.cassette: Cassette | None = None
         """The cassette a replay serves, or the one a recording made, once complete."""
         if isinstance(spec, Replay):
             self._player = CassettePlayer(spec.cassette)
             self.cassette = spec.cassette
+        elif isinstance(spec, Branch):
+            self._branch = BranchPlayer(spec.parent, spec.point)
+            self._recorder = CassetteRecorder(self._answering(spec.model, environ))
         elif isinstance(spec, Live):
-            meter, price = check_live(spec, os.environ if environ is None else environ)
-            chat = provider_model(spec.provider, spec.model, spec.params)
-            self._live = _LiveSetup(spec, chat, meter, price)
-            params = plain_object(spec.params, "the model's parameters")
-            self._recorder = CassetteRecorder(
-                ModelInfo(adapter="live", name=spec.name, params=params)
-            )
+            self._recorder = CassetteRecorder(self._answering(spec, environ))
         elif spec.record:
             self._recorder = CassetteRecorder(SCRIPTED_MODEL)
 
+    def _answering(self, spec: Scripted | Live, environ: Mapping[str, str] | None) -> ModelInfo:
+        """Set up the model that answers the calls, live after `check_live`; return it as
+        the cassette names it."""
+        if isinstance(spec, Scripted):
+            return SCRIPTED_MODEL
+        meter, price = check_live(spec, os.environ if environ is None else environ)
+        chat = provider_model(spec.provider, spec.model, spec.params)
+        self._live = _LiveSetup(spec, chat, meter, price)
+        params = plain_object(spec.params, "the model's parameters")
+        return ModelInfo(adapter="live", name=spec.name, params=params)
+
     @property
     def adapter(self) -> Literal["scripted", "live", "replay"]:
-        """The adapter, as `harness.run.model_adapter` records it."""
+        """The adapter, as `harness.run.model_adapter` records it: for a branch, the
+        adapter of the model it switches to."""
         if self._player is not None:
             return "replay"
         return "live" if self._live is not None else "scripted"
@@ -182,7 +260,7 @@ class RunModels:
     @property
     def name(self) -> str:
         """The model's name, as `harness.run.model` records it: a replay names the
-        recorded model."""
+        recorded model, and a branch the model it switches to."""
         if self._player is not None:
             return self._player.cassette.model.name
         if self._live is not None:
@@ -196,43 +274,58 @@ class RunModels:
 
     @property
     def served(self) -> int:
-        """How many recorded calls a replay has answered."""
-        return self._player.served if self._player is not None else 0
+        """How many recorded calls a replay or a branch has answered from its cassette."""
+        if self._player is not None:
+            return self._player.served
+        return self._branch.served if self._branch is not None else 0
 
     def chat_model(
         self,
         worker: str,
         *,
-        scripted: Callable[[], BaseChatModel],
-        think: Callable[[], Awaitable[None]],
+        scripted: Callable[[Think], BaseChatModel],
+        think: Think,
         hold: Hold | None = None,
     ) -> BaseChatModel:
         """The chat model of one incarnation of `worker`.
 
-        `scripted` builds the worker's scripted model, which takes `think_ms` itself;
-        `think` takes `think_ms` of virtual time, for an adapter that has no model to;
-        `hold` awaits a live model's provider with virtual time held still
-        (`Scheduler.hold`), which a live model needs.
+        `scripted` builds the worker's scripted model, which takes the think it is given
+        before each call; `think` takes `think_ms` of virtual time; `hold` awaits a live
+        model's provider with virtual time held still (`Scheduler.hold`), which a live
+        model needs. Every call takes `think` once: a branch takes it itself, before it
+        decides where the call goes, so the model it switches to takes none.
         """
         if self._player is not None:
             return ReplayModel(self._player, worker=worker, think=think)
-        if self._live is not None:
-            if hold is None or self._recorder is None:
-                raise ValueError("a live model needs the scheduler's hold and the recorder")
-            live = LiveModel(
-                self._live.chat,
-                name=self._live.spec.name,
-                price=self._live.price,
-                meter=self._live.meter,
-                think=think,
-                hold=hold,
-                limit_s=self._live.spec.limit_s,
-            )
-            return RecordingModel(live, self._recorder, worker=worker)
-        model = scripted()
+        if self._branch is not None:
+            if self._recorder is None:
+                raise ValueError("a branch records its cassette")
+            then = self._answering_model(scripted, _no_think, hold)
+            branch = BranchModel(self._branch, then, worker=worker, think=think)
+            return RecordingModel(branch, self._recorder, worker=worker)
+        model = self._answering_model(scripted, think, hold)
         if self._recorder is not None:
             return RecordingModel(model, self._recorder, worker=worker)
         return model
+
+    def _answering_model(
+        self, scripted: Callable[[Think], BaseChatModel], think: Think, hold: Hold | None
+    ) -> BaseChatModel:
+        """The model that answers the calls, taking `think` before each one: the live
+        adapter, or the scripted model."""
+        if self._live is None:
+            return scripted(think)
+        if hold is None or self._recorder is None:
+            raise ValueError("a live model needs the scheduler's hold and the recorder")
+        return LiveModel(
+            self._live.chat,
+            name=self._live.spec.name,
+            price=self._live.price,
+            meter=self._live.meter,
+            think=think,
+            hold=hold,
+            limit_s=self._live.spec.limit_s,
+        )
 
     def stopped(self, run: RunRecord) -> str | None:
         """The run has stopped, so no model call is left. A recording's cassette is then
@@ -244,6 +337,8 @@ class RunModels:
 
     def check(self) -> None:
         """Fail the run, with `ReplayError`, if a replay did not serve exactly the
-        recorded calls (0009)."""
+        recorded calls, or a branch did not replay its parent's first K calls (0009)."""
         if self._player is not None:
             self._player.finish()
+        if self._branch is not None:
+            self._branch.finish()

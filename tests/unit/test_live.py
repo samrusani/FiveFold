@@ -32,6 +32,7 @@ from fivefold.agents.live import (
     LiveModel,
     Provider,
     SpendMeter,
+    Think,
     parse_live_name,
     provider_model,
     refusal,
@@ -264,7 +265,7 @@ def test_a_live_run_names_its_provider_and_model_and_always_records(
     async def think() -> None:
         pass
 
-    def scripted() -> BaseChatModel:
+    def scripted(its_think: Think) -> BaseChatModel:
         raise AssertionError("a live run builds no scripted model")
 
     with pytest.raises(ValueError, match="needs the scheduler's hold"):
