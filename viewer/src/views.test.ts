@@ -86,7 +86,15 @@ describe("pairs of runs a demo shows side by side", () => {
   it("pairs every fitting G2 run when none is named after it", () => {
     const runs = [listedRun("study_0001", "B0"), listedRun("study_0002", "G2"), listedRun("x", "G1")];
     expect(pairs(runs).map((p) => p.g2.database)).toEqual(["study_0002"]);
-    expect(pairs([listedRun("a_b0", "B0"), { ...listedRun("a_g2", "G2"), seed: 8 }])).toEqual([]);
+    expect(pairs([listedRun("a_b0", "B0"), { ...listedRun("a_g2", "G2"), seed: "8" }])).toEqual([]);
+  });
+
+  it("never pairs runs whose seeds differ only past 2**53, where JavaScript numbers round", () => {
+    const b0 = { ...listedRun("study_0001", "B0"), seed: "9223372036854775806" };
+    const g2 = { ...listedRun("study_0002", "G2"), seed: "9223372036854775807" };
+    expect(Number(b0.seed)).toBe(Number(g2.seed));
+    expect(pairs([b0, g2])).toEqual([]);
+    expect(pairs([b0, { ...g2, seed: b0.seed }]).map((p) => p.g2.database)).toEqual(["study_0002"]);
   });
 });
 

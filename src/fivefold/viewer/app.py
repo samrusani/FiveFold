@@ -18,6 +18,10 @@ Every endpoint is a GET and answers JSON:
 A run is named by its database, because two databases can hold runs with the same id,
 such as a recording and its replay. The viewer opens only databases the registry lists.
 
+A seed is a bigint, and a study takes seeds up to 2**63 - 1. A browser reads a JSON number
+as a double, exact only up to 2**53 - 1, so the API sends every seed as its decimal text,
+such as `"7"`: in the run list, and in a run's registry row and `run`.
+
 An error answers JSON too, `{"error": CODE, "detail": TEXT}`: 404 `unknown_run` (the
 registry lists no such database), 404 `run_unavailable` (it cannot be read, for example
 because it was dropped), 404 `not_a_run` (it holds no run), and 503

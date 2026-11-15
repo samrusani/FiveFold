@@ -160,9 +160,10 @@ class RunSource:
         raise ViewerError(404, "unknown_run", f"the run registry lists no database {database!r}")
 
     def _registry_rows(self, where: LiteralString, args: tuple[str, ...]) -> list[dict[str, Any]]:
+        """Registry rows, with the seed as its decimal text (`fivefold.viewer.app`)."""
         query: LiteralString = (
-            "SELECT database_name AS database, run_id, scenario_id, config, contract, seed,"
-            " created_wall_at FROM registry.run WHERE "
+            "SELECT database_name AS database, run_id, scenario_id, config, contract,"
+            " seed::text AS seed, created_wall_at FROM registry.run WHERE "
             + where
             + " ORDER BY created_wall_at DESC, database_name"
         )
