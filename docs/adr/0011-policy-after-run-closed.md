@@ -1,6 +1,6 @@
 # 0011: The scripted policy after a `run_closed` rejection
 
-Status: Proposed
+Status: Accepted (2026-11-15)
 Date: 2026-11-15
 Spec sections affected: Configurations (the scripted agent policy, through record 0008)
 
