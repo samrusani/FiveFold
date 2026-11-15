@@ -75,6 +75,15 @@ def _scenario(dev_data: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class InFlight:
+    """A write received through the split path, waiting for its commit."""
+
+    order: SubmitPurchaseOrder
+    deadline_vt: int
+    waived: bool
+
+
+@dataclass(frozen=True)
 class MachineDatabase:
     """One run database for the machine, emptied before each example."""
 
@@ -112,8 +121,10 @@ class SimMachine(RuleBasedStateMachine):
         self.served: dict[str, set[int]] = {}
         self.approvals: list[str] = []
         self.scopes: dict[str, PurchaseOrderScope] = {}
-        self.in_flight: dict[int, int] = {}
-        """Writes received through the split path: received seq to deadline."""
+        self.in_flight: dict[int, InFlight] = {}
+        """Writes received through the split path, by received seq."""
+        self.used: set[str] = set()
+        """Approvals the machine filed that back an effect."""
         self.keys = 0
 
     def teardown(self) -> None:
@@ -138,11 +149,11 @@ class SimMachine(RuleBasedStateMachine):
         self.vt += dt
 
     @precondition(lambda self: bool(self.in_flight))
-    @rule(data=st.data())
-    def wait_out_a_deadline(self, data: st.DataObject) -> None:
-        """Jump just past the deadline of a write in flight, then make any call."""
-        deadline = data.draw(st.sampled_from(sorted(self.in_flight.values())))
-        self.vt = max(self.vt, deadline + 1)
+    @rule(data=st.data(), past=st.booleans())
+    def wait_out_a_deadline(self, data: st.DataObject, past: bool) -> None:
+        """Jump to the deadline of a write in flight, or just past it, then make any call."""
+        flight = data.draw(st.sampled_from([self.in_flight[seq] for seq in sorted(self.in_flight)]))
+        self.vt = max(self.vt, flight.deadline_vt + (1 if past else 0))
         self.read_budget()
 
     @rule(supplier=st.sampled_from(SUPPLIERS))
@@ -220,28 +231,84 @@ class SimMachine(RuleBasedStateMachine):
         """A write a careful client would send: within an approval's scope, citing the
         latest versions it read, with a new key or one it used before."""
         approval_id = data.draw(st.sampled_from(self.approvals))
-        scope = self.scopes[approval_id]
-        basis = {
-            key: max(self.served[key])
-            for key in (f"quote/{scope.supplier_id}/W-100", "budget/CC-OPS")
-            if key in self.served
-        }
         if fresh or not self.keys:
             self.keys += 1
-        key = f"P-{data.draw(st.integers(1, self.keys)) if not fresh else self.keys}"
-        order = SubmitPurchaseOrder(
+        number = self.keys if fresh else data.draw(st.integers(1, self.keys))
+        self.send(self.planned(approval_id, f"P-{number}"), split=split, waive=waive)
+
+    @precondition(lambda self: bool(self.used))
+    @rule(data=st.data())
+    def reuse_an_approval(self, data: st.DataObject) -> None:
+        """Read every input again, then cite an approval that already backs an effect."""
+        approval_id = data.draw(st.sampled_from(sorted(self.used)))
+        self.read_quote(self.scopes[approval_id].supplier_id)
+        self.read_budget()
+        self.keys += 1
+        self.send(self.planned(approval_id, f"P-{self.keys}"), split=False, waive=False)
+
+    @rule(data=st.data())
+    def stray_from_a_scope(self, data: st.DataObject) -> None:
+        """Read every input again, then order from the supplier the approval does not name.
+        At C3 only the scope check stands between this write and a commit."""
+        approval_id = data.draw(st.sampled_from(self.approvals))
+        other = next(s for s in SUPPLIERS if s != self.scopes[approval_id].supplier_id)
+        self.read_quote(other)
+        self.read_budget()
+        self.keys += 1
+        self.send(
+            self.planned(approval_id, f"P-{self.keys}", supplier=other), split=False, waive=False
+        )
+
+    @rule(data=st.data())
+    def cite_inputs_read_too_late(self, data: st.DataObject) -> None:
+        """Send a write citing the current versions, read them only after it arrived,
+        then commit it. Reads served after a write arrived do not count (0004)."""
+        approval_id = data.draw(st.sampled_from(self.approvals))
+        supplier = self.scopes[approval_id].supplier_id
+        with psycopg.connect(self.db.admin) as conn:
+            rows = conn.execute(
+                "SELECT key, max(version) FROM sim.fact_version WHERE key = ANY(%s) GROUP BY key",
+                ([f"quote/{supplier}/W-100", "budget/CC-OPS"],),
+            ).fetchall()
+        self.keys += 1
+        order = self.planned(approval_id, f"P-{self.keys}", {str(k): int(v) for k, v in rows})
+        answer = self.sim.receive_write(order, caller=GW, vt=self.vt)
+        if not isinstance(answer, WriteReceived):
+            self.check_answer(order, answer)
+            return
+        self.read_quote(supplier)
+        self.read_budget()
+        self.in_flight[answer.received_seq] = InFlight(order, answer.deadline_vt, False)
+        self.finish(answer.received_seq)
+
+    def planned(
+        self,
+        approval_id: str,
+        key: str,
+        basis: dict[str, int] | None = None,
+        supplier: str | None = None,
+    ) -> SubmitPurchaseOrder:
+        """An order within the approval's scope, unless another supplier is named, citing
+        the latest versions read."""
+        supplier = self.scopes[approval_id].supplier_id if supplier is None else supplier
+        if basis is None:
+            basis = {
+                fact: max(self.served[fact])
+                for fact in (f"quote/{supplier}/W-100", "budget/CC-OPS")
+                if fact in self.served
+            }
+        return SubmitPurchaseOrder(
             intent_id="REQ-1",
             approval_id=approval_id,
             basis=basis,
             idempotency_key=key,
-            supplier_id=scope.supplier_id,
+            supplier_id=supplier,
             sku="W-100",
             quantity=100,
             unit_price_minor=540,
             currency="USD",
             cost_center="CC-OPS",
         )
-        self.send(order, split=split, waive=waive)
 
     @rule(data=st.data(), split=st.booleans(), waive=st.booleans())
     def write(self, data: st.DataObject, split: bool, waive: bool) -> None:
@@ -272,7 +339,7 @@ class SimMachine(RuleBasedStateMachine):
         if split:
             answer = self.sim.receive_write(order, caller=GW, vt=self.vt, waive_deadline=waive)
             if isinstance(answer, WriteReceived):
-                self.in_flight[answer.received_seq] = answer.deadline_vt
+                self.in_flight[answer.received_seq] = InFlight(order, answer.deadline_vt, waive)
                 return
         else:
             answer = self.sim.submit_purchase_order(order, caller=GW, vt=self.vt)
@@ -281,13 +348,19 @@ class SimMachine(RuleBasedStateMachine):
     @precondition(lambda self: bool(self.in_flight))
     @rule(data=st.data())
     def commit(self, data: st.DataObject) -> None:
-        if self.in_flight:
-            received_seq = data.draw(st.sampled_from(sorted(self.in_flight)))
-            del self.in_flight[received_seq]
-            answer = self.sim.commit_received(received_seq, vt=self.vt)
-            if not isinstance(answer, WriteAborted):
-                assert not isinstance(answer, WriteInProgress)
-                assert not (isinstance(answer, WriteCommitted) and answer.replay)
+        self.finish(data.draw(st.sampled_from(sorted(self.in_flight))))
+
+    def finish(self, received_seq: int) -> None:
+        """Commit a write in flight. Only a write whose deadline holds can abort."""
+        flight = self.in_flight.pop(received_seq)
+        answer = self.sim.commit_received(received_seq, vt=self.vt)
+        if isinstance(answer, WriteAborted):
+            assert not flight.waived, "a write whose deadline a fault waived aborted"
+            assert self.vt > flight.deadline_vt
+            return
+        assert not isinstance(answer, WriteInProgress)
+        assert not (isinstance(answer, WriteCommitted) and answer.replay)
+        self.check_answer(flight.order, answer)
 
     @rule()
     def status(self) -> None:
@@ -314,6 +387,8 @@ class SimMachine(RuleBasedStateMachine):
             assert self.contract.has(Capability.CONDITIONAL_WRITE)
         else:
             assert isinstance(answer, WriteCommitted)
+            if order.approval_id in self.scopes:
+                self.used.add(order.approval_id)
 
 
 # The checker ---------------------------------------------------------------------------
