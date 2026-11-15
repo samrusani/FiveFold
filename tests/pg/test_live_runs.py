@@ -8,7 +8,9 @@ time, through I/O the event loop cannot see. The run must fire every event at th
 time the scripted run does, record every call into its cassette, and play back byte for
 byte with no provider at all. The token budget and the spend cap end a worker as `budget`,
 and their replays end it at the same call. The record command refuses a live run without
-the flag, the spend cap and the price file, before it touches any database.
+the flag, the spend cap and the price file, before it touches any database. A live study
+saves each episode's result and cassette, and the cassettes play back; the spend cap stops
+a study partway, and the study keeps what it ran.
 """
 
 from __future__ import annotations
@@ -41,10 +43,13 @@ from fivefold.agents.policy import Mode, Result, scripted_policy
 from fivefold.agents.worker import SPEND_CAP_TEXT, TOKEN_BUDGET_TEXT, WorkerEnd
 from fivefold.domain.prices import PriceFile, price_file_from_text
 from fivefold.domain.scenario import load_scenario_file
+from fivefold.evaluator.report import load_result, load_results
+from fivefold.harness.cells import load_expected
 from fivefold.harness.demo import DEV_001, demo_1_spec
 from fivefold.harness.migrations import drop_database
 from fivefold.harness.models import Live
 from fivefold.harness.run import Config, InprocRun, RunSpec
+from fivefold.harness.study import main as study_main
 from fivefold.recorder.__main__ import main
 from fivefold.recorder.cassette import Cassette, response_message
 from fivefold.recorder.playback import play, record, records
@@ -571,3 +576,178 @@ def test_the_command_shows_a_provider_that_cannot_be_reached_as_a_worker_s_error
     assert "0 USD spent of the 0.50 USD cap on 0 model calls" in out
     assert "  agent-1: error, ConnectionError: Failed to connect to Ollama.\n" in out
     assert Cassette.load(cassette).calls == ()
+
+
+# A live study --------------------------------------------------------------------------------
+
+
+def write_prices(path: Path, input_usd: str, output_usd: str) -> Path:
+    """A price file for the fake model, at the prices given."""
+    path.write_text(
+        "price_date: 2026-11-15\nprices:\n  fake:\n    m:\n"
+        f"      input_usd_per_million_tokens: {input_usd}\n"
+        f"      output_usd_per_million_tokens: {output_usd}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def study_databases(admin_dsn: str, prefix: str) -> list[str]:
+    """The databases a study with `prefix` names: `prefix`, an underscore and a number."""
+    with psycopg.connect(admin_dsn) as conn:
+        found = conn.execute(
+            "SELECT datname FROM pg_database WHERE datname ~ %s ORDER BY datname",
+            (f"^{prefix}_[0-9]+$",),
+        ).fetchall()
+    return [str(row[0]) for row in found]
+
+
+def drop_study_databases(admin_dsn: str, prefix: str) -> None:
+    for name in study_databases(admin_dsn, prefix):
+        drop_database(admin_dsn, name)
+
+
+def test_a_live_study_saves_each_result_and_cassette_and_the_cassettes_play_back(
+    admin_dsn: str,
+    db_prefix: str,
+    tmp_path: Path,
+    run_database: Callable[[str], str],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """F2 at C2 in B0 and G2, seeds 7 and 8, with the fake model: four episodes, each with
+    its result and its cassette. The databases are kept here, so that each cassette can
+    play back against the run it was recorded from, with no provider and no flag."""
+    prefix, out = f"{db_prefix}_live_study", tmp_path / "study"
+    prices = write_prices(tmp_path / "prices.yaml", "1", "2")
+    argv = ["--dsn", admin_dsn, "--out", str(out), "--database-prefix", prefix]
+    argv += ["--cells", "F2", "--configs", "G2", "B0", "--contracts", "C2", "--episodes", "2"]
+    argv += ["--live", "fake:m", "--spend-cap-usd", "1", "--prices", str(prices)]
+    argv += ["--param", "temperature=0", "--keep-databases"]
+    names = [f"F2-C2-{config}-seed-{seed}" for seed in (7, 8) for config in ("B0", "G2")]
+    expected = {cell.name: cell for cell in load_expected().cells}
+    try:
+        assert study_main(argv) == 0
+        printed = capsys.readouterr().out.splitlines()
+        assert printed[0] == (
+            "Study of dev-001-single-po with the live model fake:m: 4 episodes, 2 cells,"
+            " seeds 7 to 8."
+        )
+        assert printed[1].startswith(
+            "[1/4] F2-C2-B0-seed-7: fail (1, 2, 3), expected fail (1, 2, 3); agent-1 finished;"
+            " 7 model calls, "
+        )
+        assert printed[5].startswith("Model fake:m; ")
+        assert printed[5].endswith(" USD cap on 30 model calls, at prices dated 2026-11-15.")
+        assert printed[6].startswith("Ran all 4 episodes.")
+        assert sorted(path.name for path in out.iterdir()) == sorted(
+            [*(f"{name}.json" for name in names), "cassettes"]
+        )
+        assert sorted(path.name for path in (out / "cassettes").iterdir()) == sorted(
+            f"{name}.json" for name in names
+        )
+
+        no_provider(monkeypatch)
+        for number, name in enumerate(names, start=1):
+            result = load_result(out / f"{name}.json")
+            cassette = Cassette.load(out / "cassettes" / f"{name}.json")
+            assert (result.run.model_adapter, result.run.model) == ("live", "fake:m")
+            assert result.run.cassette_digest == cassette.digest()
+            assert cassette.model.params == {"temperature": 0}
+            cell = expected[name.rpartition("-seed-")[0]]
+            failing = tuple(p.property for p in result.properties if str(p.verdict) == "fail")
+            assert (str(result.verdict), failing) == (cell.verdict, cell.failing), name
+            original = make_conninfo(admin_dsn, dbname=f"{prefix}_{number:04d}")
+            replay = run_database(f"study_replay_{number}")
+            playback = play(cassette, SCENARIO, original=original, replay=replay)
+            assert playback.differences == (), name
+            assert playback.calls == len(cassette.calls) > 0
+    finally:
+        drop_study_databases(admin_dsn, prefix)
+
+
+def test_the_spend_cap_stops_a_live_study_partway_and_the_study_keeps_what_it_ran(
+    admin_dsn: str,
+    db_prefix: str,
+    tmp_path: Path,
+    provider: Callable[..., None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No fault at C2 in B0, G1 and G2: three episodes of 7 model calls, each call 1,000
+    input tokens at 100 USD per million, so 0.10 USD, with a cap of 0.75 USD. The first
+    episode ends at 0.70 USD. The second's first call takes the spend to 0.80 USD, so its
+    next call is refused and the cap cuts it short: its result goes to `spend-cap/`, which
+    the report over the directory leaves out, and its cassette ends with the refusal. The
+    third never starts, since its first call would be refused."""
+    provider(fixed_usage(1_000, 0))
+    prefix, out = f"{db_prefix}_capped_study", tmp_path / "study"
+    prices = write_prices(tmp_path / "prices.yaml", "100", "0")
+    argv = ["--dsn", admin_dsn, "--out", str(out), "--database-prefix", prefix]
+    argv += ["--cells", "none", "--contracts", "C2"]
+    argv += ["--live", "fake:m", "--spend-cap-usd", "0.75", "--prices", str(prices)]
+    try:
+        assert study_main(argv) == 0
+    finally:
+        left = study_databases(admin_dsn, prefix)
+        drop_study_databases(admin_dsn, prefix)
+    assert left == [], "each episode's database is dropped once it ends"
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[1:] == [
+        "[1/3] none-C2-B0-seed-7: pass; agent-1 finished; 7 model calls, 0.7 USD spent so far",
+        f"[2/3] none-C2-G1-seed-7: fail (4, 5); agent-1 budget ({SPEND_CAP_TEXT}); 2 model"
+        " calls, 0.8 USD spent so far; cut short by the spend cap, so its result is in"
+        " spend-cap/",
+        "Model fake:m; 0.8 USD spent of the 0.75 USD cap on 8 model calls, at prices dated"
+        " 2026-11-15.",
+        f"The spend cap stopped the study after 2 of 3 episodes. Results are in {out}. Report"
+        f" them with: python -m fivefold.evaluator report {out} --csv runs.csv --markdown"
+        " report.md",
+    ]
+    files = sorted(str(path.relative_to(out)) for path in out.rglob("*") if path.is_file())
+    assert files == [
+        "cassettes/none-C2-B0-seed-7.json",
+        "cassettes/none-C2-G1-seed-7.json",
+        "none-C2-B0-seed-7.json",
+        "spend-cap/none-C2-G1-seed-7.json",
+    ]
+    cut = Cassette.load(out / "cassettes" / "none-C2-G1-seed-7.json")
+    assert cut.calls[-1].response == {
+        "content": SPEND_CAP_TEXT,
+        "response_metadata": {"fivefold_refused": "spend_cap"},
+    }
+    assert load_result(out / "spend-cap" / "none-C2-G1-seed-7.json").run.config == "G1"
+    assert [result.run.config for result in load_results([out])] == ["B0"]
+    assert (
+        load_result(out / "none-C2-B0-seed-7.json").run.cassette_digest
+        == Cassette.load(out / "cassettes" / "none-C2-B0-seed-7.json").digest()
+    )
+
+
+def test_a_study_whose_spend_reaches_the_cap_as_an_episode_ends_stops_before_the_next(
+    admin_dsn: str,
+    db_prefix: str,
+    tmp_path: Path,
+    provider: Callable[..., None],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With a cap of 0.70 USD, the first episode's seventh and last call takes the spend
+    to the cap. No call of that episode was refused, so its result counts as any other;
+    the next episode never starts."""
+    provider(fixed_usage(1_000, 0))
+    prefix, out = f"{db_prefix}_reached_study", tmp_path / "study"
+    prices = write_prices(tmp_path / "prices.yaml", "100", "0")
+    argv = ["--dsn", admin_dsn, "--out", str(out), "--database-prefix", prefix]
+    argv += ["--cells", "none", "--contracts", "C2"]
+    argv += ["--live", "fake:m", "--spend-cap-usd", "0.70", "--prices", str(prices)]
+    try:
+        assert study_main(argv) == 0
+    finally:
+        drop_study_databases(admin_dsn, prefix)
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[1] == (
+        "[1/3] none-C2-B0-seed-7: pass; agent-1 finished; 7 model calls, 0.7 USD spent so far"
+    )
+    assert printed[3].startswith("The spend cap stopped the study after 1 of 3 episodes.")
+    files = sorted(str(path.relative_to(out)) for path in out.rglob("*") if path.is_file())
+    assert files == ["cassettes/none-C2-B0-seed-7.json", "none-C2-B0-seed-7.json"]
