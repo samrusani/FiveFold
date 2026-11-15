@@ -1,6 +1,6 @@
 # Contributing
 
-The project is in its design phase. Most contributions today are reviews of the design documents: open an issue, or comment on a pull request.
+Fivefold is working toward its first release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
 
 ## How decisions are made
 
