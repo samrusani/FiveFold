@@ -29,10 +29,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import mcp_types as types
 import psycopg
 import pytest
 import uvicorn
 import yaml
+from mcp.shared.exceptions import MCPError
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from starlette.types import Receive, Scope, Send
@@ -804,6 +806,77 @@ def test_once_the_agents_phase_is_over_the_scripted_agent_is_told_so(split: Spli
         simulator.stop()
     assert isinstance(error, RunOver), repr(error)
     assert "the run's agents' phase is over" in str(error)
+
+
+def test_the_simulator_refuses_a_body_holding_a_nul_before_logging_it(split: Split) -> None:
+    """PostgreSQL's JSONB cannot hold \\u0000. A B0 report holding one failed in the log,
+    and the simulator answered 500 before the sink could record the report and refuse it.
+    The simulator now refuses such a body as it refuses a malformed one: 422, not logged."""
+    run = split.start("B0", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    headers = {"authorization": f"Bearer {run.secret(AGENT)}"}
+    claims = [{"intent_id": "REQ-1", "status": "done", "effect_ids": ["PO-0001\u0000"]}]
+    try:
+        report = httpx.post(
+            f"{simulator.url}/api/submit_final_report", json={"claims": claims}, headers=headers
+        )
+        quote = httpx.post(
+            f"{simulator.url}/api/get_quote",
+            json={"supplier_id": "S-1", "sku": "W-100\u0000"},
+            headers=headers,
+        )
+        health = httpx.get(f"{simulator.url}/health").json()
+    finally:
+        simulator.stop()
+    for refused in (report, quote):
+        assert refused.status_code == 422, refused.text
+        assert "NUL" in refused.json()["detail"]
+    assert health == {"run_id": run.run_id, "status": "serving", "failures": 0}
+    with split.connect() as conn:
+        messages = conn.execute("SELECT count(*) FROM harness.message_log").fetchone()
+        reports = conn.execute("SELECT count(*) FROM harness.final_report").fetchone()
+    assert (messages, reports) == ((0,), (0,))
+
+
+def test_the_gateway_refuses_an_mcp_message_holding_a_nul_before_logging_it(
+    split: Split,
+) -> None:
+    """The gateway logs each MCP message the agent sends before it serves it, so one
+    holding \\u0000 failed in the log, and the agent got the database's error message,
+    with code 0. The gateway now refuses it with invalid params, before logging it."""
+    run = split.start("G2", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    gateway = serve(GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url).app())
+
+    async def refused() -> Exception:
+        scheduler = HostScheduler(HostClock(HostClock.host_ms()))
+        connection = HttpGatewayConnection(scheduler, f"{gateway.url}/mcp", timeout_ms=5_000)
+        try:
+            await connection.list_tools()
+            arguments = {"supplier_id": "S-1", "sku": "W-100\u0000"}
+            try:
+                await connection.call_tool("get_quote", arguments, 5_000)
+            except Exception as error:
+                return error
+            raise AssertionError("the gateway served a message holding a NUL")
+        finally:
+            connection.close()
+
+    try:
+        error = asyncio.run(asyncio.wait_for(refused(), AGENT_S))
+        health = httpx.get(f"{gateway.url}/health").json()
+    finally:
+        gateway.stop()
+        simulator.stop()
+    assert isinstance(error, MCPError), repr(error)
+    assert error.code == types.INVALID_PARAMS
+    assert "NUL" in error.message
+    assert health["failures"] == 0
+    with split.connect() as conn:
+        quotes = conn.execute(
+            "SELECT count(*) FROM harness.message_log WHERE api = 'get_quote'"
+        ).fetchone()
+    assert quotes == (0,)
 
 
 def _start(

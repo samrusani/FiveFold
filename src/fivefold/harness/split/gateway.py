@@ -17,13 +17,13 @@ that gets no answer within its timeout, or fails on its connection, raises
 
 `AgentHop`, a context-tier MCP middleware, logs every MCP message the agent sends, and the
 gateway's answers, on the `agent_gw` hop, and fires F4 and F12 at `net.agent_gw.request`.
-It logs an answer as delivered when the gateway's handler returns it, before the SDK
-writes it to the agent's connection, and it cannot see whether the agent is still there
-to read it (`fivefold.harness.split.hops`).
-It sees every request and notification in both of the SDK's protocol eras, the
-`initialize` handshake and the 2026-07-28 per-request envelope. It gives the gateway's
-handler the message's seq, as the inproc link does, so the report sink records which
-message carried a report.
+It refuses a message holding a NUL character with invalid params, before logging it,
+since the log cannot store it. It logs an answer as delivered when the gateway's handler
+returns it, before the SDK writes it to the agent's connection, and it cannot see whether
+the agent is still there to read it (`fivefold.harness.split.hops`). It sees every
+request and notification in both of the SDK's protocol eras, the `initialize` handshake
+and the 2026-07-28 per-request envelope. It gives the gateway's handler the message's seq,
+as the inproc link does, so the report sink records which message carried a report.
 
 `/harness/drain` and `/harness/stop` take the harness's token. Drain ends the agents'
 phase (0009): G2 closes the run, as the inproc harness does once its agents are done
@@ -105,7 +105,7 @@ from fivefold.harness.reports import ReportSink
 from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
 from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
-from fivefold.harness.split.hops import SEQ_HEADER, Hops, answer_class
+from fivefold.harness.split.hops import NUL_REFUSED, SEQ_HEADER, Hops, answer_class, holds_nul
 from fivefold.harness.split.rundir import SplitRun
 from fivefold.harness.split.service import OpenRun, open_run, unavailable
 from fivefold.harness.transport import Envelope, Hop, Reply, TransportTimeout
@@ -253,13 +253,16 @@ class AgentHop:
     ) -> HandlerResult:
         serving = self._service.serving
         hops = serving.hops
+        body = _message_body(ctx)
+        if holds_nul(body):
+            raise MCPError(code=INVALID_PARAMS, message=f"the message is refused: {NUL_REFUSED}")
         message = hops.sent(
             hop="agent_gw",
             kind="notification" if ctx.request_id is None else "request",
             sender=AGENT,
             receiver=GATEWAY,
             api=_api(ctx),
-            body=_message_body(ctx),
+            body=body,
             intent_id=_intent(ctx),
         )
         outcome = hops.fire("net.agent_gw.request", message)

@@ -32,7 +32,7 @@ from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
 from fivefold.harness.split.gateway import Attestations, AttestationsClosed, SimulatorLink
-from fivefold.harness.split.hops import Hops, answer_class
+from fivefold.harness.split.hops import Hops, answer_class, holds_nul
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
     Config,
@@ -522,3 +522,20 @@ def test_the_attestation_gate_settles_after_its_bound_if_one_never_logs() -> Non
         return settled
 
     assert asyncio.run(stuck()) == ["closed"]
+
+
+# What the harness's log cannot store -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "holds"),
+    [
+        ("text", False),
+        ("a\x00b", True),
+        ({"claims": [{"effect_ids": ["PO-0001\x00"]}]}, True),
+        ({"key\x00": 1}, True),
+        ([1, 2.5, None, True, {"a": ["b"]}], False),
+    ],
+)
+def test_a_nul_anywhere_in_a_json_value_is_found(value: object, holds: bool) -> None:
+    assert holds_nul(value) is holds
