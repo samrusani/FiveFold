@@ -21,6 +21,9 @@ The variants of a cell:
   the order, F1's B0 equivalent. The crashed component restarts 1,000 ms later.
 - F9 is `same_args` or `different_args`: a second worker starts at the first worker's
   first step (0006).
+- F3 has none: in G modes the gateway crashes after the order's answer arrives and before
+  it is recorded; in B0 the agent is killed as the order's result reaches it, F3's B0
+  equivalent. The crashed component restarts 1,000 ms later.
 """
 
 from __future__ import annotations
@@ -173,6 +176,12 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                 "at": {"point": point, "match": match, "occurrence": 1},
             }
         ]
+    if cell.fault == "F3":
+        if cell.config == "B0":
+            point, match = "agent.after_tool_result", {"tool": ORDER}
+        else:
+            point, match = "gw.dispatch.after_answer", {"api": ORDER}
+        return [{"fault": "F3", "at": {"point": point, "match": match, "occurrence": 1}}]
     if cell.fault == "F9":
         if cell.variant not in ("same_args", "different_args"):
             raise ValueError(f"F9 has no variant {cell.variant!r}")

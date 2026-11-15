@@ -44,7 +44,7 @@ def test_a_parameter_falls_back_to_the_catalog_default() -> None:
     [
         ({"fault": "F2", "at": {"point": "net.nowhere.answer"}}, "not a fault point"),
         ({"fault": "F2", "at": {"point": "agent.step"}}, "does not fire at"),
-        ({"fault": "F3", "at": {"point": "gw.dispatch.after_answer"}}, "cannot be injected"),
+        ({"fault": "F8", "at": {"point": "agent.step"}}, "cannot be injected"),
         ({"fault": "F13", "at": {"point": "agent.step"}}, "fault"),
         (
             {"fault": "F11", "at": {"point": "agent.after_tool_call"}, "params": {"x": 1}},
@@ -119,6 +119,8 @@ def test_the_catalog_names_only_points_0006_lists() -> None:
         ("F1", "gw.dispatch.after_record"),
         ("F1", "agent.before_tool_call"),
         ("F9", "agent.step"),
+        ("F3", "gw.dispatch.after_answer"),
+        ("F3", "agent.after_tool_result"),
         ("F6", "gw.dispatch.before_check"),
         ("F6", "net.agent_sim.answer"),
         ("F7", "net.gw_sim.request"),
@@ -218,6 +220,8 @@ def test_f1_restarts_after_a_second_by_default() -> None:
     ("fault", "point", "gateway"),
     [
         ("F1", "agent.before_tool_call", True),
+        ("F3", "agent.after_tool_result", True),
+        ("F3", "gw.dispatch.after_answer", False),
         ("F1", "gw.dispatch.after_check", False),
         ("F2", "net.agent_sim.answer", True),
         ("F2", "net.gw_sim.answer", False),

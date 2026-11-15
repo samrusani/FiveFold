@@ -414,3 +414,19 @@ def test_a_fault_at_a_dispatch_point_is_told_the_request_it_stopped() -> None:
         "api": "submit_purchase_order",
         "idempotency_key": action_id,
     }
+
+
+def test_the_point_after_the_answer_is_reached_only_when_an_answer_arrives() -> None:
+    """A lost answer times out, and a timeout is no answer. F3's point waits for the
+    retry's answer, so the timeout cannot use up F3's occurrence (0006)."""
+    plan = [{"fault": "F3", "at": {"point": "gw.dispatch.after_answer", "occurrence": 1}}]
+    reached: list[int] = []
+    run = Run(
+        faults=FaultInjector(parse_plan(plan)),
+        on_fault=lambda fired, point, context: reached.append(run.scheduler.now),
+    )
+    run.world.lose_answers = 1
+    action_id = run.go()
+    _, second = run.store.view(action_id).attempts
+    assert len(reached) == 1, "the fault fired once"
+    assert reached[0] > second.sent_vt, "at the retry's answer, not at the first send's timeout"

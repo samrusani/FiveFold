@@ -79,6 +79,9 @@ REPORT_SINK = "report_sink"
 POSSIBLY_SENT_POINT = "gw.dispatch.after_record"
 """A gateway crash here leaves a request that may or may not have left (0006, crashes)."""
 
+VOIDING_POINT = "gw.dispatch.after_answer"
+"""A gateway crash here voids the answer it just received (0006, crashes)."""
+
 GATEWAY_TOOL_NAMES = frozenset(
     {
         "get_quote",
@@ -162,6 +165,7 @@ class InprocRun:
         )
         self._tool_names = GATEWAY_TOOL_NAMES if spec.config == "G2" else BASELINE_TOOL_NAMES
         self._closing: list[Any] = []
+        self._last_write_answers: dict[tuple[str, str], int] = {}
 
     def _conninfo(self, role: str) -> str:
         return make_conninfo(self._dsn, user=role)
@@ -202,6 +206,7 @@ class InprocRun:
             faults=self.faults,
         )
         self.transport.observe(self._agent_points)
+        self.transport.observe(self._gateway_answers)
         self.transport.before_send(self._before_tool_call)
         credentials = (GATEWAY,) if spec.config == "G2" else _worker_names(self._agent_workers)
         config = SimConfig.preset(
@@ -314,19 +319,27 @@ class InprocRun:
 
     def _gateway_fault(self, fired: Fired, point: str, context: Mapping[str, object]) -> None:
         """A fault at a dispatch point: record it, then apply it: F6 and F7 early through
-        the simulator, F1 by crashing the gateway.
+        the simulator, F1 and F3 by crashing the gateway.
 
-        A crash after the attempt is recorded leaves a request that may have left (0006):
-        the fault's record names it, for the evaluator (0004, property 5).
+        What the crash changes for the evidence goes in the fault's record (0006, crashes;
+        0004, property 5). A crash after the attempt is recorded leaves a request that may
+        have left: the record names it. A crash after the answer arrived voids that answer,
+        which the gateway never recorded.
         """
         action = fired.planned.kind.action
         params: dict[str, object] = dict(fired.planned.params)
+        voided: tuple[int, ...] = ()
         if action is Action.KILL and point == POSSIBLY_SENT_POINT:
             params["request"] = {
                 "intent_id": context["intent_id"],
                 "api": context["api"],
                 "idempotency_key": context["idempotency_key"],
             }
+        if action is Action.KILL and point == VOIDING_POINT:
+            answer = self._last_write_answers.get((str(context["api"]), str(context["intent_id"])))
+            if answer is None:
+                raise RuntimeError(f"{fired.fault} at {point}: no answer reached the gateway")
+            voided = (answer,)
         self.log.fault_fired(
             FaultRecord(
                 seq=self.log.next_seq(),
@@ -337,6 +350,7 @@ class InprocRun:
                 action=str(action),
                 vt=self.scheduler.now,
                 component=GATEWAY,
+                voided=voided,
                 params=params,
             )
         )
@@ -488,8 +502,22 @@ class InprocRun:
             )
             self._kill(worker, fired.planned.param("restart_delay_ms"))
 
+    def _gateway_answers(self, envelope: Envelope, stage: Stage) -> None:
+        """Note each write answer delivered to the gateway, by API and intent, so that a
+        crash right after it (F3) can void it."""
+        if (
+            stage == "delivered"
+            and envelope.hop == "gw_sim"
+            and envelope.kind == "answer"
+            and envelope.receiver == GATEWAY
+            and envelope.api is not None
+            and envelope.intent_id is not None
+        ):
+            self._last_write_answers[(envelope.api, envelope.intent_id)] = envelope.seq
+
     def _agent_points(self, envelope: Envelope, stage: Stage) -> None:
-        """F11: kill a worker after it sends a tool call, or as a tool result reaches it."""
+        """F11, and F3's B0 equivalent: kill a worker after it sends a tool call, or as a
+        tool result reaches it."""
         if stage == "sent" and envelope.kind == "request":
             worker, point = envelope.sender, "agent.after_tool_call"
         elif stage == "delivered" and envelope.kind == "answer":

@@ -1,4 +1,4 @@
-"""F1, the gateway crashes before dispatch, in whole runs (0003, startup recovery; 0006).
+"""F1 and F3, the gateway crashes, in whole runs (0003, startup recovery; 0006).
 
 - F1a crashes the gateway after the dispatch check, before the attempt is recorded. The
   restarted gateway checks again and sends.
@@ -7,6 +7,9 @@
   escalates (0005).
 - B0's equivalent kills the agent just before it sends the order; it resumes from its
   checkpoint and sends once.
+- F3 crashes the gateway after the order's answer arrived, before it was recorded. The
+  crash voids that answer. Recovery finds the open attempt, as after F1b, but this time
+  the order committed. B0's equivalent kills the agent as the order's result reaches it.
 
 The agent's call waits when the gateway dies: its connection ends, the framework retries,
 and the agent opens a new connection to the restarted gateway (`agents/connection.py`).
@@ -210,4 +213,104 @@ def test_a_g2_run_refuses_f1_at_b0s_equivalent_point() -> None:
     test nothing about recovery (0006)."""
     spec = RunSpec(load_scenario_file(DEV_001), "G2", Contract.C2, 7, plan=f1("a", "B0"))
     with pytest.raises(ValueError, match=re.escape("F1 at agent.before_tool_call")):
+        InprocRun(spec, "postgresql://unused")
+
+
+# F3 -------------------------------------------------------------------------------------
+
+
+def f3(config: Config = "G2") -> list[dict[str, Any]]:
+    if config == "B0":
+        at = {"point": "agent.after_tool_result", "match": {"tool": "submit_purchase_order"}}
+    else:
+        at = {"point": "gw.dispatch.after_answer", "match": ORDER}
+    return [{"fault": "F3", "at": {**at, "occurrence": 1}}]
+
+
+def test_f3_voids_the_answer_and_recovery_retries_into_the_stored_result_at_c2(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f3_c2")
+    run(dsn, Contract.C2, f3())
+    ((voided, component),) = rows(dsn, "SELECT voided, component FROM harness.fault_log")
+    assert component == "gateway"
+    ((answer_seq, fate, answer_class),) = rows(
+        dsn,
+        "SELECT seq, fate, answer_class FROM harness.message_log WHERE hop = 'gw_sim'"
+        " AND kind = 'answer' AND api = 'submit_purchase_order' ORDER BY seq LIMIT 1",
+    )
+    assert (fate, answer_class) == ("delivered", "committed")
+    assert voided == [answer_seq], "the answer reached the gateway; the crash voided it"
+    assert effects(dsn) == [("PO-0001", "APR-0001", "A-0001")]
+    reasons = [r for (r,) in rows(dsn, "SELECT reason FROM gw.action_event ORDER BY seq")]
+    assert "recovered_open_attempt" in reasons
+    assert rows(dsn, "SELECT attempt_no FROM gw.attempt ORDER BY attempt_no") == [(1,), (2,)]
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+def test_f3_after_a_lost_answer_waits_for_an_answer_that_arrives(
+    run_database: Callable[[str], str],
+) -> None:
+    """F2 drops the order's first answer, so the first send times out and no answer reaches
+    the gateway. F3 waits for the retry's answer, the first that arrives, and voids it."""
+    dsn = run_database("f3_after_f2")
+    f2 = {
+        "fault": "F2",
+        "at": {
+            "point": "net.gw_sim.answer",
+            "match": {**ORDER, "answer": "committed"},
+            "occurrence": 1,
+        },
+    }
+    run(dsn, Contract.C2, [f2, *f3()])
+    answers = rows(
+        dsn,
+        "SELECT seq, fate FROM harness.message_log WHERE hop = 'gw_sim' AND kind = 'answer'"
+        " AND api = 'submit_purchase_order' ORDER BY seq",
+    )
+    assert [fate for _, fate in answers] == ["dropped", "delivered", "delivered"]
+    fired = rows(dsn, "SELECT fault, voided FROM harness.fault_log ORDER BY seq")
+    assert fired == [("F2", []), ("F3", [answers[1][0]])]
+    assert effects(dsn) == [("PO-0001", "APR-0001", "A-0001")]
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+def test_f3_at_c1_a_probe_finds_the_order_the_crash_forgot(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f3_c1")
+    run(dsn, Contract.C1, f3())
+    assert effects(dsn) == [("PO-0001", "APR-0001", None)]
+    assert rows(dsn, "SELECT state FROM gw.action") == [("confirmed",)]
+    assert rows(dsn, "SELECT count(*) FROM gw.attempt") == [(1,)], "C1 never retries"
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+def test_f3_at_c0_the_gateway_escalates_and_the_agent_reports_unknown(
+    run_database: Callable[[str], str],
+) -> None:
+    """The order committed, but the gateway forgot its answer and C0 cannot ask (0006)."""
+    dsn = run_database("f3_c0")
+    run(dsn, Contract.C0, f3())
+    assert effects(dsn) == [("PO-0001", "APR-0001", None)]
+    assert rows(dsn, "SELECT state FROM gw.action") == [("outcome_unknown",)]
+    assert claim(dsn) == ("unknown", [])
+
+
+def test_b0_killed_as_the_orders_result_arrives_orders_again(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f3_b0")
+    run(dsn, Contract.C2, f3("B0"), config="B0")
+    ((point, component, voided),) = rows(
+        dsn, "SELECT point, component, voided FROM harness.fault_log"
+    )
+    assert (point, component, len(voided)) == ("agent.after_tool_result", "agent-1", 1)
+    assert [effect for effect, _, _ in effects(dsn)] == ["PO-0001", "PO-0002"]
+
+
+def test_a_g2_run_refuses_f3_at_b0s_equivalent_point() -> None:
+    plan = [{"fault": "F3", "at": {"point": "agent.after_tool_result", "occurrence": 1}}]
+    spec = RunSpec(load_scenario_file(DEV_001), "G2", Contract.C2, 7, plan=plan)
+    with pytest.raises(ValueError, match=re.escape("F3 at agent.after_tool_result")):
         InprocRun(spec, "postgresql://unused")
