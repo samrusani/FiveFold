@@ -255,6 +255,15 @@ def test_a_restarted_gateway_keeps_the_runs_clock(migrated_database: str) -> Non
 # Two connections, one record ------------------------------------------------------------------
 
 
+def test_events_from_a_seq_are_the_snapshots_events_from_it(migrated_database: str) -> None:
+    with _store(migrated_database) as store:
+        _dispatched(store)
+        events = store.snapshot().events
+        assert len(events) >= 3
+        for seq in range(events[-1].seq + 2):
+            assert store.events_from(seq) == tuple(e for e in events if e.seq >= seq)
+
+
 def test_a_second_connection_sees_the_first_ones_writes(migrated_database: str) -> None:
     with _store(migrated_database) as first, _store(migrated_database, exclusive=False) as second:
         action_id = _authorized(first)
