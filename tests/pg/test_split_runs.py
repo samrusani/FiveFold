@@ -35,12 +35,17 @@ from psycopg.conninfo import make_conninfo
 from fivefold.agents.remote import RemoteAgent, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
-from fivefold.harness.migrations import drop_database, registry_database
+from fivefold.harness.migrations import (
+    create_database,
+    database_lock,
+    drop_database,
+    registry_database,
+)
 from fivefold.harness.registry import forget
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.lifecycle import start_run
-from fivefold.harness.split.rundir import Config, SplitRun, read_run
+from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.simulator import SimulatorService
 
 pytestmark = pytest.mark.pg
@@ -312,6 +317,68 @@ def test_the_simulator_refuses_the_agents_identity_in_g_modes(split: Split) -> N
     assert writes == (0,)
     assert reads == [(GATEWAY,)]
     assert sorted(hops) == [("agent_sim", AGENT), ("gw_sim", GATEWAY)]
+
+
+def _start(
+    split: Split, run_dir: Path, *, replace: bool = False, admin: str | None = None
+) -> SplitRun:
+    return start_run(
+        admin_dsn=split.admin if admin is None else admin,
+        scenario_path=split.scenario(),
+        config="B0",
+        contract=Contract.C2,
+        seed=7,
+        run_dir=run_dir,
+        plan=[],
+        model="scripted",
+        database=split.database,
+        template=split.template,
+        replace=replace,
+    )
+
+
+def _database_oid(split: Split) -> int | None:
+    with psycopg.connect(split.admin) as conn:
+        row = conn.execute(
+            "SELECT oid FROM pg_database WHERE datname = %s", (split.database,)
+        ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def test_start_refuses_a_database_of_the_same_name_unless_asked_to_replace_it(
+    split: Split,
+) -> None:
+    """A database that already has the run's name is left as it was, unless the person
+    asks to replace it."""
+    other = create_database(split.admin, split.database)
+    with pytest.raises(RunDirError, match="already exists: replace it, or name another"):
+        _start(split, split.root / "refused")
+    assert _database_oid(split) == other.oid
+    _start(split, split.root / "replaced", replace=True)
+    replaced = _database_oid(split)
+    assert replaced is not None and replaced != other.oid
+
+
+def test_start_copies_the_run_database_under_the_database_lock(
+    split: Split, db_prefix: str, await_database_lock: Callable[[str], None]
+) -> None:
+    """The run database is copied from the template under the lock that every create and
+    drop takes (`fivefold.harness.migrations.database_lock`), so a study's drop and its
+    registry cleanup never interleave with it."""
+    _start(split, split.root / "first")  # makes and migrates the template
+    drop_database(split.admin, split.database)
+    waiter = f"{db_prefix}_split_start"
+    admin = make_conninfo(split.admin, application_name=waiter)
+    started: list[SplitRun] = []
+    thread = threading.Thread(
+        target=lambda: started.append(_start(split, split.root / "second", admin=admin))
+    )
+    with database_lock(split.admin):
+        thread.start()
+        await_database_lock(waiter)
+        assert _database_oid(split) is None, "the copy waits for the lock"
+    thread.join(timeout=60)
+    assert len(started) == 1 and _database_oid(split) is not None
 
 
 def test_the_agents_phase_ends_then_the_run_stops(split: Split) -> None:

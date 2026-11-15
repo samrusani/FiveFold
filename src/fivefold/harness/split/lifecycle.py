@@ -54,7 +54,8 @@ from fivefold.harness.log import RunRecord, SharedPgHarnessLog
 from fivefold.harness.migrations import (
     bootstrap_server,
     check_database_name,
-    drop_database,
+    database_lock,
+    drop_database_locked,
     migrate,
     recreate_database,
 )
@@ -189,29 +190,32 @@ def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:
 
 def _run_database(admin_dsn: str, name: str, template: str, *, replace: bool) -> str:
     """Make the run's database from the migrated template; return its admin DSN. The
-    component roles and the run registry are made first, if they are missing."""
+    component roles and the run registry are made first, if they are missing.
+
+    The run database is replaced, when asked, and copied from the template under the
+    database lock that every create and drop takes (`fivefold.harness.migrations`), so
+    a study's cleanup never sees the name half changed.
+    """
     bootstrap_server(admin_dsn, DB_DIR)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        names = {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT datname FROM pg_database WHERE datname IN (%s, %s)", (template, name)
-            ).fetchall()
-        }
-    if template not in names:
+        found = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (template,)).fetchone()
+    if found is None:
         recreate_database(admin_dsn, template)
     with psycopg.connect(make_conninfo(admin_dsn, dbname=template), autocommit=True) as conn:
         migrate(conn, DB_DIR / "migrations")
-    if name in names:
-        if not replace:
-            raise RunDirError(f"database {name} already exists: replace it, or name another")
-        drop_database(admin_dsn, name)
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        conn.execute(
-            sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                sql.Identifier(name), sql.Identifier(template)
+    with database_lock(admin_dsn) as conn:
+        if replace:
+            drop_database_locked(conn, name)
+        try:
+            conn.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(name), sql.Identifier(template)
+                )
             )
-        )
+        except psycopg.errors.DuplicateDatabase:
+            raise RunDirError(
+                f"database {name} already exists: replace it, or name another"
+            ) from None
     return make_conninfo(admin_dsn, dbname=name)
 
 
