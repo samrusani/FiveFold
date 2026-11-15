@@ -3,10 +3,20 @@
     python -m fivefold.recorder record --demo 1 --config G2 --cassette demo-1-g2.json
     python -m fivefold.recorder play demo-1-g2.json \\
         --scenario scenarios/dev/dev-001-single-po.yaml
+    FIVEFOLD_LIVE=1 python -m fivefold.recorder record --demo 1 --config G2 \\
+        --cassette live.json --live ollama:MODEL --spend-cap-usd CAP --prices PRICES
 
 `record` runs a demo of record 0006, or a scenario file at a contract level with the
 scenario's own fault list, with the scripted model, recording every model call. It runs in
 a fresh run database (`--database`, default `fivefold_recorded`) and writes the cassette.
+
+With `--live PROVIDER:MODEL`, `record` runs that live model instead (`fivefold.agents.live`).
+It refuses, before it touches any database, unless the environment sets `FIVEFOLD_LIVE=1`,
+`--spend-cap-usd` gives a cap above 0 USD, and the price file `--prices` prices the model.
+`--param NAME=VALUE` sets one of the model's parameters, VALUE read as JSON, or as text when
+it is not JSON. The cap holds across the command's runs; the command prints what the run
+spent and how each agent worker ended, so a provider that could not be reached shows as a
+worker's error. The cassette plays back with `play`, with no network.
 
 `play` re-executes the run a cassette was recorded from, with the cassette's responses, in
 another fresh run database (`--database`, default `fivefold_replayed`), and compares its
@@ -15,7 +25,8 @@ exits with 0 only when the replay matches. It refuses to run in the original run
 and only ever reads that one.
 
 Each command drops and recreates the database it runs in, as the demos do. The admin
-connection comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`. No command needs an API key. A
+connection comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`. Only a live model's provider can
+need a key, and it reads the key from the environment, never from this command. A
 refused input, such as a scenario that changed or a fault plan the configuration does
 not have, ends the command with one line on standard error and exit status 1.
 """
@@ -23,19 +34,27 @@ not have, ends the command with one line on standard error and exit status 1.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import psycopg
 from psycopg.conninfo import make_conninfo
+from pydantic import JsonValue
 
+from fivefold.agents.live import SpendMeter, check_provider, parse_live_name
 from fivefold.agents.replay import ReplayError
+from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
+from fivefold.domain.prices import load_price_file
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, bootstrap, migrate, recreate_database
+from fivefold.harness.models import Live, check_live, check_live_flag
 from fivefold.harness.run import CONFIGS, RunSpec
 from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import RECORDS, PlaybackError, play, record, replay_spec
@@ -52,18 +71,60 @@ def _fresh_database(admin_dsn: str, name: str) -> str:
     return dsn
 
 
-def _record(args: argparse.Namespace) -> int:
+def _usd(text: str) -> Decimal:
+    """An amount in USD, from the command line."""
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        raise argparse.ArgumentTypeError(f"not an amount: {text!r}") from None
+
+
+def _params(items: Sequence[str]) -> dict[str, JsonValue]:
+    """The model's parameters from `NAME=VALUE` items, each VALUE as JSON or as text."""
+    params: dict[str, JsonValue] = {}
+    for item in items:
+        name, equals, value = item.partition("=")
+        if not name or not equals:
+            raise ValueError(f"a model parameter is NAME=VALUE, not {item!r}")
+        try:
+            params[name] = json.loads(value)
+        except json.JSONDecodeError:
+            params[name] = value
+    return params
+
+
+def _live(args: argparse.Namespace) -> Live:
+    """The live model `--live` names, with its spend cap and prices, checked before any
+    database is touched: the flag, the provider and its parameters, the cap, and the
+    model's price."""
+    check_live_flag(os.environ)
+    provider, model = parse_live_name(args.live)
+    params = _params(args.param)
+    check_provider(provider, params)
+    meter = SpendMeter(args.spend_cap_usd, load_price_file(args.prices))
+    live = Live(provider, model, params, spend=meter)
+    check_live(live, os.environ)
+    return live
+
+
+def _record(args: argparse.Namespace, live: Live | None) -> int:
     if args.demo is not None:
         spec = DEMO_BY_KEY[args.demo].spec(args.config, args.seed)
     else:
         scenario = load_scenario_file(args.scenario)
         spec = RunSpec(scenario, args.config, Contract(args.contract), args.seed)
+    if live is not None:
+        spec = replace(spec, model=live)
     dsn = _fresh_database(args.dsn, args.database)
     run, cassette = record(spec, dsn)
     cassette.save(args.cassette)
     print(f"Recorded {spec.run_id} in {args.database}: {len(cassette.calls)} model calls.")
     print(f"  verdict: {verdict_line(run.result.evaluation)}")
     print(f"  cassette: {args.cassette}, sha256 {cassette.digest()}")
+    if live is not None and live.spend is not None:
+        print(f"  model: {live.name}; {live.spend.summary()}")
+        for worker, (end, text) in sorted(run.result.ends.items()):
+            print(f"  {worker}: {end}" + ("" if end is WorkerEnd.FINISHED else f", {text}"))
     return 0
 
 
@@ -121,6 +182,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     recording.add_argument(
         "--database", default=RECORDED, help=f"the run's database (default {RECORDED})"
     )
+    recording.add_argument(
+        "--live",
+        metavar="PROVIDER:MODEL",
+        help="run this live model instead of the scripted one; needs FIVEFOLD_LIVE=1",
+    )
+    recording.add_argument(
+        "--spend-cap-usd",
+        type=_usd,
+        metavar="USD",
+        help="with --live: refuse model calls once the spend reaches this many USD",
+    )
+    recording.add_argument(
+        "--prices", type=Path, metavar="PATH", help="with --live: the price file"
+    )
+    recording.add_argument(
+        "--param",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="with --live: a model parameter, VALUE as JSON; repeat for more",
+    )
 
     playing = commands.add_parser("play", help="replay a cassette and compare the records")
     playing.add_argument("cassette", type=Path)
@@ -139,10 +221,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("a demo has its own contract level; leave out --contract")
     if args.command == "play" and args.database == args.original:
         parser.error("the replay needs its own database, not the original run's")
-    with psycopg.connect(args.dsn, autocommit=True) as conn:
-        bootstrap(conn, DB_DIR / "bootstrap.sql")
+    if args.command == "record":
+        live_options = args.spend_cap_usd is not None or args.prices is not None or args.param
+        if args.live is None and live_options:
+            parser.error("--spend-cap-usd, --prices and --param go with --live")
+        if args.live is not None and (args.spend_cap_usd is None or args.prices is None):
+            parser.error("--live needs --spend-cap-usd and --prices")
     try:
-        return _record(args) if args.command == "record" else _play(args)
+        live = _live(args) if args.command == "record" and args.live is not None else None
+        with psycopg.connect(args.dsn, autocommit=True) as conn:
+            bootstrap(conn, DB_DIR / "bootstrap.sql")
+        return _record(args, live) if args.command == "record" else _play(args)
     except (OSError, PlaybackError, ReplayError, ValueError) as error:
         print(f"{args.command} failed: {error}", file=sys.stderr)
         return 1

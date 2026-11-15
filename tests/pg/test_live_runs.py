@@ -1,0 +1,480 @@
+"""Whole runs through the live model adapter, with a fake provider (0009; CLAUDE.md).
+
+No test reaches a model provider. The fake provider answers as a real model does: it is
+asked through the live adapter with the worker's tools bound, it plays the scripted policy
+of 0008 over the conversation, its tool calls have random ids, as Ollama's do, its replies
+report token usage and carry wall-clock metadata, and each call awaits the network in wall
+time, through I/O the event loop cannot see. The run must fire every event at the virtual
+time the scripted run does, record every call into its cassette, and play back byte for
+byte with no provider at all. The token budget and the spend cap end a worker as `budget`,
+and their replays end it at the same call. The record command refuses a live run without
+the flag, the spend cap and the price file, before it touches any database.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import socket
+import threading
+import uuid
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, LiteralString
+
+import psycopg
+import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages.ai import UsageMetadata
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import Runnable
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from psycopg.conninfo import make_conninfo
+from pydantic import JsonValue, PrivateAttr
+
+from fivefold.agents.live import PROVIDERS, Provider, SpendMeter
+from fivefold.agents.policy import Mode, Result, scripted_policy
+from fivefold.agents.worker import SPEND_CAP_TEXT, TOKEN_BUDGET_TEXT, WorkerEnd
+from fivefold.domain.prices import PriceFile, price_file_from_text
+from fivefold.domain.scenario import load_scenario_file
+from fivefold.harness.demo import DEV_001, demo_1_spec
+from fivefold.harness.migrations import drop_database
+from fivefold.harness.models import Live
+from fivefold.harness.run import Config, InprocRun, RunSpec
+from fivefold.recorder.__main__ import main
+from fivefold.recorder.cassette import Cassette, response_message
+from fivefold.recorder.playback import play, record, records
+
+pytestmark = pytest.mark.pg
+
+SCENARIO = load_scenario_file(DEV_001)
+THINK_MS = SCENARIO.params.think_ms
+CALLS: LiteralString = (
+    "SELECT call_no, worker, asked_vt, answered_vt, model, input_tokens, output_tokens,"
+    " refused, wall_ms FROM harness.model_call ORDER BY call_no"
+)
+
+
+def price_file(input_usd: str = "1", output_usd: str = "2") -> PriceFile:
+    return price_file_from_text(
+        "price_date: 2026-11-15\nprices:\n  fake:\n    m:\n"
+        f"      input_usd_per_million_tokens: {input_usd}\n"
+        f"      output_usd_per_million_tokens: {output_usd}\n"
+    )
+
+
+async def network(delay_s: float) -> None:
+    """Await the network: a socket another thread answers after `delay_s` seconds of wall
+    time. The event loop sees neither a timer nor anything ready meanwhile."""
+    loop = asyncio.get_running_loop()
+    ours, theirs = socket.socketpair()
+    ours.setblocking(False)
+    sender = threading.Timer(delay_s, theirs.send, args=(b"x",))
+    sender.start()
+    try:
+        await loop.sock_recv(ours, 1)
+    finally:
+        sender.join()
+        ours.close()
+        theirs.close()
+
+
+def _result(message: ToolMessage) -> Result:
+    """A tool result as the scripted policy reads it."""
+    text = message.content if isinstance(message.content, str) else json.dumps(message.content)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"error": text}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+class PolicyProvider(BaseChatModel):
+    """A fake provider's chat model that answers as a real model does (see the module)."""
+
+    _usage: Callable[[Sequence[BaseMessage]], UsageMetadata] = PrivateAttr()
+    _down: bool = PrivateAttr()
+
+    def __init__(
+        self, usage: Callable[[Sequence[BaseMessage]], UsageMetadata], *, down: bool = False
+    ) -> None:
+        """With `down`, every call fails after its wait, as when no server answers."""
+        super().__init__()
+        self._usage = usage
+        self._down = down
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-policy-provider"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise NotImplementedError
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        started = datetime.now(UTC)
+        tools = {tool["function"]["name"] for tool in kwargs.get("tools", [])}
+        mode = Mode.GATEWAY if "get_action_status" in tools else Mode.BASELINE
+        policy = scripted_policy(SCENARIO.intents, mode=mode)
+        try:
+            call = next(policy)
+            for message in messages:
+                if isinstance(message, ToolMessage):
+                    call = policy.send(_result(message))
+        except StopIteration:
+            call = None
+        await network(0.002)
+        await asyncio.sleep(0.001)
+        if self._down:
+            raise ConnectionError("Failed to connect to Ollama.")
+        usage = self._usage(messages)
+        metadata = {
+            "model": "m",
+            "created_at": started.isoformat(),
+            "done": True,
+            "done_reason": "stop",
+            "total_duration": int((datetime.now(UTC) - started).total_seconds() * 1e9),
+            "prompt_eval_count": usage["input_tokens"],
+            "eval_count": usage["output_tokens"],
+            "model_provider": "fake",
+        }
+        if call is None:
+            reply = AIMessage("Done.", usage_metadata=usage, response_metadata=metadata)
+        else:
+            assert call.name in tools, f"{call.name} is not bound to the model"
+            tool_call = {"name": call.name, "args": dict(call.args), "id": str(uuid.uuid4())}
+            reply = AIMessage(
+                "", tool_calls=[tool_call], usage_metadata=usage, response_metadata=metadata
+            )
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> Runnable[Any, AIMessage]:
+        return self.bind(tools=[convert_to_openai_tool(tool) for tool in tools], **kwargs)
+
+
+def usage_by_length(messages: Sequence[BaseMessage]) -> UsageMetadata:
+    """Tokens as a provider might count them: the request's length, and a short reply."""
+    input_tokens = sum(len(str(message.content)) for message in messages) // 4 + 10
+    return UsageMetadata(
+        input_tokens=input_tokens, output_tokens=25, total_tokens=input_tokens + 25
+    )
+
+
+def fixed_usage(input_tokens: int, output_tokens: int) -> Callable[..., UsageMetadata]:
+    def usage(messages: Sequence[BaseMessage]) -> UsageMetadata:
+        return UsageMetadata(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        )
+
+    return usage
+
+
+@pytest.fixture
+def provider(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """Allow live runs, and register the fake provider `fake` with the usage given."""
+    monkeypatch.setenv("FIVEFOLD_LIVE", "1")
+
+    def register(usage: Callable[[Sequence[BaseMessage]], UsageMetadata] = usage_by_length) -> None:
+        def build(model: str, params: Any) -> BaseChatModel:
+            assert model == "m"
+            return PolicyProvider(usage)
+
+        monkeypatch.setitem(PROVIDERS, "fake", Provider(build, frozenset({"temperature"})))
+
+    register()
+    return register
+
+
+def live(spec: RunSpec, meter: SpendMeter, params: dict[str, JsonValue] | None = None) -> RunSpec:
+    return replace(spec, model=Live("fake", "m", params or {}, spend=meter))
+
+
+def no_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Take the fake provider away and turn live runs off, as on a machine with no model."""
+    monkeypatch.delitem(PROVIDERS, "fake")
+    monkeypatch.delenv("FIVEFOLD_LIVE")
+
+
+def rows(dsn: str, query: LiteralString, role: str | None = None) -> list[tuple[Any, ...]]:
+    with psycopg.connect(dsn if role is None else make_conninfo(dsn, user=role)) as conn:
+        return conn.execute(query).fetchall()
+
+
+def without_model(evaluation: str) -> dict[str, Any]:
+    """An evaluation row, as `records` reads it, which leaves out the model adapter,
+    without the model's name and the cassette's digest too."""
+    data = json.loads(evaluation)
+    for key in ("model", "cassette_digest"):
+        data["result"]["run"].pop(key)
+    return dict(data)
+
+
+def timing(model_calls: list[str]) -> list[tuple[Any, ...]]:
+    """Each model call's number, worker and virtual times."""
+    calls = [json.loads(row) for row in model_calls]
+    return [(c["call_no"], c["worker"], c["asked_vt"], c["answered_vt"]) for c in calls]
+
+
+# A whole live run --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("config", ["B0", "G1", "G2"])
+def test_a_live_run_does_what_the_scripted_run_does_and_plays_back_byte_for_byte(
+    run_database: Callable[[str], str],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    """Demo 1 (F2 and F11) with the fake provider: every event fires at the virtual time
+    of the scripted run, so the runs' records match but for the model's name and its
+    tokens; the cassette then replays with no provider and no flag."""
+    tag = config.lower()
+    scripted_dsn = run_database(f"live_{tag}_scripted")
+    live_dsn, replay_dsn = run_database(f"live_{tag}"), run_database(f"live_{tag}_replay")
+    asyncio.run(InprocRun(demo_1_spec(config, 7), scripted_dsn).execute())
+    meter = SpendMeter(Decimal(1), price_file())
+    run, cassette = record(live(demo_1_spec(config, 7), meter, {"temperature": 0}), live_dsn)
+
+    assert run.result.ends == {"agent-1": (WorkerEnd.FINISHED, "Done.")}
+    scripted, recorded = records(scripted_dsn), records(live_dsn)
+    for name in scripted:
+        if name not in ("evaluation", "model calls"):
+            assert recorded[name] == scripted[name], name
+    assert [without_model(row) for row in recorded["evaluation"]] == [
+        without_model(row) for row in scripted["evaluation"]
+    ]
+    assert timing(recorded["model calls"]) == timing(scripted["model calls"])
+
+    assert (cassette.model.adapter, cassette.model.name) == ("live", "fake:m")
+    assert cassette.model.params == {"temperature": 0}
+    assert len(cassette.calls) == 7
+    replies = [response_message(call.response) for call in cassette.calls]
+    ids = [str(tool_call["id"]) for reply in replies for tool_call in reply.tool_calls]
+    assert len(ids) == 6 and all(uuid.UUID(i).version == 4 for i in ids), "random, as Ollama's"
+    assert all("usage_metadata" in c.response for c in cassette.calls)
+
+    logged = rows(live_dsn, CALLS)
+    assert [row[:5] for row in logged] == [
+        (n, "agent-1", row[2], row[2] + THINK_MS, "fake:m") for n, row in enumerate(logged, 1)
+    ]
+    assert all(row[5] is not None and row[6] == 25 and row[7] is None for row in logged)
+    spent = sum(Decimal(row[5]) + 2 * Decimal(row[6]) for row in logged) / 1_000_000
+    assert (meter.spent_usd, meter.calls) == (spent, 7)
+    assert rows(live_dsn, "SELECT model_adapter, model, cassette_digest FROM harness.run") == [
+        ("live", "fake:m", cassette.digest())
+    ]
+
+    no_provider(monkeypatch)
+    playback = play(cassette, SCENARIO, original=live_dsn, replay=replay_dsn)
+    assert playback.differences == ()
+    assert playback.calls == 7
+    assert rows(replay_dsn, CALLS)[0][1:8] == logged[0][1:8], "the replay logs the tokens"
+    assert rows(replay_dsn, "SELECT model_adapter, model FROM harness.run") == [
+        ("replay", "fake:m")
+    ]
+
+
+def test_the_token_budget_ends_a_live_worker_and_its_replay_at_the_same_call(
+    run_database: Callable[[str], str],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dev-001's budget is 60,000 tokens a worker. At 20,000 tokens a call, the third
+    reply leaves 60,000 used, so the fourth call would start past the budget."""
+    provider(fixed_usage(19_000, 1_000))
+    live_dsn, replay_dsn = run_database("tokens_live"), run_database("tokens_replay")
+    spec = RunSpec(SCENARIO, "G2", demo_1_spec("G2", 7).contract, 7, plan=[])
+    run, cassette = record(live(spec, SpendMeter(Decimal(1), price_file("0", "0"))), live_dsn)
+    assert SCENARIO.budget.max_tokens == 60_000
+    assert run.result.ends == {"agent-1": (WorkerEnd.BUDGET, TOKEN_BUDGET_TEXT)}
+    assert len(cassette.calls) == 3
+    assert [row[5:7] for row in rows(live_dsn, CALLS)] == [(19_000, 1_000)] * 3
+
+    no_provider(monkeypatch)
+    playback = play(cassette, SCENARIO, original=live_dsn, replay=replay_dsn)
+    assert playback.matches and playback.calls == 3
+
+
+def test_the_spend_cap_refuses_the_next_call_ends_the_worker_and_plays_back(
+    run_database: Callable[[str], str],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At 10 USD per million input tokens and 10,000 a call, each call costs 0.10 USD,
+    well inside the token budget. With a cap of 0.25 USD, the third call starts at 0.20
+    and ends at 0.30, so the fourth is refused: the spend passes the cap by less than one
+    call's cost."""
+    provider(fixed_usage(10_000, 0))
+    live_dsn, replay_dsn = run_database("cap_live"), run_database("cap_replay")
+    meter = SpendMeter(Decimal("0.25"), price_file("10", "0"))
+    spec = RunSpec(SCENARIO, "G2", demo_1_spec("G2", 7).contract, 7, plan=[])
+    run, cassette = record(live(spec, meter), live_dsn)
+    assert run.result.ends == {"agent-1": (WorkerEnd.BUDGET, SPEND_CAP_TEXT)}
+    assert (meter.spent_usd, meter.calls) == (Decimal("0.3"), 3)
+    assert meter.spent_usd - meter.cap_usd < Decimal("0.1")
+    assert len(cassette.calls) == 4
+    assert cassette.calls[-1].response == {
+        "content": SPEND_CAP_TEXT,
+        "response_metadata": {"fivefold_refused": "spend_cap"},
+    }
+    logged = rows(live_dsn, CALLS)
+    assert [row[5:8] for row in logged] == [(10_000, 0, None)] * 3 + [(None, None, "spend_cap")]
+    assert logged[3][3] - logged[3][2] == THINK_MS, "a refused call takes its think too"
+
+    no_provider(monkeypatch)
+    playback = play(cassette, SCENARIO, original=live_dsn, replay=replay_dsn)
+    assert playback.matches and playback.calls == 4
+
+
+def test_the_spend_cap_holds_across_a_command_s_runs(
+    run_database: Callable[[str], str], provider: Callable[..., None]
+) -> None:
+    """One meter serves every run of a command: once the cap is reached, the next run's
+    first call is refused."""
+    provider(fixed_usage(10_000, 0))
+    meter = SpendMeter(Decimal("0.15"), price_file("10", "0"))
+    spec = RunSpec(SCENARIO, "G2", demo_1_spec("G2", 7).contract, 7, plan=[])
+    first, _ = record(live(spec, meter), run_database("cap_first"))
+    second, cassette = record(live(spec, meter), run_database("cap_second"))
+    assert first.result.ends["agent-1"] == (WorkerEnd.BUDGET, SPEND_CAP_TEXT)
+    assert second.result.ends["agent-1"] == (WorkerEnd.BUDGET, SPEND_CAP_TEXT)
+    assert [call.response["content"] for call in cassette.calls] == [SPEND_CAP_TEXT]
+    assert (meter.spent_usd, meter.calls) == (Decimal("0.2"), 2)
+
+
+# The command ---------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def live_cli(admin_dsn: str, db_prefix: str, tmp_path: Path) -> Iterator[tuple[list[str], Path]]:
+    """The record command's arguments for demo 1 in G2 with the fake model, and its cassette."""
+    names = (f"{db_prefix}_cli_live", f"{db_prefix}_cli_live_play")
+    prices = tmp_path / "prices.yaml"
+    prices.write_text(
+        "price_date: 2026-11-15\nprices:\n  fake:\n    m:\n"
+        "      input_usd_per_million_tokens: 0\n      output_usd_per_million_tokens: 0\n",
+        encoding="utf-8",
+    )
+    cassette = tmp_path / "live.json"
+    args = ["--dsn", admin_dsn, "record", "--demo", "1", "--config", "G2"]
+    args += ["--cassette", str(cassette), "--database", names[0], "--live", "fake:m"]
+    args += ["--spend-cap-usd", "0.50", "--prices", str(prices), "--param", "temperature=0"]
+    yield args, cassette
+    for name in names:
+        drop_database(admin_dsn, name)
+
+
+def _exists(admin_dsn: str, name: str) -> bool:
+    with psycopg.connect(admin_dsn) as conn:
+        found = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+    return found is not None
+
+
+def test_the_command_refuses_a_live_run_before_it_touches_a_database(
+    admin_dsn: str,
+    db_prefix: str,
+    live_cli: tuple[list[str], Path],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args, cassette = live_cli
+    database = f"{db_prefix}_cli_live"
+
+    def changed(old: str, new: str) -> list[str]:
+        return [new if arg == old else arg for arg in args]
+
+    refusals: list[tuple[str | None, list[str], str]] = [
+        (None, args, "live runs are off: set FIVEFOLD_LIVE=1"),
+        ("yes", args, "live runs are off"),
+        ("1", changed("temperature=0", "base_url=http://x"), "temperature, not base_url"),
+        ("1", changed("fake:m", "fake:other"), "no price for fake:other"),
+        ("1", changed("0.50", "0"), "above 0 USD"),
+        ("1", changed("fake:m", "fakem"), "PROVIDER:MODEL"),
+    ]
+    for flag, argv, message in refusals:
+        if flag is None:
+            monkeypatch.delenv("FIVEFOLD_LIVE")
+        else:
+            monkeypatch.setenv("FIVEFOLD_LIVE", flag)
+        assert main(argv) == 1
+        error = capsys.readouterr().err
+        assert error.startswith("record failed: ") and message in error, error
+        assert error.count("\n") == 1
+        monkeypatch.setenv("FIVEFOLD_LIVE", "1")
+    assert not cassette.exists()
+    assert not _exists(admin_dsn, database)
+    for missing in ("--prices", "--spend-cap-usd"):
+        at = args.index(missing)
+        with pytest.raises(SystemExit) as exit_:
+            main([*args[:at], *args[at + 2 :]])
+        assert exit_.value.code == 2
+        assert "--live needs --spend-cap-usd and --prices" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main([*args[: args.index("--live")], "--prices", args[args.index("--prices") + 1]])
+    assert "go with --live" in capsys.readouterr().err
+
+
+def test_the_command_records_a_live_run_and_plays_it_back_with_no_network(
+    admin_dsn: str,
+    db_prefix: str,
+    live_cli: tuple[list[str], Path],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args, cassette = live_cli
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "Recorded dev-001-single-po.G2.C2.7 in" in out and ": 7 model calls." in out
+    assert "model: fake:m; 0 USD spent of the 0.50 USD cap on 7 model calls" in out
+    assert "at prices dated 2026-11-15" in out
+    assert "  agent-1: finished\n" in out
+    loaded = Cassette.load(cassette)
+    assert (loaded.model.name, loaded.model.params) == ("fake:m", {"temperature": 0})
+
+    no_provider(monkeypatch)
+    play_args = ["--dsn", admin_dsn, "play", str(cassette), "--scenario", str(DEV_001)]
+    play_args += ["--original", f"{db_prefix}_cli_live", "--database", f"{db_prefix}_cli_live_play"]
+    assert main(play_args) == 0
+    out = capsys.readouterr().out
+    assert "model calls: identical" in out
+    assert f"The replay matches the original run in {db_prefix}_cli_live." in out
+
+
+def test_the_command_shows_a_provider_that_cannot_be_reached_as_a_worker_s_error(
+    live_cli: tuple[list[str], Path],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The worker ends with an error and the run goes on; nothing is spent or recorded."""
+
+    def build(model: str, params: Any) -> BaseChatModel:
+        return PolicyProvider(usage_by_length, down=True)
+
+    monkeypatch.setitem(PROVIDERS, "fake", Provider(build, frozenset({"temperature"})))
+    args, cassette = live_cli
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert ": 0 model calls." in out
+    assert "0 USD spent of the 0.50 USD cap on 0 model calls" in out
+    assert "  agent-1: error, ConnectionError: Failed to connect to Ollama.\n" in out
+    assert Cassette.load(cassette).calls == ()

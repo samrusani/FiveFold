@@ -1,9 +1,10 @@
 """Recorded playback (0009, Playback and branching): re-execute a run from its cassette.
 
-`record` runs a run with the scripted adapter, wrapped by the recorder, and returns the run
-and its cassette. `play` re-executes the run a cassette was recorded from, in a fresh run
-database: the same scenario, configuration, contract level, seed, fault plan and workers,
-with the replay adapter serving the cassette. The replay adapter fails the run if a
+`record` runs a run with the scripted adapter, wrapped by the recorder, or with the live
+adapter, which always records, and returns the run and its cassette. `play` re-executes
+the run a cassette was recorded from, in a fresh run database: the same scenario,
+configuration, contract level, seed, fault plan and workers, with the replay adapter
+serving the cassette, so it needs no network. The replay adapter fails the run if a
 request's hash differs from the recorded one, or if the run asks for more or fewer calls
 than the cassette holds (0009). `play` then compares the replay's records with the original
 run's, row by row, ignoring wall-clock columns, whose names end in `wall_at` or `wall_ms`
@@ -41,7 +42,7 @@ from pydantic import ValidationError
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, scenario_digest
-from fivefold.harness.models import Replay, Scripted
+from fivefold.harness.models import Live, Replay, Scripted
 from fivefold.harness.run import Config, InprocRun, RunSpec
 from fivefold.recorder.cassette import Cassette, RunHeader, canonical_json, sha256
 
@@ -107,9 +108,11 @@ class Playback:
 
 
 def record(spec: RunSpec, dsn: str) -> tuple[InprocRun, Cassette]:
-    """Run `spec` with the scripted adapter, recording every model call, in the fresh,
-    migrated run database `dsn`; return the run and its cassette."""
-    run = InprocRun(replace(spec, model=Scripted(record=True)), dsn)
+    """Run `spec`, recording every model call, in the fresh, migrated run database `dsn`;
+    return the run and its cassette. A live model records as it runs; any other spec runs
+    with the scripted adapter, wrapped by the recorder."""
+    model = spec.model if isinstance(spec.model, Live) else Scripted(record=True)
+    run = InprocRun(replace(spec, model=model), dsn)
     asyncio.run(run.execute())
     if run.models.cassette is None:
         raise RuntimeError("the run recorded no cassette")
