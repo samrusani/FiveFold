@@ -26,6 +26,9 @@ The variants of a cell:
   equivalent. The crashed component restarts 1,000 ms later.
 - F4 names the hop it delivers the order twice on, as F12 does. The copy follows the
   first delivery after `copy_delay_ms`, which the run draws from its seed.
+- F5 is `in_contract` (the order commits 5,000 ms after it arrives: T < delay < D) or
+  `beyond_deadline` (20,000 ms: twice dev-001's D, a contract violation that still lands
+  inside the drain window, so the late commit happens before the run ends).
 """
 
 from __future__ import annotations
@@ -67,6 +70,10 @@ F12_HOPS: dict[str, frozenset[str]] = {
     "B0": frozenset({"agent_sim"}),
 }
 """The hops F12 can drop the order on, by configuration. F4 delivers it twice on the same."""
+
+F5_DELAYS: dict[str, dict[str, int]] = {"in_contract": {}, "beyond_deadline": {"delay_ms": 20_000}}
+"""F5's parameters by variant: the catalog's 5,000 ms in contract; twice dev-001's commit
+deadline D beyond it, since 0006 gives that variant no default."""
 
 
 class Cell(BaseModel):
@@ -205,6 +212,18 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                     "match": {"api": ORDER},
                     "occurrence": 1,
                 },
+            }
+        ]
+    if cell.fault == "F5":
+        params = F5_DELAYS.get(str(cell.variant))
+        if params is None:
+            raise ValueError(f"F5 has no variant {cell.variant!r}")
+        return [
+            {
+                "fault": "F5",
+                "variant": cell.variant,
+                "at": {"point": "sim.write.received", "match": {"api": ORDER}, "occurrence": 1},
+                "params": dict(params),
             }
         ]
     raise ValueError(f"no plan for {cell.fault} yet")

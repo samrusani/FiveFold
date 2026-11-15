@@ -14,13 +14,32 @@ inventing an answer the API does not define.
 The simulator never waits. `get_approval_status` with `wait_ms` above 0 (B0's tool,
 0008) waits here, on the scheduler's clock: while the approval is pending, the endpoint
 asks again every `poll_ms` until it is decided or the wait ends.
+
+Two fault points of record 0006 are reached here, and `points` decides what fires there:
+
+- `sim.write.received`, as each write request reaches the destination. A `WriteDelay`
+  (F5) holds the write in flight, through the simulator's two-phase write: it is
+  received now, committed `delay_ms` later, and answered then, committed or aborted.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Protocol
 
-from fivefold.domain.api import REQUESTS, ApiName, ApprovalAnswer, GetApprovalStatus
+from pydantic import BaseModel
+
+from fivefold.domain.api import (
+    REQUESTS,
+    ApiName,
+    ApprovalAnswer,
+    GetApprovalStatus,
+    ReserveInventory,
+    SubmitPurchaseOrder,
+    Write,
+    WriteReceived,
+)
 from fivefold.domain.authority import ApprovalStatus
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Envelope, Handler, Reply
@@ -33,17 +52,39 @@ Served = Callable[[ApiName, object], None]
 """Told of each answer the endpoint sends, with the call it answers."""
 
 
+@dataclass(frozen=True)
+class WriteDelay:
+    """Hold a write that reached the destination, and commit it `delay_ms` later (F5).
+
+    `waive_deadline` lets it commit after the commit deadline D, a contract violation
+    (0005, 0006).
+    """
+
+    delay_ms: int
+    waive_deadline: bool = False
+
+
+class FaultPoints(Protocol):
+    """Decides what fires at the simulator's fault points (0006)."""
+
+    def write_received(self, request: Envelope) -> WriteDelay | None:
+        """`sim.write.received`: a write request reached the destination."""
+        ...
+
+
 def endpoint(
     simulator: Simulator,
     scheduler: Scheduler,
     *,
     poll_ms: int = 500,
     served: Sequence[Served] = (),
+    points: FaultPoints | None = None,
 ) -> Handler:
     """A transport handler that serves `simulator`'s API.
 
     Each of `served` is told of every answer, as the scripted approver needs to learn of
-    queued approval requests (0002, rule 7).
+    queued approval requests (0002, rule 7). `points`, if given, decides the faults at
+    the simulator's fault points.
     """
 
     async def handle(request: Envelope) -> Reply:
@@ -51,8 +92,20 @@ def endpoint(
             raise ValueError(f"request {request.seq} names no API call")
         api = ApiName(request.api)
         parsed = REQUESTS[api].model_validate(request.body)
+        answer = await respond(request, api, parsed)
+        for listener in served:
+            listener(api, answer)
+        body = answer.model_dump(mode="json")
+        return Reply(body, answer_class=str(body["answer"]) if api in WRITES else None)
+
+    async def respond(request: Envelope, api: ApiName, parsed: BaseModel) -> BaseModel:
         method = getattr(simulator, str(api))
-        answer = method(parsed, caller=request.sender, vt=scheduler.now)
+        caller = request.sender
+        if points is not None and isinstance(parsed, SubmitPurchaseOrder | ReserveInventory):
+            delay = points.write_received(request)
+            if delay is not None:
+                return await commit_late(parsed, caller, delay)
+        answer: BaseModel = method(parsed, caller=caller, vt=scheduler.now)
         if isinstance(parsed, GetApprovalStatus) and parsed.wait_ms > 0:
             deadline = scheduler.now + parsed.wait_ms
             while (
@@ -61,10 +114,21 @@ def endpoint(
                 and scheduler.now < deadline
             ):
                 await scheduler.sleep(min(poll_ms, deadline - scheduler.now))
-                answer = method(parsed, caller=request.sender, vt=scheduler.now)
-        for listener in served:
-            listener(api, answer)
-        body = answer.model_dump(mode="json")
-        return Reply(body, answer_class=str(body["answer"]) if api in WRITES else None)
+                answer = method(parsed, caller=caller, vt=scheduler.now)
+        return answer
+
+    async def commit_late(write: Write, caller: str, delay: WriteDelay) -> BaseModel:
+        """F5: receive the write now, and commit it `delay_ms` later.
+
+        A write the key lookup answers on arrival (a replay, or `in_progress`), or that
+        the simulator refuses, is not in flight, so its answer goes back at once.
+        """
+        received = simulator.receive_write(
+            write, caller=caller, vt=scheduler.now, waive_deadline=delay.waive_deadline
+        )
+        if not isinstance(received, WriteReceived):
+            return received
+        await scheduler.sleep(delay.delay_ms)
+        return simulator.commit_received(received.received_seq, vt=scheduler.now)
 
     return handle

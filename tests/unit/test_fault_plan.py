@@ -7,10 +7,13 @@ import re
 import pytest
 from pydantic import ValidationError
 
+from fivefold.domain.contracts import Contract
+from fivefold.domain.scenario import Params
 from fivefold.faults.catalog import BUILT, POINTS, FaultId
 from fivefold.faults.plan import (
     FaultInjector,
     check_configuration,
+    check_run,
     parse_plan,
     seed_parameters,
 )
@@ -330,3 +333,97 @@ def test_f4_copies_only_on_the_configurations_hops(point: str, gateway: bool) ->
     plan = parse_plan([{"fault": "F4", "at": {"point": point}}])
     with pytest.raises(ValueError, match=re.escape(f"F4 at {point}")):
         check_configuration(plan, gateway=gateway)
+
+
+# F5: late commit -------------------------------------------------------------------------
+
+
+def params(**changes: int) -> Params:
+    """dev-001's timing by default: T 2,000, D 10,000, L 0."""
+    return Params(**changes)
+
+
+@pytest.mark.parametrize("variant", [None, "in_contract", "beyond_deadline"])
+def test_f5_is_built_where_writes_reach_the_simulator(variant: str | None) -> None:
+    point = "sim.write.received"
+    (planned,) = parse_plan([{"fault": "F5", "variant": variant, "at": {"point": point}}])
+    assert point in planned.kind.points
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ({"fault": "F5", "at": {"point": "net.gw_sim.request"}}, "F5 does not fire at"),
+        ({"fault": "F5", "variant": "late", "at": {"point": "sim.write.received"}}, "no variant"),
+        (
+            {"fault": "F5", "at": {"point": "sim.write.received"}, "params": {"delay_ms": -5}},
+            "delay_ms must be at least 0",
+        ),
+    ],
+)
+def test_f5_where_or_how_the_catalog_does_not_allow_is_refused(
+    entry: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        parse_plan([entry])
+
+
+def test_f5_holds_a_write_for_5000_ms_unless_the_plan_says_otherwise() -> None:
+    default, chosen = parse_plan(
+        [
+            {"fault": "F5", "at": {"point": "sim.write.received"}},
+            {"fault": "F5", "at": {"point": "sim.write.received"}, "params": {"delay_ms": 7_000}},
+        ]
+    )
+    assert (default.param("delay_ms"), chosen.param("delay_ms")) == (5_000, 7_000)
+
+
+@pytest.mark.parametrize(
+    ("variant", "delay_ms", "accepted"),
+    [
+        (None, 5_000, True),
+        ("in_contract", 2_001, True),
+        ("in_contract", 9_999, True),
+        ("in_contract", 2_000, False),
+        ("in_contract", 10_000, False),
+        ("in_contract", 15_000, False),
+        ("beyond_deadline", 10_001, True),
+        ("beyond_deadline", 20_000, True),
+        ("beyond_deadline", 10_000, False),
+        ("beyond_deadline", 5_000, False),
+    ],
+)
+def test_f5s_delay_must_fit_its_variant_against_t_and_d(
+    variant: str | None, delay_ms: int, accepted: bool
+) -> None:
+    """0006: in contract, T < delay < D; beyond the deadline, delay > D. T 2,000, D 10,000."""
+    plan = parse_plan(
+        [
+            {
+                "fault": "F5",
+                "variant": variant,
+                "at": {"point": "sim.write.received"},
+                "params": {"delay_ms": delay_ms},
+            }
+        ]
+    )
+    if accepted:
+        check_run(plan, params=params(), contract=Contract.C2)
+    else:
+        with pytest.raises(ValueError, match="F5"):
+            check_run(plan, params=params(), contract=Contract.C2)
+
+
+def test_f5_beyond_the_deadline_has_no_default_delay_that_fits() -> None:
+    """0006 gives only the in-contract default (5,000), which is not beyond D."""
+    plan = parse_plan(
+        [{"fault": "F5", "variant": "beyond_deadline", "at": {"point": "sim.write.received"}}]
+    )
+    with pytest.raises(ValueError, match=r"needs delay_ms above D \(10000\)"):
+        check_run(plan, params=params(), contract=Contract.C1)
+
+
+def test_f5_fires_with_and_without_a_gateway() -> None:
+    plan = parse_plan([{"fault": "F5", "at": {"point": "sim.write.received"}}])
+    check_configuration(plan, gateway=True)
+    check_configuration(plan, gateway=False)

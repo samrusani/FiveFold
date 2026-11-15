@@ -1,7 +1,9 @@
-"""F4 in whole runs of dev-001 (0006; M3).
+"""F4 and F5 in whole runs of dev-001 (0006; M3).
 
 - F4 delivers the order's request twice, on the gateway's hop to the simulator, the
   agent's hop to the gateway, or B0's hop to the simulator.
+- F5 holds the order where it reaches the simulator and commits it later: 5,000 ms in
+  contract, 20,000 ms beyond the deadline.
 
 The assertions are ground truth: the simulator's ledger and writes, the harness's
 message fates and fault log, the gateway's events, and the report. Verdicts are in
@@ -207,3 +209,101 @@ def test_two_runs_of_an_f4_cell_give_byte_identical_logs(
         texts.append(json.dumps(records, sort_keys=True, default=str))
     assert texts[0] == texts[1]
     assert '"answer_to_copy"' in texts[0]
+
+
+# F5: late commit -------------------------------------------------------------------------
+
+
+def test_f5_in_contract_at_c1_the_order_commits_late_and_a_probe_finds_it(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f5_in_contract_c1")
+    run(dsn, "F5", "in_contract", Contract.C1, "G2")
+    ((arrived, state, outcome_vt, deadline_vt, waived, effect_id),) = rows(dsn, WRITES)
+    assert (state, outcome_vt, waived, effect_id) == (
+        "committed",
+        arrived + 5_000,
+        False,
+        "PO-0001",
+    )
+    assert outcome_vt < deadline_vt
+    ((request, _, fate, _),) = rows(dsn, ORDERS_TO_SIM)
+    assert fate == "delivered"
+    assert rows(dsn, ANSWERS_FROM_SIM) == [
+        (request, "dropped", "caller_timed_out", "committed", "PO-0001")
+    ]
+    assert [event[1:] for event in rows(dsn, EVENTS)][-3:] == [
+        ("dispatched", "dispatched"),
+        ("outcome_unknown", "timeout"),
+        ("confirmed", "status_found"),
+    ]
+    assert faults(dsn) == [
+        (
+            "F5",
+            "in_contract",
+            "sim.write.received",
+            "delay_commit",
+            request,
+            "simulator",
+            {"delay_ms": 5_000},
+        )
+    ]
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+def test_f5_beyond_the_deadline_at_c1_failed_was_wrong_and_the_budget_is_overdrawn(
+    run_database: Callable[[str], str],
+) -> None:
+    """A documented G2 limit (0006): the destination broke its deadline, so an empty
+    status answer after the settle time made Failed wrong. The agent's second order
+    committed, then the late first one."""
+    dsn = run_database("f5_beyond_c1")
+    run(dsn, "F5", "beyond_deadline", Contract.C1, "G2")
+    first, second = rows(dsn, WRITES)
+    assert first[1:] == ("committed", first[0] + 20_000, first[0] + 10_000, True, "PO-0002")
+    assert second[1] == "committed" and second[2] < first[2]
+    assert effects(dsn) == [("PO-0001", "APR-0002"), ("PO-0002", "APR-0001")]
+    assert ("A-0001", "failed", "status_settled_empty") in rows(dsn, EVENTS)
+    assert ("A-0002", "confirmed", "committed") in rows(dsn, EVENTS)
+    ((left,),) = rows(
+        dsn,
+        "SELECT (value->>'limit_minor')::int - (value->>'committed_minor')::int"
+        " FROM sim.fact_version WHERE key = 'budget/CC-OPS' ORDER BY version DESC LIMIT 1",
+    )
+    assert left < 0, "the late order overdrew the budget"
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+def test_f5_at_c2_the_retries_get_in_progress_then_the_stored_result(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f5_in_contract_c2")
+    run(dsn, "F5", "in_contract", Contract.C2, "G2")
+    states = [row[1] for row in rows(dsn, WRITES)]
+    assert states[0] == "committed" and states[-1] == "replayed"
+    assert set(states[1:-1]) == {"in_progress"}
+    assert effects(dsn) == [("PO-0001", "APR-0001")]
+    assert claim(dsn) == ("done", ["PO-0001"])
+
+
+@pytest.mark.parametrize("variant", ["in_contract", "beyond_deadline"])
+def test_f5_at_c0_g2_escalates_and_reports_unknown(
+    run_database: Callable[[str], str], variant: str
+) -> None:
+    dsn = run_database(f"f5_{variant}_c0")
+    run(dsn, "F5", variant, Contract.C0, "G2")
+    assert effects(dsn) == [("PO-0001", "APR-0001")]
+    assert rows(dsn, "SELECT action_id, resolution FROM gw.escalation") == [("A-0001", None)]
+    assert claim(dsn) == ("unknown", [])
+
+
+def test_f5_in_b0_the_framework_retry_orders_again_without_a_key(
+    run_database: Callable[[str], str],
+) -> None:
+    dsn = run_database("f5_in_contract_b0")
+    run(dsn, "F5", "in_contract", Contract.C0, "B0")
+    first, retry = rows(dsn, WRITES)
+    assert (first[1], first[2], first[5]) == ("committed", first[0] + 5_000, "PO-0002")
+    assert (retry[1], retry[5]) == ("committed", "PO-0001")
+    assert effects(dsn) == [("PO-0001", "APR-0001"), ("PO-0002", "APR-0001")]
+    assert claim(dsn) == ("done", ["PO-0001"])

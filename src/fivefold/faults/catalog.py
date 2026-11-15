@@ -72,6 +72,8 @@ class Action(StrEnum):
     DUPLICATE = "duplicate"
     """Deliver the request a second time, `copy_delay_ms` after the first (F4). The
     transport never delivers the answer to the copy."""
+    DELAY_COMMIT = "delay_commit"
+    """Hold the write that reached the simulator, and commit it `delay_ms` later (F5)."""
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,13 @@ class FaultKind:
     """Parameters whose default the run draws from its `faults` generator, with the
     lowest and highest value it may draw (0009). A plan may also set them."""
 
+
+F5_IN_CONTRACT = "in_contract"
+"""F5 within the destination's promises: T < `delay_ms` < D (0006). A plan with no
+variant means this one."""
+
+F5_BEYOND_DEADLINE = "beyond_deadline"
+"""F5 past the commit deadline: `delay_ms` > D, a contract violation (0006)."""
 
 EARLY_POINTS = frozenset({"gw.dispatch.before_check", "net.agent_sim.answer"})
 """F6 and F7 early: at the gateway's check, or as B0's approval answer reaches it."""
@@ -191,6 +200,15 @@ BUILT: Mapping[FaultId, FaultKind] = {
         {},
         minimums={"copy_delay_ms": 0},
         seeded={"copy_delay_ms": (5, 50)},
+    ),
+    FaultId.F5: FaultKind(
+        FaultId.F5,
+        "Late commit, after the caller's timeout",
+        frozenset({"sim.write.received"}),
+        Action.DELAY_COMMIT,
+        {"delay_ms": 5_000},
+        variants={F5_IN_CONTRACT: None, F5_BEYOND_DEADLINE: None},
+        minimums={"delay_ms": 0},
     ),
 }
 """The faults this build can inject, with the points 0006 allows for each."""
