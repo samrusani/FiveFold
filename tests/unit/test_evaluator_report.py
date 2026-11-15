@@ -251,6 +251,8 @@ def test_the_csv_has_a_header_and_one_row_per_run() -> None:
         "0",
         "1",
         "0",
+        "0",
+        "0",
     ]
     assert (g2["config"], g2["verdict"], g2["reason_codes"]) == ("G2", "pass", "")
     assert g2["planned_faults"].startswith("F2 at net.gw_sim.answer when")
@@ -307,6 +309,8 @@ def test_the_csv_columns_are_fixed_and_name_every_metric_in_record_0004s_order()
         "human_interventions",
         "approval_requests",
         "approvals_decided_by_human",
+        "tokens_in",
+        "tokens_out",
     )
 
 
@@ -348,7 +352,7 @@ def test_the_metrics_are_the_ones_the_evaluator_computes() -> None:
     )
     result = evaluate(records)
     assert set(result.metrics) == set(METRICS)
-    assert len(METRICS) == 14
+    assert len(METRICS) == 16
     assert runs_csv([result]).count("\n") == 2
 
 
@@ -578,14 +582,31 @@ def test_the_report_says_what_is_not_computed_and_shows_no_value_for_it() -> Non
     lines = section(report, "Not computed yet")
     assert lines[1] == (
         "Record 0004 also lists these metrics, which the evaluator does not compute yet:"
-        " recovery latency per affected action, in virtual and wall milliseconds; tokens in"
-        " and out; cost, from a price file that records its price date; cost per passing"
-        " run. No result holds a value for them, so this report shows none, not zeros."
+        " recovery latency per affected action, in virtual and wall milliseconds; cost, from"
+        " a price file that records its price date; cost per passing run. No result holds a"
+        " value for them, so this report shows none, not zeros."
     )
     elsewhere = report.split("## Not computed yet")[0].lower()
-    assert not any(word in elsewhere for word in ("latency", "token", "cost"))
+    assert not any(word in elsewhere for word in ("latency", "cost"))
     header = runs_csv(results).splitlines()[0]
-    assert not any(word in header for word in ("latency", "token", "cost"))
+    assert "tokens_in,tokens_out" in header
+    assert not any(word in header for word in ("latency", "cost"))
+
+
+def test_the_tokens_are_in_the_csv_and_summed_by_configuration() -> None:
+    def live(seed: int, tokens_in: int, tokens_out: int) -> RunResult:
+        tokens = {"tokens_in": tokens_in, "tokens_out": tokens_out}
+        return make_result(seed=seed, model="fake:m", adapter="live", metrics=tokens)
+
+    results = [live(7, 7_000, 350), live(8, 3_000, 100), b0_demo_1()]
+    rows = csv_rows(runs_csv(results))
+    assert [(row["config"], row["tokens_in"], row["tokens_out"]) for row in rows] == [
+        ("B0", "0", "0"),
+        ("G2", "7000", "350"),
+        ("G2", "3000", "100"),
+    ]
+    totals = table(markdown_report(results), "Metric totals by configuration")
+    assert totals[-2:] == [["tokens_in", "0", "10000"], ["tokens_out", "0", "450"]]
 
 
 # A fixed order ---------------------------------------------------------------------------

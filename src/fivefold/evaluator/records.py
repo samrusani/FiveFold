@@ -2,7 +2,8 @@
 
 These records copy rows of the simulator's and the harness's tables, and the scenario.
 The evaluator decides only from them. `fivefold.evaluator.load` reads them from a run
-database; tests build them by hand.
+database; tests build them by hand. The harness's model calls feed the token metrics
+only, never a verdict.
 
 The harness's conventions that the property checks rely on (0006, 0008):
 
@@ -324,6 +325,28 @@ class ActorAction:
 
 
 @dataclass(frozen=True)
+class ModelCall:
+    """A row of `harness.model_call`: one model call of an agent worker, once it was
+    answered (0004, 0009). Wall-clock time is left out.
+
+    `call_no` numbers the run's calls from 1, in the order of its cassette. `model` is the
+    run's model, as `harness.run.model` names it. The tokens are the reply's usage, None
+    when it reported none, as scripted replies do. `refused` says why the harness answered
+    instead of the model, such as `spend_cap`: a refused call was never sent, so it has no
+    tokens.
+    """
+
+    call_no: int
+    worker: str
+    asked_vt: int
+    answered_vt: int
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    refused: str | None = None
+
+
+@dataclass(frozen=True)
 class SubmittedReport:
     """A row of `harness.final_report`: a final report the stack submitted (0004).
 
@@ -358,6 +381,7 @@ class RunRecords:
     approvals: tuple[Approval, ...] = ()
     fact_versions: tuple[FactVersion, ...] = ()
     reads: tuple[Read, ...] = ()
+    model_calls: tuple[ModelCall, ...] = ()
 
     def end_vt(self) -> int:
         """The virtual time of the run's end: when the harness stopped it (0009).

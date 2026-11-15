@@ -43,6 +43,7 @@ from fivefold.agents.policy import Mode, Result, scripted_policy
 from fivefold.agents.worker import SPEND_CAP_TEXT, TOKEN_BUDGET_TEXT, WorkerEnd
 from fivefold.domain.prices import PriceFile, price_file_from_text
 from fivefold.domain.scenario import load_scenario_file
+from fivefold.evaluator import TOKEN_METRICS
 from fivefold.evaluator.report import load_result, load_results
 from fivefold.harness.cells import load_expected
 from fivefold.harness.demo import DEV_001, demo_1_spec
@@ -224,11 +225,20 @@ def rows(dsn: str, query: LiteralString, role: str | None = None) -> list[tuple[
 
 def without_model(evaluation: str) -> dict[str, Any]:
     """An evaluation row, as `records` reads it, which leaves out the model adapter,
-    without the model's name and the cassette's digest too."""
+    without the model's name, the cassette's digest and the tokens too."""
     data = json.loads(evaluation)
     for key in ("model", "cassette_digest"):
         data["result"]["run"].pop(key)
+    for name in TOKEN_METRICS:
+        data["metrics"].pop(name)
+        data["result"]["metrics"].pop(name)
     return dict(data)
+
+
+def token_counts(evaluation: str) -> tuple[int, int]:
+    """The tokens in and out of an evaluation row, as `records` reads it."""
+    metrics = json.loads(evaluation)["metrics"]
+    return metrics["tokens_in"], metrics["tokens_out"]
 
 
 def timing(model_calls: list[str]) -> list[tuple[Any, ...]]:
@@ -266,6 +276,7 @@ def test_a_live_run_does_what_the_scripted_run_does_and_plays_back_byte_for_byte
         without_model(row) for row in scripted["evaluation"]
     ]
     assert timing(recorded["model calls"]) == timing(scripted["model calls"])
+    assert [token_counts(row) for row in scripted["evaluation"]] == [(0, 0)]
 
     assert (cassette.model.adapter, cassette.model.name) == ("live", "fake:m")
     assert cassette.model.params == {"temperature": 0}
@@ -280,6 +291,9 @@ def test_a_live_run_does_what_the_scripted_run_does_and_plays_back_byte_for_byte
         (n, "agent-1", row[2], row[2] + THINK_MS, "fake:m") for n, row in enumerate(logged, 1)
     ]
     assert all(row[5] is not None and row[6] == 25 and row[7] is None for row in logged)
+    assert [token_counts(row) for row in recorded["evaluation"]] == [
+        (sum(row[5] for row in logged), 7 * 25)
+    ]
     spent = sum(Decimal(row[5]) + 2 * Decimal(row[6]) for row in logged) / 1_000_000
     assert (meter.spent_usd, meter.calls) == (spent, 7)
     assert rows(live_dsn, "SELECT model_adapter, model, cassette_digest FROM harness.run") == [

@@ -30,7 +30,7 @@ from fivefold.evaluator.evidence import (
 )
 from fivefold.evaluator.liveness import facts_without_effects
 from fivefold.evaluator.load import load_run
-from fivefold.evaluator.metrics import RUN_METRICS
+from fivefold.evaluator.metrics import RUN_METRICS, TOKEN_METRICS
 from fivefold.evaluator.records import (
     ActorAction,
     Approval,
@@ -40,6 +40,7 @@ from fivefold.evaluator.records import (
     FactVersion,
     Fault,
     Message,
+    ModelCall,
     Read,
     RecordsError,
     RunInfo,
@@ -77,6 +78,7 @@ __all__ = [
     "EVALUATOR_ROLE",
     "METRICS",
     "RUN_METRICS",
+    "TOKEN_METRICS",
     "ActorAction",
     "Approval",
     "ClaimJudgment",
@@ -92,6 +94,7 @@ __all__ = [
     "IntentKnowledge",
     "Knowledge",
     "Message",
+    "ModelCall",
     "PropertyResult",
     "PropertyVerdict",
     "Read",

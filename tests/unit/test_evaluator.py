@@ -42,6 +42,7 @@ from fivefold.domain.rules import (
 from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
 from fivefold.evaluator import (
     RUN_METRICS,
+    TOKEN_METRICS,
     ActorAction,
     Approval,
     Config,
@@ -53,6 +54,7 @@ from fivefold.evaluator import (
     Fault,
     Knowledge,
     Message,
+    ModelCall,
     PropertyResult,
     PropertyVerdict,
     Read,
@@ -199,6 +201,7 @@ class World:
         self.approvals: dict[str, Approval] = {}
         self.facts: list[FactVersion] = []
         self.reads: list[Read] = []
+        self.model_calls: list[ModelCall] = []
         setup = self.sim_next()
         for key, value in scenario.fact_values().items():
             self.facts.append(FactVersion(key, 1, value, setup, 0, "initial"))
@@ -638,7 +641,33 @@ class World:
             approvals=tuple(self.approvals.values()),
             fact_versions=tuple(self.facts),
             reads=tuple(self.reads),
+            model_calls=tuple(self.model_calls),
         )
+
+    def model_call(
+        self,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        *,
+        refused: str | None = None,
+        model: str = "scripted-policy",
+        worker: str = "agent-1",
+    ) -> ModelCall:
+        """A model call of `worker`, answered with this usage, as the harness logs it.
+        Each call takes 1,000 ms, after the one before."""
+        number = len(self.model_calls) + 1
+        call = ModelCall(
+            call_no=number,
+            worker=worker,
+            asked_vt=1_000 * (number - 1),
+            answered_vt=1_000 * number,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            refused=refused,
+        )
+        self.model_calls.append(call)
+        return call
 
     def evaluate(self) -> RunResult:
         return evaluate(self.records())
@@ -1964,6 +1993,58 @@ def test_the_run_metrics_count_attestations_approval_requests_and_human_decision
     }
 
 
+def test_the_token_metrics_sum_the_tokens_of_the_run_s_model_calls() -> None:
+    """A reply with no usage counts 0, and so does a call the spend cap refused, which was
+    never sent. Tokens decide no verdict."""
+    world = World()
+    order = world.request()
+    world.committed(order, world.commit(order))
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
+    plain = world.evaluate()
+    world.model_call(1_200, 80)
+    world.model_call(None, None)
+    world.model_call(900, 60, worker="agent-2")
+    world.model_call(None, None, refused="spend_cap")
+    result = world.evaluate()
+    assert {name: result.metrics[name] for name in TOKEN_METRICS} == {
+        "tokens_in": 2_100,
+        "tokens_out": 140,
+    }
+    assert {name: plain.metrics[name] for name in TOKEN_METRICS} == {
+        "tokens_in": 0,
+        "tokens_out": 0,
+    }, "a run with no logged tokens, as a scripted one, used none"
+    assert result.verdict is plain.verdict is Verdict.PASS
+    assert result.properties == plain.properties
+
+
+def test_a_scripted_run_s_calls_use_no_tokens() -> None:
+    world = World()
+    for _ in range(7):
+        world.model_call(None, None)
+    result = world.evaluate()
+    assert (result.metrics["tokens_in"], result.metrics["tokens_out"]) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("call", "why"),
+    [
+        ({"model": "fake:m"}, "names the model fake:m, but the run's model is scripted-policy"),
+        ({"input_tokens": -1}, "model call 1 has a negative token count"),
+        ({"output_tokens": -5}, "model call 1 has a negative token count"),
+        ({"refused": "spend_cap"}, r"was refused \(spend_cap\), so it was never sent"),
+    ],
+)
+def test_a_model_call_that_breaks_the_log_s_rules_is_refused(
+    call: dict[str, Any], why: str
+) -> None:
+    """The harness's table refuses each of these (0011); records built by hand might not."""
+    world = World()
+    world.model_call(**{"input_tokens": 10, "output_tokens": 2, **call})
+    with pytest.raises(RecordsError, match=why):
+        world.evaluate()
+
+
 # The result ------------------------------------------------------------------------------
 
 
@@ -2002,6 +2083,7 @@ def test_every_property_is_evaluated() -> None:
         "unknown_claims",
         "success_claimed_with_duplicate",
         *RUN_METRICS,
+        *TOKEN_METRICS,
     }
     assert result.verdict is Verdict.PASS
 
@@ -2013,6 +2095,9 @@ def test_the_json_has_sorted_keys_and_does_not_depend_on_record_order() -> None:
     second = world.request(vt=6_000)
     world.committed(second, world.commit(second))
     world.report({"REQ-1": ("done", ["PO-0002"]), **DONE_NOTHING})
+    world.model_call(1_200, 80)
+    world.model_call(None, None)
+    world.model_call(900, 60)
     records = world.records()
     text = result_json(evaluate(records))
     assert text.endswith("\n")
@@ -2028,6 +2113,7 @@ def test_the_json_has_sorted_keys_and_does_not_depend_on_record_order() -> None:
         approvals=records.approvals[::-1],
         fact_versions=records.fact_versions[::-1],
         reads=records.reads[::-1],
+        model_calls=records.model_calls[::-1],
     )
     assert result_json(evaluate(reversed_records)) == text
 

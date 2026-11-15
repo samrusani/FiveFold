@@ -44,7 +44,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fivefold.evaluator.checks import CLAIM_METRICS
-from fivefold.evaluator.metrics import RUN_METRICS
+from fivefold.evaluator.metrics import RUN_METRICS, TOKEN_METRICS
 from fivefold.evaluator.result import (
     PROPERTY_NAMES,
     PropertyVerdict,
@@ -63,12 +63,11 @@ PROPERTY_METRICS = (
 )
 """The metrics of properties 1 to 4, in the order of record 0004's list."""
 
-METRICS: tuple[str, ...] = (*PROPERTY_METRICS, *CLAIM_METRICS, *RUN_METRICS)
-"""Every metric a result holds, in the order of record 0004's list: 14 in all."""
+METRICS: tuple[str, ...] = (*PROPERTY_METRICS, *CLAIM_METRICS, *RUN_METRICS, *TOKEN_METRICS)
+"""Every metric a result holds, in the order of record 0004's list: 16 in all."""
 
 NOT_COMPUTED = (
     "recovery latency per affected action, in virtual and wall milliseconds",
-    "tokens in and out",
     "cost, from a price file that records its price date",
     "cost per passing run",
 )
@@ -223,8 +222,8 @@ def check_result(result: RunResult) -> None:
     unknown = sorted(set(result.metrics) - set(METRICS))
     if missing or unknown:
         raise ReportError(
-            f"{name}: its metrics are not the 14 of record 0004: missing {missing or 'none'},"
-            f" unknown {unknown or 'none'}"
+            f"{name}: its metrics are not the {len(METRICS)} of record 0004: missing"
+            f" {missing or 'none'}, unknown {unknown or 'none'}"
         )
     planned_faults(result)
 

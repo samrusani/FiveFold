@@ -20,7 +20,7 @@ from fivefold.evaluator.authorization import check_authorized_at_commit
 from fivefold.evaluator.checks import check_exactly_once, check_truthfully_reported
 from fivefold.evaluator.freshness import check_inputs_still_fresh
 from fivefold.evaluator.liveness import check_actually_committed
-from fivefold.evaluator.metrics import run_metrics
+from fivefold.evaluator.metrics import run_metrics, token_metrics
 from fivefold.evaluator.records import RunRecords
 from fivefold.evaluator.result import (
     CountedReport,
@@ -74,6 +74,7 @@ def evaluate(records: RunRecords) -> RunResult:
     for result in properties:
         metrics.update(result.metrics)
     metrics.update(run_metrics(records))
+    metrics.update(token_metrics(records))
     run = records.run
     return RunResult(
         code_version=code_version(),

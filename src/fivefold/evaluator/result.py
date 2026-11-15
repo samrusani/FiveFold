@@ -221,8 +221,8 @@ class RunResult(ResultModel):
     properties: tuple[PropertyResult, ...]
     """All five properties, in order."""
     metrics: dict[str, int]
-    """Every metric: each property's, and the run's own counts of human actions and
-    approvals (`fivefold.evaluator.metrics`)."""
+    """Every metric: each property's, the run's own counts of human actions and
+    approvals, and the tokens its model calls used (`fivefold.evaluator.metrics`)."""
     excused_intents: tuple[ExcusedIntent, ...]
     """The required intents property 4 excuses, with their excuse, in scenario order."""
     report: CountedReport | None
