@@ -91,7 +91,8 @@ class World:
         expires = self.expires.get(approval_id) if status is ApprovalStatus.APPROVED else None
         return ApprovalNow(approval_id, status, expires)
 
-    async def send(self, action: Action, attempt: Attempt) -> Answer:
+    async def send(self, action: Action, attempt: Attempt, approval_id: str) -> Answer:
+        assert approval_id == f"APR-{action.action_id[2:]}", "the send cites the grant's approval"
         if self.lose_requests:
             self.lose_requests -= 1
             await self.scheduler.sleep(SETTINGS.dispatch_timeout_ms)

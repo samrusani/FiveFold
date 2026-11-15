@@ -55,9 +55,10 @@ class Destination(Protocol):
     async def approval(self, approval_id: str) -> ApprovalNow:
         """The approval's status now."""
 
-    async def send(self, action: Action, attempt: Attempt) -> Answer:
-        """Send one attempt of the write and classify the answer (0003). A timeout, a
-        transport error or a server error gives an unknown answer."""
+    async def send(self, action: Action, attempt: Attempt, approval_id: str) -> Answer:
+        """Send one attempt of the write, citing the action's approval, and classify the
+        answer (0003). A timeout, a transport error or a server error gives an unknown
+        answer."""
 
     async def lookup(self, action: Action) -> ProbeAnswer:
         """C1: which effects exist for the action's intent, and as of when (0005)."""

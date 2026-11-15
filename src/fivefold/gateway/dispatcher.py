@@ -249,7 +249,10 @@ class Dispatcher:
 
     async def _send(self, action: Action, attempt: Attempt) -> None:
         self._hook("gw.dispatch.after_record", action)
-        answer = await self._destination.send(action, attempt)
+        grant = self._store.view(action.action_id).grant
+        if grant is None:
+            raise RuntimeError(f"{action.action_id} sends with no grant")
+        answer = await self._destination.send(action, attempt, grant.approval_id)
         self._hook("gw.dispatch.after_answer", action)
         self._store.answer(action.action_id, attempt.attempt_no, answer, self._now())
 
