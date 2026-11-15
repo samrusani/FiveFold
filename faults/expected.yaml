@@ -8,9 +8,12 @@
 # match a result: if a run contradicts one, the expectation is revisited by decision
 # record (0006). tests/pg/test_expected.py runs every cell.
 #
-# How each cell's plan is built is in src/fivefold/harness/cells.py: F2 drops the
-# purchase order's committed answer on the stack's hop to the simulator; F11 kills the
-# agent at the named point of its purchase order call and resumes it 1,000 ms later; F9
+# How each cell's plan is built is in src/fivefold/harness/cells.py. F2 drops the
+# purchase order's committed answer on the stack's hop to the simulator. F11 kills the
+# agent at the named point of its purchase order call and resumes it 1,000 ms later. F6
+# revokes the order's approval, and F7 changes the quote it relies on: early at the
+# gateway's dispatch check (G2) or as the approval answer reaches the agent (B0), late as
+# the order leaves for the simulator. F12 drops the order's request on the named hop. F9
 # starts a second worker at the first worker's first step.
 #
 # dev-001's budget covers one order but not two, so a second order on the first approval
@@ -41,3 +44,27 @@ cells:
   - {fault: F9, variant: same_args, contract: C2, config: B0, verdict: fail, failing: [1, 3, 5]}
   - {fault: F9, variant: different_args, contract: C2, config: G2, verdict: pass, failing: []}
   - {fault: F9, variant: different_args, contract: C2, config: B0, verdict: fail, failing: [1, 3, 5]}
+
+  # F6, approval revoked before commit (property 2). Early: G2 refuses to send, and
+  # property 4 excuses the missing order (authority withdrawn); B0 orders anyway. Late: the
+  # order commits after the revocation, a documented G2 limit at C0 to C2 (0006).
+  - {fault: F6, variant: early, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F6, variant: early, contract: C2, config: B0, verdict: fail, failing: [2]}
+  - {fault: F6, variant: late, contract: C2, config: G2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: late, contract: C2, config: B0, verdict: fail, failing: [2]}
+
+  # F7, quote changes after approval (property 3). Early, price up: G2 refuses to send,
+  # and the agent re-reads and orders at the new price on a new approval; B0 orders at the
+  # old price. Late, price up: the order commits on the old price, a documented G2 limit
+  # at C0 to C2 (0006). Harmless (the lead time only): every configuration passes.
+  - {fault: F7, variant: early_price_up, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_price_up, contract: C2, config: B0, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C2, config: G2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C2, config: B0, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_harmless, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_harmless, contract: C2, config: B0, verdict: pass, failing: []}
+
+  # F12, request lost before it reaches the destination (properties 4 and 5). G2 retries
+  # with the same key at C2; B0's framework retries the call. One order either way.
+  - {fault: F12, variant: gw_sim, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_sim, contract: C2, config: B0, verdict: pass, failing: []}
