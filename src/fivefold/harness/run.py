@@ -483,7 +483,8 @@ class InprocRun:
     async def _worker(self, worker: str, *, resume: bool) -> None:
         scenario = self.spec.scenario
         model = self._chat_model(worker)
-        spec = WorkerSpec(worker, scenario.task, scenario.budget.max_agent_steps)
+        budget = scenario.budget
+        spec = WorkerSpec(worker, scenario.task, budget.max_agent_steps, budget.max_tokens)
 
         def on_step(step: int) -> None:
             self._agent_step(worker, step)
@@ -497,7 +498,12 @@ class InprocRun:
                 status=self.spec.contract.has(Capability.STATUS),
             )
             graph = build_graph(
-                model, tools, self.checkpointer, max_steps=spec.max_steps, on_step=on_step
+                model,
+                tools,
+                self.checkpointer,
+                max_steps=spec.max_steps,
+                max_tokens=spec.max_tokens,
+                on_step=on_step,
             )
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
             return
@@ -511,7 +517,12 @@ class InprocRun:
             listed = await connection.list_tools()
             tools = gateway_tools(connection, listed, self.timeouts)
             graph = build_graph(
-                model, tools, self.checkpointer, max_steps=spec.max_steps, on_step=on_step
+                model,
+                tools,
+                self.checkpointer,
+                max_steps=spec.max_steps,
+                max_tokens=spec.max_tokens,
+                on_step=on_step,
             )
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
         except asyncio.CancelledError:
