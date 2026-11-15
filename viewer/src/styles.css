@@ -1,0 +1,312 @@
+:root {
+  --bg: #fbfbfa;
+  --panel: #ffffff;
+  --text: #1f2328;
+  --muted: #656d76;
+  --line: #d8dee4;
+  --accent: #0b5cad;
+  --pass: #1a7f37;
+  --pass-bg: #dafbe1;
+  --fail: #b42318;
+  --fail-bg: #ffebe9;
+  --unresolved: #8a5a00;
+  --unresolved-bg: #fff3c4;
+  --fault-bg: #fff1f0;
+  --gateway-bg: #eef5ff;
+  --human-bg: #f5efff;
+  --report-bg: #f2f8ec;
+  --tie: #8250df;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --text: #e6edf3;
+    --muted: #8d96a0;
+    --line: #30363d;
+    --accent: #58a6ff;
+    --pass: #3fb950;
+    --pass-bg: #12261e;
+    --fail: #f85149;
+    --fail-bg: #2d1214;
+    --unresolved: #d29922;
+    --unresolved-bg: #2b2111;
+    --fault-bg: #2a1517;
+    --gateway-bg: #111d2e;
+    --human-bg: #1d1730;
+    --report-bg: #15231a;
+    --tie: #bc8cff;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.vt,
+.source,
+.json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+code {
+  white-space: nowrap;
+}
+
+h1 code {
+  font-size: inherit;
+}
+
+nav.top {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+nav.top .brand {
+  font-weight: 650;
+  text-decoration: none;
+}
+
+main {
+  padding: 8px 20px 40px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 14px 0 6px;
+}
+
+h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+h3 {
+  font-size: 14px;
+  margin: 14px 0 6px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.error {
+  color: var(--fail);
+  background: var(--fail-bg);
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.verdict {
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.verdict-pass {
+  color: var(--pass);
+  background: var(--pass-bg);
+}
+
+.verdict-fail {
+  color: var(--fail);
+  background: var(--fail-bg);
+}
+
+.verdict-pass_unresolved,
+.verdict-not_evaluated {
+  color: var(--unresolved);
+  background: var(--unresolved-bg);
+}
+
+code.reason {
+  margin-right: 6px;
+  color: var(--fail);
+}
+
+ul.failures,
+ul.excused,
+ul.pairs {
+  margin: 0;
+  padding-left: 18px;
+}
+
+fieldset.hops {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  border: none;
+  padding: 0;
+  margin: 6px 0 10px;
+}
+
+fieldset.hops legend {
+  float: left;
+  margin-right: 6px;
+  font-weight: 600;
+}
+
+table.timeline td.vt {
+  white-space: nowrap;
+  width: 90px;
+}
+
+table.timeline td.source {
+  white-space: nowrap;
+  width: 110px;
+  color: var(--muted);
+}
+
+.tie {
+  color: var(--tie);
+  font-weight: 700;
+  margin-left: 4px;
+  cursor: help;
+}
+
+details summary {
+  cursor: pointer;
+}
+
+.title {
+  font-weight: 500;
+}
+
+.detail {
+  color: var(--muted);
+}
+
+.json {
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tone-fault {
+  background: var(--fault-bg);
+}
+
+.tone-gateway {
+  background: var(--gateway-bg);
+}
+
+.tone-human {
+  background: var(--human-bg);
+}
+
+.tone-report {
+  background: var(--report-bg);
+}
+
+.tone-dropped .title {
+  text-decoration: line-through;
+  text-decoration-color: var(--fail);
+}
+
+.overdrawn,
+.warn {
+  color: var(--fail);
+}
+
+.run-header p {
+  margin: 4px 0;
+}
+
+.experiment {
+  color: var(--unresolved);
+  font-weight: 600;
+}
+
+table.compare {
+  table-layout: fixed;
+}
+
+table.compare th:first-child,
+table.compare td.vt {
+  width: 74px;
+  white-space: nowrap;
+}
+
+table.compare td.agent,
+table.compare td.ledger {
+  border-left: 1px solid var(--line);
+}
+
+table.compare td.ledger {
+  width: 22%;
+}
+
+table.compare .item {
+  padding: 2px 4px;
+  margin: 1px 0;
+  border-radius: 4px;
+}
+
+table.compare .item .title,
+table.compare .item .detail {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+table.compare .item .detail {
+  font-size: 12px;
+}
