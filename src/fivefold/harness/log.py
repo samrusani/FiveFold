@@ -8,8 +8,8 @@ message was delivered before that report" is a comparison of two numbers.
 
 Model calls have their own numbers, in the order the model answered them, which is the
 order of the run's cassette (0009). They take none of the event counter's, so logging them
-leaves every other record's numbers as they were. The evaluator will compute record 0004's
-token and cost metrics from them.
+leaves every other record's numbers as they were. The evaluator computes record 0004's
+token metrics from them, and its report prices those tokens.
 
 `MemoryHarnessLog` keeps the records in memory, for unit tests. `PgHarnessLog` writes them
 to the `harness` schema of the run's database (`db/migrations/0004_harness.sql`) as role
