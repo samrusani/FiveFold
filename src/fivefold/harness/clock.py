@@ -10,7 +10,13 @@ is read here for metrics only, never for decisions.
 the scheduler controls. It reads two internals of CPython 3.12's asyncio event loop, the
 ready queue (`_ready`) and the timer heap (`_scheduled`), checked in
 `Lib/asyncio/base_events.py` of Python 3.12.3. The project pins Python 3.12
-(pyproject.toml), and `test_clock.py` fails loudly if either internal disappears.
+(pyproject.toml), and `test_scheduler.py` fails loudly if either internal disappears.
+
+A task that waits on the real world, as a live model call waits on its provider, does so
+inside a real wait (`RealWaits.hold`). Network I/O registers nothing that `settle` can
+see: an HTTP client with no timeout leaves no timer in the heap. So while a real wait is
+in flight, `settle` waits for it to end, in wall time, and does not return. Virtual time
+stands still meanwhile, and the call takes no virtual time of its own (0009).
 """
 
 from __future__ import annotations
@@ -18,8 +24,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import Sequence
-from typing import cast
+from collections.abc import Awaitable, Sequence
+from typing import TypeVar, cast
+
+T = TypeVar("T")
 
 
 class VirtualClock:
@@ -70,19 +78,64 @@ async def yield_to_loop() -> None:
     await asyncio.sleep(0)
 
 
-async def settle() -> None:
+class RealWaits:
+    """The real waits in flight, such as live model calls awaiting their provider (0009).
+
+    While one is in flight, virtual time stands still: `settle` does not return, so the
+    scheduler fires no event, and the run waits for it in wall time. What a real wait
+    awaits must never wait on the scheduler, which cannot move until the wait ends.
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+        self._waiters: list[asyncio.Future[None]] = []
+
+    @property
+    def active(self) -> bool:
+        """Whether a real wait is in flight."""
+        return self._count > 0
+
+    async def hold(self, awaitable: Awaitable[T]) -> T:
+        """Await `awaitable`, a real wait, with virtual time held still until it ends."""
+        self._count += 1
+        try:
+            return await awaitable
+        finally:
+            self._count -= 1
+            if self._count == 0:
+                waiters, self._waiters = self._waiters, []
+                for waiter in waiters:
+                    if not waiter.done():
+                        waiter.set_result(None)
+
+    async def ended(self) -> None:
+        """Return once no real wait is in flight."""
+        if self._count == 0:
+            return
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._waiters.append(waiter)
+        await waiter
+
+
+async def settle(real: RealWaits | None = None) -> None:
     """Return once every other task waits on something the scheduler controls.
 
-    Ready callbacks run first. A task that sleeps on a wall-clock timer, such as
-    LangGraph's retry backoff (0008), holds the run until its timer fires, because
-    virtual time must not move while it sleeps: the backoff changes wall-clock metrics
-    only (0009). The run has no other wall-clock timers and no network I/O.
+    Ready callbacks run first. A task in one of `real`'s real waits, such as a live model
+    call awaiting its provider, holds the run until the wait ends. A task that sleeps on a
+    wall-clock timer, such as LangGraph's retry backoff (0008), holds it until its timer
+    fires. Virtual time must not move during either: they change wall-clock metrics only
+    (0009). While a real wait is in flight, `settle` waits for that wait alone, so a timer
+    the real wait itself set, such as an HTTP client's timeout, never keeps the run
+    asleep after the answer arrives.
     """
     loop = asyncio.get_running_loop()
     ready = _ready_queue(loop)
     while True:
         await yield_to_loop()
         if ready:
+            continue
+        if real is not None and real.active:
+            await real.ended()
             continue
         pending = [timer.when() for timer in _timer_heap(loop) if not timer.cancelled()]
         if not pending:
