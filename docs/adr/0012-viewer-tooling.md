@@ -1,6 +1,6 @@
 # 0012: Viewer v1 tooling
 
-Status: Proposed
+Status: Accepted (2026-11-15)
 Date: 2026-11-15
 Spec sections affected: Stack (the Viewer row), Architecture (the Viewer component), Repo layout (`viewer/`), Testing
 
@@ -17,7 +17,7 @@ What the viewer must show, from the product and the records:
 
 What the repository has today: Python 3.12 with uv, Ruff, mypy and pytest (0007); no JavaScript toolchain. Starlette (1.10.0) and uvicorn (0.54.0) are already installed, as dependencies of the MCP SDK. The spec names FastAPI for the gateway's admin API, which is not built yet.
 
-## Decision (proposed)
+## Decision
 
 1. **Read-only API in Python**, in `src/fivefold/viewer/`, served by Starlette and uvicorn, which the project already installs through the MCP SDK; they become direct dependencies, pinned in `uv.lock`. It connects as `ff_viewer` and has no write path. Endpoints, all `GET`, returning JSON: the run list, one run's summary and scorecard, its timeline, and its ledger and fact history. The timeline merges two sources that number their events with separate counters: the harness logs (messages, faults, the scripted humans' actions and reports share one counter) and the gateway's action events (numbered from `gw.run_state.last_seq`). So it orders events by virtual time, and by each source's own `seq` within one virtual time. At an equal virtual time, harness events come before gateway events. That rule does not say which happened first, so the viewer marks events that share a virtual time.
 2. **A run registry**, as 0009 describes: a small database, `fivefold_registry`, with one row per run database (run id, database name, scenario, configuration, contract, seed, created). The harness writes a row when it creates a run database; the API reads it.

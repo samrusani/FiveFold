@@ -98,7 +98,7 @@ Detail: 0007.
 | Models | Adapters: scripted (no network), live (Ollama through `langchain-ollama` now; one API provider to come, as one more entry in the live adapter's provider table), replay (cassettes). A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file, and always records a cassette |
 | Tests | pytest; Hypothesis rule-based state machines |
 | Packaging | Docker Compose; `make demo` runs the four demos of record 0006 (1, 2a, 2b and 3) for B0 and G2 with the scripted model, and needs no API key |
-| Viewer | React and TypeScript over a read-only API; tooling decided at M3 |
+| Viewer | React and TypeScript (Vite, Vitest, ESLint, npm) over a read-only Starlette API; see 0012 |
 | Formal model (v0.2) | TLA+ checked with TLC |
 
 This spec names no library functions. The decision records cite the library facts they rely on, with the versions where they were checked.
@@ -373,11 +373,12 @@ fivefold/
     evaluator/       property checks, metrics, report
     agents/          LangGraph agent, model adapters, scripted policy, baselines
     recorder/        cassettes and playback
+    viewer/          the viewer's read-only API (0012)
   db/                bootstrap.sql (roles), migrations/
   tests/             unit/, pg/, property/, scenario/
   scenarios/dev/     development scenarios
   prices/            price files for live runs
-  viewer/            React and TypeScript
+  viewer/            the viewer's frontend, React and TypeScript (0012)
   tla/               formal model (v0.2)
   docker-compose.yml, Dockerfile, Makefile, pyproject.toml, uv.lock, .python-version
 ```

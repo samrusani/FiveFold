@@ -1,6 +1,7 @@
 # 0007: Tooling
 
 Status: Accepted (2026-11-14)
+Amended by: 0012 (2026-11-15): the Viewer row of the tooling table
 Date: 2026-11-14
 Spec sections affected: Stack, Repo layout, plan.md (T5 tickets)
 Resolves M0 questions: 43, 44
@@ -27,7 +28,7 @@ Versions on PyPI on 14 Nov 2026: mcp 2.3.0, langgraph 1.2.22, langgraph-prebuilt
 | Postgres for tests | the Compose `postgres` service locally; a `postgres:16` service container in CI |
 | CI | GitHub Actions |
 | Containers | Docker Compose with `postgres` (a pinned 16.x image) and the app image (`python:3.12-slim` plus uv) |
-| Viewer | its own decision record at M3 |
+| Viewer | see 0012 |
 
 ### Layout
 
