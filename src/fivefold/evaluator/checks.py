@@ -1,4 +1,6 @@
-"""Property checks over a run's records (0004): property 1 and property 5 for now.
+"""Property checks over a run's records (0004): properties 1 and 5, and the helpers that
+every check shares. Property 2 is in `authorization`, property 3 in `freshness` and
+property 4 in `liveness`.
 
 Property 1, exactly once, is the upper bound: every task intent has at most one effect at
 the end, and no effect is unintended. A missing effect is property 4's failure, never
@@ -53,13 +55,6 @@ def property_result(
         reason_codes=tuple(sorted({failure.code for failure in failures})),
         failures=tuple(failures),
         metrics=dict(metrics),
-    )
-
-
-def not_evaluated(number: int) -> PropertyResult:
-    """The result of a property this evaluator does not check yet."""
-    return PropertyResult(
-        property=number, name=PROPERTY_NAMES[number], verdict=PropertyVerdict.NOT_EVALUATED
     )
 
 

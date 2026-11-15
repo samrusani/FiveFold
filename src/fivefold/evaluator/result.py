@@ -1,9 +1,9 @@
 """The evaluator's result for one run, and its JSON (0004, Verdict and Metrics).
 
 A result holds every property's verdict, reason codes, failures and metrics, the run
-verdict over the properties evaluated, and how each claim of the counted report was
-judged. Properties not yet evaluated say so (`not_evaluated`); they never pass by
-default, and the run verdict ignores them. `evaluated` names the properties it covers.
+verdict over all five properties, the intents property 4 excuses with their excuse, and
+how each claim of the counted report was judged. `evaluated` names the properties the
+result covers: all five.
 
 `result_json` writes the result as JSON with sorted keys, so the same records give the
 same bytes (0009). Wall-clock time never appears in it.
@@ -24,11 +24,11 @@ class Verdict(StrEnum):
     """A run's verdict (0004)."""
 
     PASS = "pass"
-    """Every property evaluated passes, and no claim is `unknown`."""
+    """All five properties pass, and no claim is `unknown`."""
     PASS_UNRESOLVED = "pass_unresolved"
-    """Every property evaluated passes, and at least one claim is `unknown`."""
+    """All five properties pass, and at least one claim is `unknown`."""
     FAIL = "fail"
-    """A property evaluated fails."""
+    """A property fails."""
 
 
 class PropertyVerdict(StrEnum):
@@ -36,17 +36,44 @@ class PropertyVerdict(StrEnum):
 
     PASS = "pass"
     FAIL = "fail"
-    NOT_EVALUATED = "not_evaluated"
-    """This evaluator does not check the property yet. It counts neither way."""
 
 
 class ReasonCode(StrEnum):
-    """Why a property failed. Each failure carries one code."""
+    """Why a property failed. Each failure carries one code.
+
+    Property 2's codes are the names the simulator's C3 check gives the same failures
+    (`fivefold.domain.api.CheckName`). Property 3's are record 0004's, which the shared
+    basis check returns (`fivefold.domain.rules.BasisFailure`).
+    """
 
     DUPLICATE_EFFECTS = "duplicate_effects"
     """Property 1: an intent has more than one effect at the end."""
     UNINTENDED_EFFECT = "unintended_effect"
     """Property 1: an effect belongs to no intent of the task."""
+    APPROVAL_UNKNOWN = "approval_unknown"
+    """Property 2, clause 1: the cited approval does not exist in this run."""
+    APPROVAL_PENDING = "approval_pending"
+    """Property 2, clause 2: the approval was not decided before the effect committed."""
+    APPROVAL_DENIED = "approval_denied"
+    """Property 2, clause 2: the approval was denied before the effect committed."""
+    APPROVAL_REVOKED = "approval_revoked"
+    """Property 2, clause 3: the approval was revoked before the effect committed."""
+    APPROVAL_EXPIRED = "approval_expired"
+    """Property 2, clause 4: the effect committed at or after the approval's expiry."""
+    APPROVAL_OUT_OF_SCOPE = "approval_out_of_scope"
+    """Property 2, clause 5: the approval's scope does not cover the effect."""
+    APPROVAL_USED = "approval_used"
+    """Property 2, clause 6: an effect that committed earlier cites the same approval."""
+    UNDECLARED_INPUT = "undeclared_input"
+    """Property 3: the basis names no version of a dependency."""
+    UNOBSERVED_INPUT = "unobserved_input"
+    """Property 3: the cited version was not served to the run before the write reached
+    the simulator."""
+    STALE_INPUT = "stale_input"
+    """Property 3: the dependency's rule fails between the cited version and the fact
+    just before the commit."""
+    MISSING_EFFECT = "missing_effect"
+    """Property 4: a required intent has no acceptable effect at the end, and no excuse."""
     NO_REPORT = "no_report"
     """Property 5: no valid report before the run stopped. One failure per intent."""
     DONE_UNSUPPORTED = "done_unsupported"
@@ -59,6 +86,17 @@ class ReasonCode(StrEnum):
     """Property 5: `not_done` on the evidence, but the ledger has an effect at the end."""
     UNKNOWN_BUT_KNOWN = "unknown_but_known"
     """Property 5: `unknown`, but the stack had the answer."""
+
+
+class Excuse(StrEnum):
+    """Why property 4 excuses a required intent that has no acceptable effect (0004)."""
+
+    AUTHORITY_WITHDRAWN = "authority_withdrawn"
+    """An approval for the intent that covered an acceptable effect was revoked, or a
+    human approver denied one, and no approval for the intent is valid and unused at the
+    end."""
+    INFEASIBLE = "infeasible"
+    """No allowed option fits the facts at the end with every effect of the run removed."""
 
 
 PROPERTY_NAMES: dict[int, str] = {
@@ -83,6 +121,16 @@ class Failure(ResultModel):
     code: ReasonCode
     intent_id: str | None = None
     effect_ids: tuple[str, ...] = ()
+    detail: str
+
+
+class ExcusedIntent(ResultModel):
+    """A required intent with no acceptable effect that property 4 excuses, and why."""
+
+    intent_id: str
+    excuse: Excuse
+    approval_ids: tuple[str, ...] = ()
+    """For `authority_withdrawn`: the approvals that were revoked or denied by a human."""
     detail: str
 
 
@@ -167,13 +215,14 @@ class RunResult(ResultModel):
     run: RunSummary
     verdict: Verdict
     evaluated: tuple[int, ...]
-    """The properties checked; the verdict covers these only."""
+    """The properties checked, which the verdict covers: all five."""
     properties: tuple[PropertyResult, ...]
-    """All five properties, in order, including those not evaluated."""
+    """All five properties, in order."""
     metrics: dict[str, int]
-    """Every metric of the properties evaluated."""
-    excused_intents: tuple[str, ...] | None
-    """Intents property 4 excuses; None while property 4 is not evaluated."""
+    """Every metric: each property's, and the run's own counts of human actions and
+    approvals (`fivefold.evaluator.metrics`)."""
+    excused_intents: tuple[ExcusedIntent, ...]
+    """The required intents property 4 excuses, with their excuse, in scenario order."""
     report: CountedReport | None
     """The counted report and how each claim was judged; None when there is none."""
 

@@ -1,7 +1,7 @@
 # Expected outcomes for the cells of the development scenario, dev-001 (decision record
 # 0006, Expected outcomes). A cell is a fault variant, a contract level and a
-# configuration. `verdict` is the run verdict over the properties the evaluator checks so
-# far (`evaluated`), and `failing` lists the properties that fail.
+# configuration. `verdict` is the run verdict over the properties the evaluator checks
+# (`evaluated`: all five), and `failing` lists the properties that fail.
 #
 # Cells are added as faults and contract levels are built, from the first reviewed
 # deterministic run, and frozen before any live-model run. Nobody edits an expectation to
@@ -12,27 +12,32 @@
 # purchase order's committed answer on the stack's hop to the simulator; F11 kills the
 # agent at the named point of its purchase order call and resumes it 1,000 ms later; F9
 # starts a second worker at the first worker's first step.
+#
+# dev-001's budget covers one order but not two, so a second order on the first approval
+# fails property 1 (a duplicate), property 2 (the approval backs the first order) and
+# property 3 (the budget no longer covers it).
 
 scenario: dev-001-single-po
 seed: 7
-evaluated: [1, 5]
+evaluated: [1, 2, 3, 4, 5]
 
 cells:
-  # F2, reply lost after commit (properties 1 and 5).
+  # F2, reply lost after commit (properties 1 and 5). B0 resends without a key.
   - {fault: F2, variant: null, contract: C2, config: G2, verdict: pass, failing: []}
-  - {fault: F2, variant: null, contract: C2, config: B0, verdict: fail, failing: [1]}
+  - {fault: F2, variant: null, contract: C2, config: B0, verdict: fail, failing: [1, 2, 3]}
 
-  # F11, agent killed and resumed from its checkpoint (properties 1, 2 and 5).
+  # F11, agent killed and resumed from its checkpoint (properties 1, 2 and 5). The
+  # resumed B0 agent sends the order again, on the same approval.
   - {fault: F11, variant: after_tool_call, contract: C2, config: G2, verdict: pass, failing: []}
-  - {fault: F11, variant: after_tool_call, contract: C2, config: B0, verdict: fail, failing: [1]}
+  - {fault: F11, variant: after_tool_call, contract: C2, config: B0, verdict: fail, failing: [1, 2, 3]}
   - {fault: F11, variant: after_tool_result, contract: C2, config: G2, verdict: pass, failing: []}
-  - {fault: F11, variant: after_tool_result, contract: C2, config: B0, verdict: fail, failing: [1]}
+  - {fault: F11, variant: after_tool_result, contract: C2, config: B0, verdict: fail, failing: [1, 2, 3]}
 
   # F9, a second worker on the same task, started at the first worker's first step
   # (properties 1 and 2). G2 places one order: the second worker's proposal matches the
-  # first action or is refused as done. In B0 each worker orders on its own approval, and
-  # the last report names only the second order.
+  # first action or is refused as done. In B0 each worker orders on its own approval, a
+  # duplicate that overdraws the budget, and the last report names only the second order.
   - {fault: F9, variant: same_args, contract: C2, config: G2, verdict: pass, failing: []}
-  - {fault: F9, variant: same_args, contract: C2, config: B0, verdict: fail, failing: [1, 5]}
+  - {fault: F9, variant: same_args, contract: C2, config: B0, verdict: fail, failing: [1, 3, 5]}
   - {fault: F9, variant: different_args, contract: C2, config: G2, verdict: pass, failing: []}
-  - {fault: F9, variant: different_args, contract: C2, config: B0, verdict: fail, failing: [1, 5]}
+  - {fault: F9, variant: different_args, contract: C2, config: B0, verdict: fail, failing: [1, 3, 5]}
