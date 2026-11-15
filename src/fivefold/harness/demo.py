@@ -19,6 +19,9 @@ the tests. A demo needs no API key: the model is scripted (0009).
 
 The demo reads the gateway's records only to show what the gateway did and told the
 agent; the verdict comes from the evaluator, which never reads them to decide (0004).
+
+`--out DIR` saves each run's result JSON in `DIR`, one file per demo, configuration and
+seed, for `python -m fivefold.evaluator report`.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ import psycopg
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.evaluator import RunResult as Evaluation
+from fivefold.evaluator import result_json
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
     bootstrap,
@@ -278,13 +282,31 @@ def _gateway_lines(conn: psycopg.Connection[Any]) -> tuple[str, ...]:
     return tuple(lines)
 
 
-def run_demo(admin_dsn: str, demo: Demo, config: Config, seed: int) -> Summary:
-    """Run one demo in one configuration, in a fresh database, and summarize it."""
+def save_result(
+    out: Path, demo: Demo, config: Config, seed: int, evaluation: Evaluation | None
+) -> Path:
+    """Save a run's result JSON in the directory `out`, in a file named for the demo,
+    the configuration and the seed, and return its path."""
+    if evaluation is None:
+        raise RuntimeError(f"demo {demo.key} in {config} was not evaluated")
+    path = out / f"demo-{demo.key}-{config}-seed-{seed}.json"
+    out.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(result_json(evaluation).encode("utf-8"))
+    return path
+
+
+def run_demo(
+    admin_dsn: str, demo: Demo, config: Config, seed: int, *, out: Path | None = None
+) -> Summary:
+    """Run one demo in one configuration, in a fresh database, and summarize it. With
+    `out`, also save the run's result JSON there."""
     dsn = recreate_database(admin_dsn, f"fivefold_demo_{demo.key}_{config.lower()}")
     with psycopg.connect(dsn, autocommit=True) as conn:
         migrate(conn, DB_DIR / "migrations")
     run = InprocRun(demo.spec(config, seed), dsn)
     result = asyncio.run(run.execute())
+    if out is not None:
+        save_result(out, demo, config, seed, result.evaluation)
     ended = ", ".join(f"{worker}: {end[0]}" for worker, end in sorted(result.ends.items()))
     summary = summarize(dsn, config, ended)
     return replace(summary, verdict=verdict_line(result.evaluation))
@@ -350,6 +372,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=os.environ.get("FIVEFOLD_ADMIN_DSN", DEFAULT_ADMIN_DSN),
         help="admin connection string (default: FIVEFOLD_ADMIN_DSN)",
     )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        metavar="DIR",
+        help="save each run's result JSON in DIR, as demo-KEY-CONFIG-seed-SEED.json",
+    )
     args = parser.parse_args(argv)
     unknown = [key for key in args.demos if key not in DEMO_BY_KEY]
     if unknown:
@@ -362,7 +390,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Demo {demo.key}: {demo.title} ({scenario.id}, {demo.contract}, seed {args.seed})")
         print(f"{demo.faults}\n")
         for config in ("B0", "G2"):
-            print(render(run_demo(args.dsn, demo, config, args.seed)))
+            print(render(run_demo(args.dsn, demo, config, args.seed, out=args.out)))
             print()
     return 0
 
