@@ -45,6 +45,7 @@ from fivefold.domain.prices import (
     PriceFileError,
     price_file_from_text,
 )
+from fivefold.harness.clock import RealWaits
 from fivefold.harness.log import RunRecord
 from fivefold.harness.models import Live, LiveRefused, RunModels, check_live
 from fivefold.recorder.cassette import ModelInfo, RunHeader
@@ -304,6 +305,74 @@ def test_a_live_model_is_named_provider_colon_model() -> None:
 
 
 # The adapter ---------------------------------------------------------------------------------
+
+
+class Stalled(BaseChatModel):
+    """A provider that accepts a call and never answers it."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "stalled-provider"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise NotImplementedError
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        await asyncio.Event().wait()
+        raise AssertionError("never answered")
+
+
+def test_a_call_past_its_time_limit_fails_and_ends_its_real_wait() -> None:
+    """A provider that never answers cannot hold the run: the call fails after its limit,
+    the real wait ends, and nothing is charged."""
+    real = RealWaits()
+    meter = SpendMeter(Decimal(1), prices())
+
+    async def think() -> None:
+        return None
+
+    model = LiveModel(
+        Stalled(),
+        name="fake:m",
+        price=meter.prices.price("fake", "m"),
+        meter=meter,
+        think=think,
+        hold=real.hold,
+        limit_s=0.05,
+    )
+
+    async def call() -> None:
+        with pytest.raises(LiveError, match=r"fake:m did not answer within 0\.05 s"):
+            await asyncio.wait_for(model.ainvoke([HumanMessage("Order W-100.")]), 5)
+        assert not real.active
+        assert meter.calls == 0
+
+    asyncio.run(call())
+
+
+@pytest.mark.parametrize("limit_s", [0.0, -1.0, float("inf"), float("nan")])
+def test_a_live_run_needs_a_call_limit_above_zero(limit_s: float) -> None:
+    meter = SpendMeter(Decimal(1), prices())
+    with pytest.raises(LiveRefused, match="above 0 seconds"):
+        check_live(Live("fake", "m", spend=meter, limit_s=limit_s), {"FIVEFOLD_LIVE": "1"})
+
+
+def test_a_value_the_provider_refuses_is_refused_in_one_line() -> None:
+    with pytest.raises(LiveError, match="ollama refuses temperature") as refused:
+        provider_model("ollama", "m", {"temperature": "hot"})
+    assert "\n" not in str(refused.value)
 
 
 def test_a_live_call_thinks_then_awaits_the_provider_inside_the_hold_and_is_charged() -> None:

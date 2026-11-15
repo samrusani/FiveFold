@@ -46,7 +46,13 @@ import psycopg
 from psycopg.conninfo import make_conninfo
 from pydantic import JsonValue
 
-from fivefold.agents.live import SpendMeter, check_provider, parse_live_name
+from fivefold.agents.live import (
+    CALL_LIMIT_S,
+    SpendMeter,
+    check_provider,
+    parse_live_name,
+    provider_model,
+)
 from fivefold.agents.replay import ReplayError
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
@@ -56,7 +62,7 @@ from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, bootstrap, migrate, recreate_database
 from fivefold.harness.models import Live, check_live, check_live_flag
 from fivefold.harness.run import CONFIGS, RunSpec
-from fivefold.recorder.cassette import Cassette
+from fivefold.recorder.cassette import Cassette, plain_object
 from fivefold.recorder.playback import RECORDS, PlaybackError, play, record, replay_spec
 
 RECORDED = "fivefold_recorded"
@@ -101,9 +107,11 @@ def _live(args: argparse.Namespace) -> Live:
     provider, model = parse_live_name(args.live)
     params = _params(args.param)
     check_provider(provider, params)
+    plain_object(params, "the model's parameters")  # the cassette's form of them
     meter = SpendMeter(args.spend_cap_usd, load_price_file(args.prices))
-    live = Live(provider, model, params, spend=meter)
+    live = Live(provider, model, params, spend=meter, limit_s=args.call_limit_s)
     check_live(live, os.environ)
+    provider_model(provider, model, params)  # their values; building the model sends nothing
     return live
 
 
@@ -202,6 +210,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         metavar="NAME=VALUE",
         help="with --live: a model parameter, VALUE as JSON; repeat for more",
+    )
+    recording.add_argument(
+        "--call-limit-s",
+        type=float,
+        default=CALL_LIMIT_S,
+        metavar="SECONDS",
+        help=f"with --live: fail a model call that waits longer (default {CALL_LIMIT_S:g})",
     )
 
     playing = commands.add_parser("play", help="replay a cassette and compare the records")

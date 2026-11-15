@@ -78,6 +78,14 @@ async def yield_to_loop() -> None:
     await asyncio.sleep(0)
 
 
+async def within[T](awaitable: Awaitable[T], limit_s: float) -> T:
+    """Await `awaitable`, a wait on the real world such as a live model call, for at most
+    `limit_s` wall-clock seconds. A wait still in flight then is cancelled and raises
+    `TimeoutError`, so a stalled provider cannot hold the run forever. The limit only
+    bounds a real wait; nothing in the run is decided by wall-clock time (0009)."""
+    return await asyncio.wait_for(awaitable, timeout=limit_s)
+
+
 class RealWaits:
     """The real waits in flight, such as live model calls awaiting their provider (0009).
 
