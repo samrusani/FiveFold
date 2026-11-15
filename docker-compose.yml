@@ -16,7 +16,8 @@
 #   docker compose --profile split run --rm split score
 #
 # Networks: the agent's network, `fivefold-agent`, joins only the gateway and your agent,
-# so in G1 and G2 the agent has no route to the simulator (0008). The backend network
+# so in G1 and G2 an agent in a container on it has no route to the simulator (0008). An
+# agent on the host has one, and reaches PostgreSQL too. The backend network
 # joins the gateway, the simulator, PostgreSQL and the `split` commands.
 
 x-split-environment: &split-environment
@@ -99,7 +100,9 @@ services:
       retries: 30
 
   # Set FIVEFOLD_ADMIN_API_TOKEN where you run Compose to serve the gateway's admin API
-  # at /admin, where you resolve escalations. Without it the gateway serves none.
+  # at /admin, where you resolve escalations. Without it the gateway serves none. /admin
+  # shares port 8000 with /mcp, so the agent's network reaches it too: the token is its
+  # only guard, so make it long and random.
   gateway:
     <<: *split
     environment:

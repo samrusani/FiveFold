@@ -2,9 +2,11 @@
 
 The service serves the gateway's tools at `/mcp`, through the MCP SDK's streamable HTTP
 session manager, to the run's one agent worker, `agent-1`. The agent reaches the gateway
-and nothing else: its container shares a network only with the gateway (0008). The
-gateway's store, dispatcher and tools are the inproc topology's, on a `HostScheduler`;
-G1's store has action identity off, as in the inproc topology.
+and nothing else when it runs, as `start` tells it to, in a container on a network it
+shares only with the gateway (0008); an agent on the host can reach the simulator,
+PostgreSQL and the run's directory too. The gateway's store, dispatcher and tools are the
+inproc topology's, on a `HostScheduler`; G1's store has action identity off, as in the
+inproc topology.
 
 The gateway reaches the simulator only through the simulator's API, over HTTP, with its
 own credential (`SimulatorLink`). Its simulator client (`fivefold.gateway.sim_client`) is
@@ -27,7 +29,9 @@ actions through the drain window. Stop ends the dispatcher's tasks and timers, a
 service writes no harness record after it: a call still in flight then fails.
 
 `/admin` serves the gateway's admin API, when the service is given one: a human resolves
-an escalation there by attesting what happened (0003). The evaluator counts an
+an escalation there by attesting what happened (0003). It shares the MCP endpoint's
+listener, so whatever reaches `/mcp`, the agent included, reaches `/admin`, and the API's
+bearer token is its only guard. The evaluator counts an
 attestation only from the harness's actor log (0004). The scripted resolver writes that
 row in the inproc topology; here a human attests over HTTP, so the admin path the API
 calls is a `RecordedAdmin`, which writes the same row after the gateway has recorded the

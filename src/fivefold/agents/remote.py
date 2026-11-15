@@ -17,9 +17,13 @@ its timeout raises `TransportTimeout`; and a server error raises `ServerError`. 
 default retry policy retries all three (0008).
 
     python -m fivefold.agents.remote --scenario PATH --config G2 --contract C2 \\
-        --gateway-url http://127.0.0.1:8000/mcp
+        --gateway-url http://gateway:8000/mcp
     python -m fivefold.agents.remote --scenario PATH --config B0 --contract C2 \\
         --simulator-url http://127.0.0.1:8100 --token-file split-run/agent-1.token
+
+In G1 and G2 run it where your own agent would run: in a container on the Docker network
+`fivefold-agent`, as the Compose service `agent` does, which reaches the gateway at
+`http://gateway:8000/mcp` and nothing else (0008).
 
 MCP SDK calls used (mcp 2.3.0): `mcp.client.streamable_http.streamable_http_client(url)`,
 an async context manager that yields the read and write streams

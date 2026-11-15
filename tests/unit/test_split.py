@@ -15,12 +15,14 @@ from fivefold.faults.catalog import Action
 from fivefold.faults.plan import FaultInjector, Fired, parse_plan
 from fivefold.harness.log import MemoryHarnessLog
 from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
 from fivefold.harness.split.hops import Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
+    Config,
     RunDirError,
     SplitRun,
     clear_run,
@@ -213,6 +215,59 @@ def test_the_command_line_refuses_such_a_plan_in_one_line(
     assert status == 1
     assert error.count("\n") == 1
     assert "cannot run F1 at gw.dispatch.after_record" in error
+
+
+def _started(
+    tmp_path: Path,
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[str, dict[str, str]]:
+    """What `start` prints for a run in `config`, made here without a database; and the
+    run's secrets."""
+    secrets = issue()
+    run = SplitRun(
+        tmp_path / "run",
+        f"dev-001-single-po.{config}.C2.7",
+        "fivefold_split_x",
+        config,
+        Contract.C2,
+        7,
+    )
+    write_run(run, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
+
+    def made(**_: object) -> SplitRun:
+        return run
+
+    monkeypatch.setattr(split_main, "start_run", made)
+    argv = ["--run-dir", str(run.directory), "--dsn", UNREACHABLE_DSN, "start"]
+    argv += ["--scenario", "unused.yaml", "--config", config, "--contract", "C2"]
+    assert main(argv) == 0
+    return " ".join(capsys.readouterr().out.split()), secrets
+
+
+@pytest.mark.parametrize("config", ["G1", "G2"])
+def test_start_sends_a_g_mode_agent_to_a_container_on_the_agents_network(
+    tmp_path: Path,
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Record 0008's boundary holds only for an agent in a container on `fivefold-agent`:
+    on the host, an agent can reach the simulator, PostgreSQL and the run's directory."""
+    out, _ = _started(tmp_path, config, monkeypatch, capsys)
+    assert "run your agent in a container on the Docker network fivefold-agent" in out
+    assert "pointed at the gateway's MCP endpoint, http://gateway:8000/mcp." in out
+    assert "127.0.0.1" not in out
+    assert "an agent on this host can reach the simulator, PostgreSQL and this run's" in out
+
+
+def test_start_points_a_b0_agent_at_the_simulators_api_on_the_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, secrets = _started(tmp_path, "B0", monkeypatch, capsys)
+    assert "point your agent at its API, http://127.0.0.1:8100/api/CALL" in out
+    assert f"Authorization: Bearer {secrets[AGENT]}" in out
 
 
 # The harness's view of a service's traffic -----------------------------------------------------

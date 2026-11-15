@@ -10,8 +10,17 @@
 the agent needs. `serve` runs one of the run's services until it is stopped. `end` ends the
 run after the drain window, and `score` scores it with the evaluator.
 
+In G1 and G2 the agent must run in a container on the Docker network `fivefold-agent`,
+which joins the gateway and the agent only, and reach the gateway at
+`http://gateway:8000/mcp`. Record 0008's boundary holds only there: an agent on the host
+can reach the simulator, PostgreSQL and the run's directory, which holds the gateway's and
+the harness's tokens. A B0 agent runs on the host, and reaches the simulator's API with
+its own token.
+
 The gateway serves its admin API at `/admin` when `FIVEFOLD_ADMIN_API_TOKEN` holds the
-API's bearer token: a human resolves escalations there.
+API's bearer token: a human resolves escalations there. The admin API shares the MCP
+endpoint's listener, so the agent's network reaches it too, and the token is its only
+guard: make it long and random.
 
 Every command reads the run's directory from `--run-dir`, or `FIVEFOLD_RUN_DIR`, or
 `split-run`. The database server comes from `FIVEFOLD_ADMIN_DSN`, a superuser connection
@@ -50,7 +59,7 @@ from fivefold.harness.split.lifecycle import (
     score_run,
     start_run,
 )
-from fivefold.harness.split.rundir import Config, RunDirError, read_run
+from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.service import serve
 from fivefold.harness.split.simulator import SimulatorService
 
@@ -59,6 +68,12 @@ DEFAULT_GATEWAY_URL = "http://127.0.0.1:8000"
 DEFAULT_SIMULATOR_URL = "http://127.0.0.1:8100"
 GATEWAY_PORT = 8000
 SIMULATOR_PORT = 8100
+
+AGENT_NETWORK = "fivefold-agent"
+"""The Compose network that joins the gateway and a G1 or G2 agent, and nothing else."""
+
+AGENT_GATEWAY_URL = "http://gateway:8000/mcp"
+"""The gateway's MCP endpoint, as an agent on `AGENT_NETWORK` reaches it."""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -174,14 +189,8 @@ def _command(args: argparse.Namespace) -> int:
             replace=args.replace,
         )
         print(f"started {run.run_id} in database {run.database}; its directory is {run_dir}")
-        if run.has_gateway:
-            print("next: serve the simulator and the gateway, then point your agent at the")
-            print(f"gateway's MCP endpoint, {DEFAULT_GATEWAY_URL}/mcp. In {run.config} your agent")
-            print("holds no simulator credential (0008).")
-        else:
-            print("next: serve the simulator, then point your agent at its API,")
-            print(f"{DEFAULT_SIMULATOR_URL}/api/CALL, with the header")
-            print(f"Authorization: Bearer {run.secret(AGENT)}")
+        for line in _next_steps(run):
+            print(line)
         return 0
     run = read_run(run_dir)
     if args.command == "serve":
@@ -218,6 +227,24 @@ def _command(args: argparse.Namespace) -> int:
     if args.out is not None:
         args.out.write_text(result_json(evaluation), encoding="utf-8")
     return 0
+
+
+def _next_steps(run: SplitRun) -> list[str]:
+    """What `start` tells the person to do next, and where their agent goes (0008)."""
+    if not run.has_gateway:
+        return [
+            "next: serve the simulator, then point your agent at its API,",
+            f"{DEFAULT_SIMULATOR_URL}/api/CALL, with the header",
+            f"Authorization: Bearer {run.secret(AGENT)}",
+        ]
+    return [
+        "next: serve the simulator and the gateway, then run your agent in a container on",
+        f"the Docker network {AGENT_NETWORK}, pointed at the gateway's MCP endpoint,",
+        f"{AGENT_GATEWAY_URL}. That network joins the gateway and your agent only, and in",
+        f"{run.config} your agent holds no simulator credential (0008). Record 0008's boundary",
+        "holds only there: an agent on this host can reach the simulator, PostgreSQL and",
+        "this run's directory, which holds the gateway's and the harness's tokens.",
+    ]
 
 
 def _plan(argument: str | None) -> list[dict[str, Any]] | None:
