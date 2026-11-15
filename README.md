@@ -199,7 +199,20 @@ The replay matches the original run in fivefold_recorded.
 
 `play` compares the replay with the database the last `record` ran in, so play a cassette before you record another.
 
-### 4. Read next
+### 4. An experimental branch
+
+A branch replays the first K model calls of a recorded run from its cassette, then lets another model answer the rest: the scripted model, or a live one with the options of a live run (record 0009). K, the branch point, runs from 0 to the number of calls in the cassette. The branch is a new run, in its own database, `fivefold_branched` unless `--database` names another, with its own run id, the parent's with `.branch-K` added. Its cassette holds all its calls, names the parent and K, and plays back like any other.
+
+```
+uv run python -m fivefold.recorder branch demo-1-g2.json --at 4 \
+    --scenario scenarios/dev/dev-001-single-po.yaml --cassette branch-4.json --result branch-4-result.json
+uv run python -m fivefold.recorder play branch-4.json \
+    --scenario scenarios/dev/dev-001-single-po.yaml --original fivefold_branched
+```
+
+In demo 1, K = 4 replays the calls up to the order, so the new model takes over once the order is sent. Branched to the scripted model, a scripted run is its parent's run again; the scripted model cannot take over a live model's conversation. The command refuses, before it touches any database, a K beyond the cassette, another scenario, and a live model without its flag, spend cap or price file. The evaluator's report shows each branch in rows of its own, such as `G2, branch point 4`, never in its parent's cell.
+
+### 5. Read next
 
 - [docs/limitations.md](docs/limitations.md): what each guarantee depends on, and the known limits
 - [docs/product.md](docs/product.md): the problem, the users, the scope and the non-goals
