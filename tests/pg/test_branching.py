@@ -41,6 +41,7 @@ from langchain_core.runnables import Runnable
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from starlette.testclient import TestClient
 
 from fivefold.agents.live import PROVIDERS, Provider, SpendMeter
 from fivefold.agents.policy import Mode, Result, scripted_policy
@@ -52,13 +53,15 @@ from fivefold.evaluator import result_json
 from fivefold.evaluator.__main__ import main as report
 from fivefold.evaluator.report import load_result
 from fivefold.harness.demo import DEV_001, DEV_002, demo_1_plan, demo_1_spec
-from fivefold.harness.migrations import drop_database
+from fivefold.harness.migrations import drop_database, registry_database
 from fivefold.harness.models import Live
-from fivefold.harness.registry import forget
+from fivefold.harness.registry import database_of, forget
 from fivefold.harness.run import Config, InprocRun, RunSpec
 from fivefold.recorder.__main__ import main
 from fivefold.recorder.cassette import Cassette, ModelInfo
 from fivefold.recorder.playback import branch_spec, play, record, records
+from fivefold.viewer.app import create_app
+from fivefold.viewer.source import RunSource
 
 pytestmark = pytest.mark.pg
 
@@ -259,6 +262,31 @@ def test_a_branch_must_run_its_parent_s_run(
     ]:
         with pytest.raises(ValueError, match=f"it differs from {PARENT_ID} in {fields}$"):
             InprocRun(changed, "postgresql://nowhere.invalid/none")
+
+
+def test_the_viewer_lists_a_branch_as_a_new_experiment_of_its_parent(
+    parents: dict[Config, Recorded], run_database: Callable[[str], str], admin_dsn: str
+) -> None:
+    """The viewer's API reads each listed run's parent and branch point from its own
+    `harness.run`, as `ff_viewer` (0009, 0012): set for the branch, null for its parent."""
+    dsn = run_database("viewer_branch")
+    record(branch_spec(parents["G2"].cassette, SCENARIO, 4), dsn)
+    client = TestClient(create_app(RunSource(admin_dsn, registry_database()), static=None))
+    listed = {run["database"]: run for run in client.get("/api/runs").json()["runs"]}
+    branch, parent = listed[database_of(dsn)], listed[database_of(parents["G2"].dsn)]
+    assert (branch["run_id"], branch["parent_run_id"], branch["branch_point"]) == (
+        f"{PARENT_ID}.branch-4",
+        PARENT_ID,
+        4,
+    )
+    assert (parent["run_id"], parent["parent_run_id"], parent["branch_point"]) == (
+        PARENT_ID,
+        None,
+        None,
+    )
+    summary = client.get(f"/api/runs/{database_of(dsn)}").json()
+    assert (summary["run"]["parent_run_id"], summary["run"]["branch_point"]) == (PARENT_ID, 4)
+    assert summary["scorecard"]["verdict"] == "pass"
 
 
 # A branch to a live model -----------------------------------------------------------------------

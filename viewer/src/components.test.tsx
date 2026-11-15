@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import { RunHeader } from "./components/RunPage";
 import { Scorecard } from "./components/Scorecard";
 import { Timeline } from "./components/Timeline";
 import {
@@ -10,10 +11,12 @@ import {
   b0Timeline,
   g2Ledger,
   g2Timeline,
-  registryRun,
+  listedRun,
   summary,
   timeline,
 } from "./test/fixtures";
+
+const PARENT = { run_id: "dev-001-single-po.G2.C2.7", branch_point: 4 };
 
 afterEach(() => {
   cleanup();
@@ -56,7 +59,11 @@ describe("the scorecard", () => {
 const responses: Record<string, unknown> = {
   "/api/runs": {
     registry: "fivefold_registry",
-    runs: [registryRun("demo_1_g2", "G2"), registryRun("demo_1_b0", "B0")],
+    runs: [
+      listedRun("demo_1_g2_branch_4", "G2", PARENT),
+      listedRun("demo_1_g2", "G2"),
+      listedRun("demo_1_b0", "B0"),
+    ],
   },
   "/api/runs/demo_1_b0": summary("demo_1_b0", "B0", b0Scorecard),
   "/api/runs/demo_1_b0/timeline": timeline("demo_1_b0", b0Timeline),
@@ -82,10 +89,21 @@ describe("the pages, over a stubbed API", () => {
 
   it("lists the runs and offers B0 beside G2", async () => {
     render(<App />);
-    expect(await screen.findAllByTestId("run-row")).toHaveLength(2);
+    expect(await screen.findAllByTestId("run-row")).toHaveLength(3);
     const pair = screen.getByRole("link", { name: "dev-001-single-po, C2, seed 7: B0 beside G2" });
     expect(pair.getAttribute("href")).toBe("#/compare/demo_1_b0/demo_1_g2");
     expect(requested).toEqual(["GET /api/runs"]);
+  });
+
+  it("labels a branch in the run list as a new experiment, and never pairs it", async () => {
+    render(<App />);
+    const rows = await screen.findAllByTestId("run-row");
+    expect(rows.map((row) => row.querySelector(".experiment")?.textContent ?? null)).toEqual([
+      "A new experiment: a branch of dev-001-single-po.G2.C2.7 at branch point 4.",
+      null,
+      null,
+    ]);
+    expect(screen.getAllByRole("link", { name: /B0 beside G2/ })).toHaveLength(1);
   });
 
   it("aligns the agent's view and the ledger of B0 and G2 by virtual time", async () => {
@@ -120,5 +138,30 @@ describe("the pages, over a stubbed API", () => {
     window.location.hash = "#/runs/gone";
     render(<App />);
     expect((await screen.findByRole("alert")).textContent).toBe("unknown_run: no /api/runs/gone");
+  });
+});
+
+describe("the run page of an experimental branch (record 0009)", () => {
+  it("says it is a new experiment of its parent at its branch point", () => {
+    const plain = summary("demo_1_g2_branch_4", "G2", null);
+    const branch = {
+      ...plain,
+      run: {
+        ...plain.run,
+        run_id: "dev-001-single-po.G2.C2.7.branch-4",
+        parent_run_id: PARENT.run_id,
+        branch_point: PARENT.branch_point,
+      },
+    };
+    render(<RunHeader summary={branch} />);
+    expect(screen.getByText(/^A new experiment/).textContent).toBe(
+      "A new experiment: a branch of dev-001-single-po.G2.C2.7 at branch point 4. It replayed" +
+        " its parent's first 4 model calls, then switched model.",
+    );
+  });
+
+  it("says nothing of the kind for a run that is no branch", () => {
+    render(<RunHeader summary={summary("demo_1_g2", "G2", null)} />);
+    expect(screen.queryByText(/new experiment/)).toBeNull();
   });
 });

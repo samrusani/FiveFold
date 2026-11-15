@@ -117,8 +117,24 @@ class RunSource:
 
     def runs(self) -> list[dict[str, Any]]:
         """Every run database the registry lists, newest first: by the wall-clock time its
-        row was written, which serves display only (0009)."""
-        return self._registry_rows("TRUE", ())
+        row was written, which serves display only (0009). Each row also holds the run's
+        parent and branch point, from its own `harness.run` (`branch_of`)."""
+        rows = self._registry_rows("TRUE", ())
+        return [{**row, **self.branch_of(str(row["database"]))} for row in rows]
+
+    def branch_of(self, database: str) -> dict[str, Any]:
+        """`parent_run_id` and `branch_point` from the `harness.run` of the run database
+        `database`, which the registry lists: both set for an experimental branch, which
+        the viewer labels a new experiment (0009), and both null for any other run. Both
+        are null too when the database cannot be read; its own page then says why."""
+        try:
+            with self._read(database) as conn:
+                row = conn.execute("SELECT parent_run_id, branch_point FROM harness.run").fetchone()
+        except (psycopg.OperationalError, psycopg.errors.UndefinedTable):
+            row = None
+        if row is None:
+            return {"parent_run_id": None, "branch_point": None}
+        return {"parent_run_id": row["parent_run_id"], "branch_point": row["branch_point"]}
 
     def registered(self, database: str) -> dict[str, Any]:
         """The registry's row for `database`; `ViewerError` 404 if it has none."""

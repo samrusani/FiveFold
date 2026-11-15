@@ -210,7 +210,7 @@ uv run python -m fivefold.recorder play branch-4.json \
     --scenario scenarios/dev/dev-001-single-po.yaml --original fivefold_branched
 ```
 
-In demo 1, K = 4 replays the calls up to the order, so the new model takes over once the order is sent. Branched to the scripted model, a scripted run is its parent's run again; the scripted model cannot take over a live model's conversation. The command refuses, before it touches any database, a K beyond the cassette, another scenario, and a live model without its flag, spend cap or price file. The evaluator's report shows each branch in rows of its own, such as `G2, branch point 4`, never in its parent's cell.
+In demo 1, K = 4 replays the calls up to the order, so the new model takes over once the order is sent. Branched to the scripted model, a scripted run is its parent's run again; the scripted model cannot take over a live model's conversation. The command refuses, before it touches any database, a K beyond the cassette, another scenario, and a live model without its flag, spend cap or price file. The evaluator's report shows each branch in rows of its own, such as `G2, branch point 4`, never in its parent's cell, and the viewer labels it a new experiment of its parent.
 
 ### 5. Read next
 
@@ -242,7 +242,7 @@ make viewer         # serve the viewer on http://127.0.0.1:8300
 
 What it shows:
 
-- **Runs:** every run database the run registry lists, newest first. Each B0 run is paired with the G2 run of the same scenario, contract level and seed, as the demos run them; any two runs can be compared.
+- **Runs:** every run database the run registry lists, newest first. Each B0 run is paired with the G2 run of the same scenario, contract level and seed, as the demos run them; any two runs can be compared. An experimental branch shows as a new experiment of its parent, at its branch point, and is never paired (record 0009).
 - **A run:** its scorecard, from the evaluator: each property's verdict, reason codes and failed checks, the intents property 4 excuses, and how each claim of the report was judged. Its timeline: every message on every hop with its fate, the faults that fired, the scripted humans' actions, the reports and, in G1 and G2, the gateway's action events. Events go by virtual time; at one virtual time, harness events come before gateway events, and `=` marks every event that shares its virtual time with another, because which came first is then not known. Messages can be filtered by hop. Last, the effects ledger and the fact history.
 - **Side by side:** two runs aligned by virtual time, each with the agent's view (what the agent sent and was sent, the faults that hit it, its final report) beside its ledger (each effect and fact change). In demo 1, B0's resumed agent orders again and the budget goes over its limit; G2's resumed agent gets the order the gateway already confirmed.
 

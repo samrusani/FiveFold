@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { b0Ledger, b0Timeline, g2Timeline, registryRun } from "./test/fixtures";
-import { agentView, alignByVt, filterByHops, hopsOf, ledgerEntries, overdrawn, pairs } from "./views";
+import { b0Ledger, b0Timeline, g2Timeline, listedRun } from "./test/fixtures";
+import {
+  agentView,
+  alignByVt,
+  experiment,
+  filterByHops,
+  hopsOf,
+  ledgerEntries,
+  overdrawn,
+  pairs,
+} from "./views";
 
 describe("the hop filter", () => {
   it("lists a run's hops in a fixed order", () => {
@@ -67,16 +76,34 @@ describe("alignment by virtual time", () => {
 describe("pairs of runs a demo shows side by side", () => {
   it("pairs B0 with the G2 run named after it", () => {
     const runs = [
-      registryRun("demo_2a_b0", "B0"),
-      registryRun("demo_2a_g2", "G2"),
-      registryRun("demo_2b_g2", "G2"),
+      listedRun("demo_2a_b0", "B0"),
+      listedRun("demo_2a_g2", "G2"),
+      listedRun("demo_2b_g2", "G2"),
     ];
     expect(pairs(runs).map((p) => [p.b0.database, p.g2.database])).toEqual([["demo_2a_b0", "demo_2a_g2"]]);
   });
 
   it("pairs every fitting G2 run when none is named after it", () => {
-    const runs = [registryRun("study_0001", "B0"), registryRun("study_0002", "G2"), registryRun("x", "G1")];
+    const runs = [listedRun("study_0001", "B0"), listedRun("study_0002", "G2"), listedRun("x", "G1")];
     expect(pairs(runs).map((p) => p.g2.database)).toEqual(["study_0002"]);
-    expect(pairs([registryRun("a_b0", "B0"), { ...registryRun("a_g2", "G2"), seed: 8 }])).toEqual([]);
+    expect(pairs([listedRun("a_b0", "B0"), { ...listedRun("a_g2", "G2"), seed: 8 }])).toEqual([]);
+  });
+});
+
+describe("an experimental branch (record 0009)", () => {
+  const parent = { run_id: "dev-001-single-po.G2.C2.7", branch_point: 4 };
+
+  it("is labelled a new experiment of its parent at its branch point", () => {
+    expect(experiment(listedRun("demo_1_g2_branch_4", "G2", parent))).toBe(
+      "A new experiment: a branch of dev-001-single-po.G2.C2.7 at branch point 4",
+    );
+    expect(experiment(listedRun("demo_1_g2", "G2"))).toBeNull();
+  });
+
+  it("is never paired with B0, though it has its parent's scenario, contract and seed", () => {
+    const branch = listedRun("study_0003", "G2", parent);
+    const runs = [listedRun("study_0001", "B0"), listedRun("study_0002", "G2"), branch];
+    expect(pairs(runs).map((p) => p.g2.database)).toEqual(["study_0002"]);
+    expect(pairs([listedRun("study_0001", "B0"), branch])).toEqual([]);
   });
 });

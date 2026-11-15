@@ -88,6 +88,7 @@ def test_the_run_list_lists_both_runs_of_the_demo_from_the_registry(
         )
         assert (run["contract"], run["seed"]) == ("C2", 7)
         assert run["created_wall_at"].startswith("20"), "wall-clock time, as ISO 8601 text"
+        assert (run["parent_run_id"], run["branch_point"]) == (None, None), "no branch"
 
 
 def test_b0_s_scorecard_fails_properties_1_2_and_3_with_their_reason_codes(
@@ -256,6 +257,12 @@ def test_a_registered_database_that_was_dropped_or_holds_no_run_is_404(
         assert client.get(f"/api/runs/{dropped}").json()["error"] == "run_unavailable"
         response = client.get(f"/api/runs/{empty}/ledger")
         assert (response.status_code, response.json()["error"]) == (404, "not_a_run")
+        listed = {run["database"]: run for run in get(client, "/api/runs")["runs"]}
+        for database in (dropped, empty):
+            assert (listed[database]["parent_run_id"], listed[database]["branch_point"]) == (
+                None,
+                None,
+            ), "the list still lists a run it cannot read; its page says why"
     finally:
         for database in (dropped, empty):
             forget(admin_dsn, database)
