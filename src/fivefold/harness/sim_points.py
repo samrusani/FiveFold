@@ -25,9 +25,12 @@ at its two points:
 Every status answer counts toward each F10 that has fired, wherever it fired. When two
 F10 entries overlap, every one counts the answer, and the one that fired first shapes it.
 
-Each fault that fires gets a row in the fault log, naming the request it acted on and
-the simulator as the component. Its params hold the values it used: `delay_ms` for F5,
-`count` for F10.
+Each fault that fires gets a row in the fault log, naming the request it acted on, the
+request's intent, and the simulator as the component. Its params hold the values it
+used: `delay_ms` for F5, `count` for F10. F10 also gets one row for each status answer it
+changes, whichever variant and wherever it fired, once that answer is sent
+(`answer_sent`): the answer is the row's target, its intent the row's intent, and
+`answer_no` counts the answers F10 changed, from 1 (0014).
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ from fivefold.faults.catalog import (
 from fivefold.faults.plan import FaultInjector, Fired
 from fivefold.harness.log import FaultRecord, HarnessLog
 from fivefold.harness.scheduler import Scheduler
-from fivefold.harness.transport import Envelope
+from fivefold.harness.transport import Envelope, Stage
 from fivefold.sim.endpoint import StatusShape, WriteDelay
 
 SIMULATOR = "simulator"
@@ -71,6 +74,8 @@ class _Shaping:
     fired: Fired
     left: int
     fired_vt: int
+    changed: int = 0
+    """The status answers it has changed so far."""
 
 
 class SimulatorPoints:
@@ -91,6 +96,9 @@ class SimulatorPoints:
         self._t_ms = dispatch_timeout_ms
         self._lag_ms = status_lag_ms
         self._shaping: list[_Shaping] = []
+        self._changed: dict[int, tuple[_Shaping, int]] = {}
+        """The status requests whose answers F10 changed and has not logged yet: the F10
+        that shapes each answer, and the answer's number among those it changed."""
 
     def write_received(self, request: Envelope) -> WriteDelay | None:
         """`sim.write.received`: F5 holds the write and commits it `delay_ms` later, and
@@ -130,6 +138,8 @@ class SimulatorPoints:
         if not self._shaping:
             return None
         first = self._shaping[0]
+        first.changed += 1
+        self._changed[request.seq] = (first, first.changed)
         for shaping in self._shaping:
             shaping.left -= 1
         self._shaping = [shaping for shaping in self._shaping if shaping.left > 0]
@@ -146,6 +156,20 @@ class SimulatorPoints:
             return StatusShape(reflect_vt=frozen_vt, contract_violation=True)
         raise SimulatorPointError(f"F10 has no variant {variant!r}")
 
+    def answer_sent(self, envelope: Envelope, stage: Stage) -> None:
+        """A transport observer: once a status answer F10 changed is sent, log one more
+        row for that F10, naming the answer and its intent (0014). F10 acts on the next
+        `count` status answers, which can concern several intents, so each answer it
+        changes touches the answer's intent."""
+        if stage != "sent" or envelope.kind != "answer" or envelope.correlation is None:
+            return
+        changed = self._changed.pop(envelope.correlation, None)
+        if changed is None:
+            return
+        shaping, number = changed
+        count = shaping.fired.planned.param("count")
+        self._record(shaping.fired, STATUS_ANSWER, envelope, {"count": count, "answer_no": number})
+
     def _start_shaping(self, fired: Fired, point: str, request: Envelope) -> None:
         """Log an F10 that fired, and shape the next `count` status answers with it."""
         count = fired.planned.param("count")
@@ -153,7 +177,7 @@ class SimulatorPoints:
         self._shaping.append(_Shaping(fired, count, self._scheduler.now))
 
     def _record(
-        self, fired: Fired, point: str, request: Envelope, used: Mapping[str, object]
+        self, fired: Fired, point: str, message: Envelope, used: Mapping[str, object]
     ) -> None:
         self._log.fault_fired(
             FaultRecord(
@@ -164,9 +188,10 @@ class SimulatorPoints:
                 occurrence=fired.occurrence,
                 action=str(fired.planned.kind.action),
                 vt=self._scheduler.now,
-                target_seq=request.seq,
+                target_seq=message.seq,
                 component=SIMULATOR,
                 params={**fired.planned.params, **used},
+                intent_id=message.intent_id,
             )
         )
 

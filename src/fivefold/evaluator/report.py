@@ -5,15 +5,18 @@ Each run's result is one JSON file, as `result_json` writes it. `load_results` r
 files and directories it is given, and refuses any file that is not a valid `RunResult`.
 `runs_csv` and `markdown_report` sort the runs before they write anything, so the same
 results give the same bytes whatever order they come in (0009). They add no date, no
-wall-clock time and no randomness; a result holds none either. The one date in the report
-is the price file's own.
+wall-clock time and no randomness. The one date in the report is the price file's own.
+The wall-clock values they show are the results' own recovery latencies by the wall
+clock (0014).
 
 The CSV has a header row and the columns of `CSV_COLUMNS`, in that order. Its rows are
 sorted by scenario, configuration, contract level, planned faults and seed, then by the
 rest of the run's identity. The report says what was run. It counts verdicts, and safe
 and live runs, by configuration and contract level, failures by property and
 configuration, and verdicts by fault plan, each count over its denominator. It sums every
-metric by configuration, and names the metric of record 0004 that is not computed yet.
+metric by configuration, and shows recovery latency by fault plan, configuration and
+contract level (0014): the intents faults touched, how many were resolved, and the median
+and largest latency over the resolved ones. Latencies are never summed.
 
 Given a price file (`fivefold.domain.prices`), the CSV gains the column `cost_usd`, each
 run's cost, and the report a cost table by model, configuration and contract level, with
@@ -30,11 +33,22 @@ Readings the decision records leave open:
   the trials of one cell share a row even where a fault draws a parameter from the seed
   (F4's `copy_delay_ms`). The CSV keeps the parameters.
 - Run ids are not unique: runs that differ only in their fault plan share one (demos 2a
-  and 2b). So nothing here keys on the run id alone. Two files that hold the very same
-  result are refused, so that no run counts twice.
+  and 2b). So nothing here keys on the run id alone. Two files that hold the same result
+  are refused, so that no run counts twice; results that differ only in wall-clock fields
+  are the same result (0014), so the check compares `comparable_json`. The fixed order
+  breaks its last ties on that text, then on the whole JSON. So the wall clock decides the
+  order only between results that are the same result, which `load_results` refuses.
 - A result must hold exactly the metrics in `METRICS`. Any other set is refused, so a
   total never mixes runs that computed a metric with runs that did not. Every metric is a
-  count, so a negative one is refused too.
+  count, so a negative one is refused too. Its recovery entries must agree with its
+  `affected_intents` and `unresolved_intents`, and each resolved entry must have a
+  latency of 0 ms or more, and each unresolved one none.
+- `recovery_ms_max` and `recovery_wall_ms_max` are the largest latencies among a run's
+  resolved intents, virtual and by the wall clock; empty when it has none. The recovery
+  table's medians are over the resolved intents of all the row's runs, with the lower
+  middle value for an even count, and `none` when there is no resolved intent. A
+  wall-clock median leaves out a latency whose wall-clock times are missing, as in
+  results built by hand, and shows `not recorded` when every one is.
 - A run's cost is its input tokens at its model's input price plus its output tokens at
   its output price, in USD, as exact decimals: never a float, never rounded. A cost that
   needs more digits than `EXACT` has is refused rather than rounded. The model is priced
@@ -92,13 +106,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fivefold.domain.prices import ModelPrice, PriceFile, PriceFileError, load_price_file
 from fivefold.evaluator.checks import CLAIM_METRICS
-from fivefold.evaluator.metrics import RUN_METRICS, TOKEN_METRICS
+from fivefold.evaluator.metrics import RECOVERY_METRICS, RUN_METRICS, TOKEN_METRICS
 from fivefold.evaluator.result import (
     PROPERTY_NAMES,
     PropertyVerdict,
+    RecoveryEntry,
     RunResult,
     RunSummary,
     Verdict,
+    comparable_json,
     result_json,
 )
 
@@ -112,12 +128,18 @@ PROPERTY_METRICS = (
 )
 """The metrics of properties 1 to 4, in the order of record 0004's list."""
 
-METRICS: tuple[str, ...] = (*PROPERTY_METRICS, *CLAIM_METRICS, *RUN_METRICS, *TOKEN_METRICS)
-"""Every metric a result holds, in the order of record 0004's list: 16 in all."""
+METRICS: tuple[str, ...] = (
+    *PROPERTY_METRICS,
+    *CLAIM_METRICS,
+    *RUN_METRICS,
+    *RECOVERY_METRICS,
+    *TOKEN_METRICS,
+)
+"""Every metric a result holds, in the order of record 0004's list: 18 in all."""
 
-NOT_COMPUTED = "recovery latency per affected action, in virtual and wall milliseconds"
-"""The metric of record 0004 that the evaluator does not compute yet: it waits for record
-0014."""
+RECOVERY_COLUMNS = ("recovery_ms_max", "recovery_wall_ms_max")
+"""The CSV's recovery latency columns (0014): the largest latency among the run's
+resolved intents, in virtual ms and by the wall clock."""
 
 PROPERTIES = tuple(sorted(PROPERTY_NAMES))
 """The five properties, by number."""
@@ -169,10 +191,12 @@ CSV_COLUMNS: tuple[str, ...] = (
     *(f"p{number}_{PROPERTY_NAMES[number]}" for number in PROPERTIES),
     "reason_codes",
     *METRICS,
+    *RECOVERY_COLUMNS,
 )
 """The CSV's columns, in order. A property's column is empty when the run did not
 evaluate it, and so are `cassette_digest`, `parent_run_id` and `branch_point` when the run
-has none. Given a price file, `COST_COLUMN` comes last."""
+has none, and the recovery columns when no intent of the run was resolved. Given a price
+file, `COST_COLUMN` comes last."""
 
 COST_COLUMN: Final = "cost_usd"
 """The CSV's last column when a price file is given: the run's cost in USD, exactly."""
@@ -317,7 +341,26 @@ def check_result(result: RunResult) -> None:
     negative = [metric for metric in METRICS if result.metrics[metric] < 0]
     if negative:
         raise ReportError(f"{name}: its metrics are counts, but {negative} are negative")
+    _check_recovery(result)
     planned_faults(result)
+
+
+def _check_recovery(result: RunResult) -> None:
+    """Refuse recovery entries that disagree with the metrics, or with themselves."""
+    name = f"run {result.run.run_id}"
+    counts = (len(result.recovery), sum(1 for entry in result.recovery if not entry.resolved))
+    claimed = tuple(result.metrics[metric] for metric in RECOVERY_METRICS)
+    if counts != claimed:
+        raise ReportError(
+            f"{name}: its recovery entries give {counts[0]} affected and {counts[1]} unresolved"
+            f" intents, but its metrics say {claimed[0]} and {claimed[1]}"
+        )
+    for entry in result.recovery:
+        if entry.resolved != (entry.latency_ms is not None) or (entry.latency_ms or 0) < 0:
+            raise ReportError(
+                f"{name}: the recovery entry of {entry.intent_id} must have a latency of 0 ms"
+                " or more exactly when it has an end"
+            )
 
 
 def load_result(path: Path) -> RunResult:
@@ -378,7 +421,7 @@ def load_results(paths: Iterable[Path]) -> tuple[RunResult, ...]:
     results: list[RunResult] = []
     for path in files:
         result = load_result(path)
-        digest = hashlib.sha256(result_json(result).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(comparable_json(result).encode("utf-8")).hexdigest()
         if digest in seen:
             raise ReportError(f"{seen[digest]} and {path} hold the same result")
         seen[digest] = path
@@ -498,7 +541,9 @@ def _natural(text: str) -> Natural:
     return tuple(int(part) if index % 2 else part for index, part in enumerate(parts)), text
 
 
-Order = tuple[Natural, str, Natural, Natural, Natural, int, Natural, str, str, str, str, str, str]
+Order = tuple[
+    Natural, str, Natural, Natural, Natural, int, Natural, str, str, str, str, str, str, str
+]
 """A run's place in the fixed order (`Row.order`)."""
 
 
@@ -512,13 +557,17 @@ class Row:
     fault_group: str
     """Its planned faults without their parameters: its row of the fault table."""
     text: str
-    """The result's JSON: the last key of the order, so the order is total."""
+    """The result's JSON without its wall-clock fields (`comparable_json`)."""
+    whole: str
+    """The result's whole JSON (`result_json`): with `text`, the last keys of the order,
+    so the order is total."""
     cost: Decimal | None = None
     """Its cost in USD (`run_cost`), when a price file is given."""
 
     def order(self) -> Order:
         """Scenario, configuration, contract level, planned faults and seed, then the rest
-        of the run's identity, then the whole result."""
+        of the run's identity, then the result without its wall-clock fields, then the
+        whole result."""
         run = self.result.run
         return (
             _natural(run.scenario_id),
@@ -534,6 +583,7 @@ class Row:
             self.result.code_version,
             run.run_id,
             self.text,
+            self.whole,
         )
 
 
@@ -550,7 +600,8 @@ def _rows(results: Iterable[RunResult], prices: PriceFile | None = None) -> list
                 result=result,
                 faults=plan_label(plan),
                 fault_group=plan_label(plan, params=False),
-                text=result_json(result),
+                text=comparable_json(result),
+                whole=result_json(result),
             )
         )
     rows.sort(key=Row.order)
@@ -605,7 +656,22 @@ def _csv_values(row: Row) -> list[str]:
         *(verdicts.get(number, "") for number in PROPERTIES),
         reason_codes(result),
         *(str(result.metrics[name]) for name in METRICS),
+        _blank(_largest(entry.latency_ms for entry in result.recovery)),
+        _blank(_largest(entry.latency_wall_ms for entry in result.recovery)),
     ]
+
+
+def _largest(values: Iterable[int | None]) -> int | None:
+    """The largest of the values that are set, or None when none is."""
+    found = [value for value in values if value is not None]
+    return max(found) if found else None
+
+
+def _lower_median(values: Iterable[int | None]) -> int | None:
+    """The middle of the values that are set, the lower one for an even count; None when
+    none is."""
+    found = sorted(value for value in values if value is not None)
+    return found[(len(found) - 1) // 2] if found else None
 
 
 def _blank(value: str | int | None) -> str:
@@ -642,9 +708,9 @@ def markdown_report(results: Iterable[RunResult], prices: PriceFile | None = Non
         *_safety_table(rows),
         *_failure_table(rows),
         *_fault_table(rows),
+        *_recovery_table(rows),
         *_metric_table(rows),
         *_cost_table(rows, prices),
-        *_not_computed(),
     ]
     return "\n".join(lines).rstrip("\n") + "\n"
 
@@ -794,6 +860,71 @@ def _fault_table(rows: Sequence[Row]) -> list[str]:
     return [*lines, ""]
 
 
+def _recovery_table(rows: Sequence[Row]) -> list[str]:
+    lines = [
+        "## Recovery latency by fault plan",
+        "",
+        "Record 0014 times each task intent a fault touched, from the first fault that"
+        " touched it until the stack's evidence settles the intent's outcome at the end."
+        " Runs are grouped as in the fault table, a branch in rows of its own. Affected"
+        " counts the intents faults touched in the row's runs; resolved and unresolved"
+        " split them. An unresolved intent has no latency: the stack's evidence never"
+        " settled its outcome. The median and the largest latency are over the resolved"
+        " intents, in virtual milliseconds, and the median wall-clock latency in"
+        " milliseconds of wall-clock time; with an even count, the median is the lower"
+        " middle value. Latencies are never summed.",
+        "",
+        _table_row(
+            [
+                "Faults planned",
+                "Configuration",
+                "Contract",
+                "affected",
+                "resolved",
+                "unresolved",
+                "median latency (virtual ms)",
+                "largest latency (virtual ms)",
+                "median wall-clock latency (ms)",
+            ]
+        ),
+        _table_rule(9),
+    ]
+    for (faults, config, contract), members in _groups(
+        rows,
+        lambda row: (row.fault_group, configuration(row.result.run), row.result.run.contract),
+    ):
+        entries = [entry for row in members for entry in row.result.recovery]
+        resolved = [entry for entry in entries if entry.resolved]
+        lines.append(
+            _table_row(
+                [
+                    faults,
+                    config,
+                    contract,
+                    str(len(entries)),
+                    str(len(resolved)),
+                    str(len(entries) - len(resolved)),
+                    *_latencies(resolved),
+                ]
+            )
+        )
+    return [*lines, ""]
+
+
+def _latencies(resolved: Sequence[RecoveryEntry]) -> list[str]:
+    """The median and largest virtual latency, and the median wall-clock latency, of
+    resolved intents, as the recovery table shows them."""
+    if not resolved:
+        return ["none", "none", "none"]
+    virtual = [entry.latency_ms for entry in resolved]
+    wall = _lower_median(entry.latency_wall_ms for entry in resolved)
+    return [
+        _blank(_lower_median(virtual)),
+        _blank(_largest(virtual)),
+        "not recorded" if wall is None else str(wall),
+    ]
+
+
 def _metric_table(rows: Sequence[Row]) -> list[str]:
     groups = _groups(rows, lambda row: (configuration(row.result.run),))
     configs = [config for (config,), _ in groups]
@@ -883,17 +1014,6 @@ def _total_cost(rows: Sequence[Row], what: str) -> Decimal:
     """The sum of the rows' costs in USD, exactly."""
     costs = [row.cost for row in rows if row.cost is not None]
     return _exactly(lambda: sum(costs, Decimal(0)), what)
-
-
-def _not_computed() -> list[str]:
-    return [
-        "## Not computed yet",
-        "",
-        f"Record 0004 also lists {NOT_COMPUTED}. The evaluator does not compute it yet: it"
-        " waits for record 0014. No result holds a value for it, so this report shows none,"
-        " not zeros.",
-        "",
-    ]
 
 
 # Helpers ---------------------------------------------------------------------------------

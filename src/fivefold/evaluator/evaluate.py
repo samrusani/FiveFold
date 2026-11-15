@@ -2,7 +2,8 @@
 
 `evaluate` is pure: records in, result out, with no I/O, clock or randomness, so the same
 records always give the same result (0009). It checks all five properties, lists the
-intents property 4 excuses, and gives the run verdict:
+intents property 4 excuses, works out the recovery latency of each intent a fault
+touched (0014), and gives the run verdict:
 
 | Verdict | When |
 | --- | --- |
@@ -20,8 +21,9 @@ from fivefold.evaluator.authorization import check_authorized_at_commit
 from fivefold.evaluator.checks import check_exactly_once, check_truthfully_reported
 from fivefold.evaluator.freshness import check_inputs_still_fresh
 from fivefold.evaluator.liveness import check_actually_committed
-from fivefold.evaluator.metrics import run_metrics, token_metrics
+from fivefold.evaluator.metrics import recovery_metrics, run_metrics, token_metrics
 from fivefold.evaluator.records import RunRecords
+from fivefold.evaluator.recovery import recovery_entries
 from fivefold.evaluator.result import (
     CountedReport,
     PropertyResult,
@@ -53,7 +55,8 @@ def run_verdict(properties: tuple[PropertyResult, ...], report: CountedReport | 
 
 
 def evaluate(records: RunRecords) -> RunResult:
-    """Score a run: the five properties, the excused intents, the verdict and the metrics.
+    """Score a run: the five properties, the excused intents, the verdict, the recovery
+    entries and the metrics.
 
     Raises `RecordsError` when the records break a rule the checks rely on.
     """
@@ -73,7 +76,9 @@ def evaluate(records: RunRecords) -> RunResult:
     metrics: dict[str, int] = {}
     for result in properties:
         metrics.update(result.metrics)
+    recovery = recovery_entries(records)
     metrics.update(run_metrics(records))
+    metrics.update(recovery_metrics(recovery))
     metrics.update(token_metrics(records))
     run = records.run
     return RunResult(
@@ -100,4 +105,5 @@ def evaluate(records: RunRecords) -> RunResult:
         metrics=metrics,
         excused_intents=excused,
         report=report,
+        recovery=recovery,
     )

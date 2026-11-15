@@ -29,7 +29,7 @@ import pytest
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file, scenario_from_data
-from fivefold.evaluator import RunResult, result_json
+from fivefold.evaluator import RunResult, comparable_json
 from fivefold.harness.cells import Cell, cell_plan
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import Config, InprocRun, RunSpec
@@ -247,14 +247,16 @@ def test_in_b0_there_is_no_gateway_so_the_resolver_never_acts(
 def test_two_runs_with_the_resolver_give_byte_identical_logs(
     run_database: Callable[[str], str],
 ) -> None:
-    """0009: the same inputs give byte-identical logs, ledgers and results, wall-clock
-    columns aside. The resolver adds actor-log rows and gateway events of its own."""
+    """0009, as amended by 0014: the same inputs give byte-identical logs, ledgers and
+    results, wall-clock columns and fields aside. The resolver adds actor-log rows and
+    gateway events of its own, and its attestation ends the order's recovery."""
     texts = []
     for name in ("res_twice_a", "res_twice_b"):
         dsn = run_database(name)
         inproc = run(dsn, "F2", None, Contract.C0, "G2")
         evaluation = inproc.result.evaluation
         assert evaluation is not None
+        assert [str(entry.settled_by) for entry in evaluation.recovery] == ["attestation"]
         records = {
             "messages": rows(
                 dsn,
@@ -271,7 +273,7 @@ def test_two_runs_with_the_resolver_give_byte_identical_logs(
             ),
             "escalations": rows(dsn, "SELECT * FROM gw.escalation"),
             "effects": effects(dsn),
-            "result": result_json(evaluation),
+            "result": comparable_json(evaluation),
         }
         texts.append(json.dumps(records, sort_keys=True, default=str))
     assert texts[0] == texts[1]

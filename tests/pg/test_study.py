@@ -5,15 +5,17 @@ The study runs dev-001 with no fault and with F2, at C0, in B0, G1 and G2, with 
 7 and 8: 12 episodes, by seed and then by cell. Each runs in its own database under this
 test run's prefix, dropped once the episode ends. Each result is saved under the name of
 its cell and seed, and the F2 cells get the verdicts `faults/expected.yaml` expects, with
-either seed. The same inputs give the same bytes. `python -m fivefold.evaluator report`
-builds the CSV and the Markdown report from the directory. The run registry lists a kept
-episode's database and none that was dropped (0012).
+either seed. The same inputs give the same bytes, but for the wall-clock latencies of
+recovery (0014). `python -m fivefold.evaluator report` builds the CSV and the Markdown
+report from the directory. The run registry lists a kept episode's database and none that
+was dropped (0012).
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 from collections.abc import Iterator
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -22,6 +24,7 @@ import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
 
+from fivefold.evaluator import comparable_json, without_wall_clock
 from fivefold.evaluator.__main__ import main as report
 from fivefold.evaluator.report import load_result, planned_faults
 from fivefold.harness.cells import load_expected
@@ -178,8 +181,10 @@ def test_the_report_is_built_from_the_study_s_directory(
 def test_two_studies_with_the_same_inputs_save_the_same_bytes(
     study: tuple[Path, str], admin_dsn: str, db_prefix: str, tmp_path: Path
 ) -> None:
-    """0009: the same scenario, configuration, contract level, seed and model outputs give
-    byte-identical results. Each study runs in databases of its own."""
+    """0009, as amended by 0014: the same scenario, configuration, contract level, seed and
+    model outputs give byte-identical results, ignoring wall-clock fields. Each study runs
+    in databases of its own. The F2 runs have a recovery entry, whose wall-clock latency
+    is the only field that may differ."""
     first, _ = study
     second = tmp_path / "again"
     status, _ = run_study(admin_dsn, second, f"{db_prefix}_study_again", ARGS)
@@ -187,7 +192,14 @@ def test_two_studies_with_the_same_inputs_save_the_same_bytes(
     names = sorted(path.name for path in first.iterdir())
     assert sorted(path.name for path in second.iterdir()) == names
     for name in names:
-        assert (second / name).read_bytes() == (first / name).read_bytes(), name
+        before, after = (load_result(out / name) for out in (first, second))
+        assert comparable_json(after) == comparable_json(before), name
+        texts = [json.loads((out / name).read_bytes()) for out in (first, second)]
+        assert without_wall_clock(texts[1]) == without_wall_clock(texts[0]), name
+        if name.startswith("none-"):
+            assert (second / name).read_bytes() == (first / name).read_bytes(), name
+        else:
+            assert [entry.intent_id for entry in before.recovery] == ["REQ-1"], name
 
 
 def test_a_study_never_replaces_a_database_another_study_kept(

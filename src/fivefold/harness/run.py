@@ -26,7 +26,8 @@ and workers. It is a new run all the same, with its own run id, the parent's wit
    B0 equivalent, F11). A crashed gateway restarts through startup recovery (0003), and
    each agent worker then opens a new MCP connection to it; a crashed worker restarts
    from its last checkpoint. The simulator's endpoint fires F5 and F10 at the
-   simulator's points (`fivefold.harness.sim_points`);
+   simulator's points (`fivefold.harness.sim_points`). Each fault's record names the
+   task intent it touched, which recovery latency starts from (0014);
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
@@ -363,15 +364,18 @@ class InprocRun:
         return len(self.result.ends) == len(self._workers)
 
     def _simulator_points(self) -> SimulatorPoints:
-        """F5 and F10, at the simulator's fault points (0006)."""
+        """F5 and F10, at the simulator's fault points (0006). They also watch the status
+        answers go out, to log each one F10 changed (0014)."""
         params = self.spec.scenario.params
-        return SimulatorPoints(
+        points = SimulatorPoints(
             self.scheduler,
             self.faults,
             self.log,
             dispatch_timeout_ms=params.dispatch_timeout_ms,
             status_lag_ms=params.status_lag_ms,
         )
+        self.transport.observe(points.answer_sent)
+        return points
 
     # The gateway --------------------------------------------------------------------------
 
@@ -471,6 +475,7 @@ class InprocRun:
                 component=GATEWAY,
                 voided=voided,
                 params=params,
+                intent_id=_text(context.get("intent_id")),
             )
         )
         if action is Action.KILL:
@@ -621,6 +626,7 @@ class InprocRun:
                     vt=self.scheduler.now,
                     component=started,
                     params={**fired.planned.params, "worker": worker, "step": step},
+                    intent_id=None,
                 )
             )
             self._workers.append(started)
@@ -653,6 +659,7 @@ class InprocRun:
                     vt=self.scheduler.now,
                     component=worker,
                     params=dict(fired.planned.params),
+                    intent_id=outgoing.intent_id,
                 )
             )
             self._kill(worker, fired.planned.param("restart_delay_ms"))
@@ -700,6 +707,7 @@ class InprocRun:
                     component=worker,
                     voided=voided,
                     params=dict(fired.planned.params),
+                    intent_id=envelope.intent_id,
                 )
             )
             # The kill is immediate. After a tool call, the request is already on the
@@ -788,6 +796,10 @@ class InprocRun:
 def _worker_names(count: int) -> tuple[str, ...]:
     """The names of a run's agent workers: `agent-1` to `agent-{count}`."""
     return tuple(f"agent-{number}" for number in range(1, count + 1))
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _describe(error: BaseException) -> str:

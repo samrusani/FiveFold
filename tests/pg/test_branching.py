@@ -524,6 +524,10 @@ def test_the_command_branches_a_run_and_play_replays_the_branch(
     lines = markdown.read_text(encoding="utf-8").splitlines()
     assert "| G2 | C2 | 1/1 | 0/1 | 0/1 |" in lines, "the parent's cell holds the parent only"
     assert "| G2, branch point 4 | C2 | 1/1 | 0/1 | 0/1 |" in lines
+    (entry,) = loaded.recovery
+    latency, wall = entry.latency_ms, entry.latency_wall_ms
+    branch_row = f"| G2, branch point 4 | C2 | 1 | 1 | 0 | {latency} | {latency} | {wall} |"
+    assert any(line.endswith(branch_row) for line in lines), "its recovery, in a row of its own"
 
 
 def test_the_command_refuses_to_replace_the_database_that_holds_the_parent(

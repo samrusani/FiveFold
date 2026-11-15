@@ -24,6 +24,7 @@ import pytest
 from fivefold.agents.replay import ReplayError
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file, scenario_from_data
+from fivefold.evaluator import without_wall_clock
 from fivefold.harness.cells import cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001, DEV_002, demo_1_plan, demo_1_spec
 from fivefold.harness.migrations import drop_database
@@ -57,9 +58,11 @@ def rows(dsn: str, query: LiteralString) -> list[tuple[Any, ...]]:
         return conn.execute(query).fetchall()
 
 
-def without_adapter(result: dict[str, Any]) -> dict[str, Any]:
-    """The evaluation JSON without the run's model adapter, which a replay names `replay`."""
-    return {**result, "run": {k: v for k, v in result["run"].items() if k != "model_adapter"}}
+def without_adapter(result: dict[str, Any]) -> object:
+    """The evaluation JSON without the run's model adapter, which a replay names `replay`,
+    and without its wall-clock fields, as playback compares it (0014)."""
+    run = {k: v for k, v in result["run"].items() if k != "model_adapter"}
+    return without_wall_clock({**result, "run": run})
 
 
 def dearer_quote(dev_data: dict[str, Any]) -> Scenario:
@@ -116,7 +119,9 @@ def test_recording_changes_nothing_about_the_run(run_database: Callable[[str], s
         cassette.digest(),
     )
     recorded["run"]["cassette_digest"] = None
-    assert plain == recorded, "only the run's record of its cassette differs"
+    assert without_wall_clock(plain) == without_wall_clock(recorded), (
+        "only the run's record of its cassette differs, and the wall clock"
+    )
 
 
 def test_a_replay_against_a_changed_scenario_fails_on_the_first_differing_request(

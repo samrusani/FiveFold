@@ -7,15 +7,17 @@ in a fresh run database: the same scenario, configuration, contract level, seed,
 and workers, with the replay adapter serving the cassette, so it needs no network. The
 replay adapter fails the run if a request's hash differs from the recorded one, or if the
 run asks for more or fewer calls than the cassette holds (0009). `play` then compares the
-replay's records with the original run's, row by row, ignoring wall-clock columns, whose
-names end in `wall_at` or `wall_ms` (0009, Determinism contract):
+replay's records with the original run's, row by row, ignoring wall-clock columns and
+fields, whose names end in `wall_at` or `wall_ms` (0009, Determinism contract, as amended
+by 0014):
 
 - the harness's message log, fault log, actor log, final reports, stop time and model
   calls, whose token counts a replay serves from the cassette;
 - the simulator's effects ledger and approval events;
 - the gateway's action events;
 - the evaluation JSON, without the run summary's model adapter, which a replay records as
-  `replay` by design.
+  `replay` by design, and without its wall-clock fields at any depth: recovery latency by
+  the wall clock (0014).
 
 Before it runs anything, `play` checks that the scenario is the one the cassette was
 recorded on, that the original run recorded this very cassette, and that the replay's
@@ -48,6 +50,8 @@ from pydantic import ValidationError
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, scenario_digest
+from fivefold.evaluator import WALL_CLOCK_SUFFIXES as EVALUATOR_WALL_CLOCK_SUFFIXES
+from fivefold.evaluator import without_wall_clock
 from fivefold.harness.models import SCRIPTED, Branch, Live, Replay, Scripted
 from fivefold.harness.run import Config, InprocRun, RunSpec
 from fivefold.recorder.cassette import Cassette, RunHeader, canonical_json, sha256
@@ -69,8 +73,9 @@ RECORDS: Final[tuple[tuple[str, LiteralString], ...]] = (
 )
 """The records a playback compares, by name, each with the query that reads it in order."""
 
-WALL_CLOCK_SUFFIXES: Final = ("wall_at", "wall_ms")
-"""Wall-clock columns end in one of these, and are for metrics only (0009)."""
+WALL_CLOCK_SUFFIXES: Final = EVALUATOR_WALL_CLOCK_SUFFIXES
+"""Wall-clock columns end in one of these, and are for metrics only (0009). They are the
+evaluator's, which leaves fields with these endings out of a result too (0014)."""
 
 
 class PlaybackError(Exception):
@@ -200,7 +205,7 @@ def play(cassette: Cassette, scenario: Scenario, *, original: str, replay: str) 
 
 def records(dsn: str) -> dict[str, list[str]]:
     """The records a playback compares, of the run in the database `dsn`, row by row as
-    canonical JSON, without wall-clock columns, read as `ff_viewer`."""
+    canonical JSON, without wall-clock columns and fields, read as `ff_viewer`."""
     with _viewer(dsn) as conn:
         return {
             name: [_comparable(name, row[0]) for row in conn.execute(query)]
@@ -236,12 +241,14 @@ def compare(original: dict[str, list[str]], replay: dict[str, list[str]]) -> tup
 
 def _comparable(name: str, row: object) -> str:
     """A row as canonical JSON, without wall-clock columns; the evaluation also without
-    the model adapter that its run summary names."""
+    its wall-clock fields, at any depth, and the model adapter its run summary names."""
     if not isinstance(row, dict):
         raise TypeError(f"a row of the {name} is not a JSON object: {row!r}")
     data: dict[str, Any] = {
         column: value for column, value in row.items() if not column.endswith(WALL_CLOCK_SUFFIXES)
     }
+    if name == "evaluation":
+        data = {column: without_wall_clock(value) for column, value in data.items()}
     result = data.get("result")
     if name == "evaluation" and isinstance(result, dict) and isinstance(result.get("run"), dict):
         summary = {key: value for key, value in result["run"].items() if key != "model_adapter"}

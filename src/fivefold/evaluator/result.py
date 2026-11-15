@@ -1,12 +1,15 @@
 """The evaluator's result for one run, and its JSON (0004, Verdict and Metrics).
 
 A result holds every property's verdict, reason codes, failures and metrics, the run
-verdict over all five properties, the intents property 4 excuses with their excuse, and
-how each claim of the counted report was judged. `evaluated` names the properties the
-result covers: all five.
+verdict over all five properties, the intents property 4 excuses with their excuse, how
+each claim of the counted report was judged, and the recovery latency of each intent a
+fault touched (0014). `evaluated` names the properties the result covers: all five.
 
 `result_json` writes the result as JSON with sorted keys, so the same records give the
-same bytes (0009). Wall-clock time never appears in it.
+same bytes (0009). Its one kind of wall-clock value is recovery latency by the wall clock,
+in fields whose names end in `wall_ms`. They are for metrics only, so comparisons that
+need equal bytes compare `comparable_json`, which leaves them out (0009, as amended by
+0014).
 """
 
 from __future__ import annotations
@@ -109,6 +112,35 @@ PROPERTY_NAMES: dict[int, str] = {
 """The five properties (0004), by number."""
 
 
+class Outcome(StrEnum):
+    """An affected intent's outcome at the end, from the ledger (0014)."""
+
+    COMMITTED = "committed"
+    """The intent has an effect at the end: `E_i(end)` is not empty."""
+    NOT_COMMITTED = "not_committed"
+    """The intent has no effect at the end."""
+
+
+class SettledBy(StrEnum):
+    """What settled an affected intent's outcome for the stack, ending its recovery (0014).
+
+    For a committed outcome, the first commit evidence for one of the intent's effects
+    (`fivefold.evaluator.evidence.CommitSource`). For a not_committed one, how the last of
+    its write requests was first shown never to commit
+    (`fivefold.evaluator.evidence.Settlement`), or that it sent none.
+    """
+
+    WRITE_ANSWER = "write_answer"
+    STATUS_ANSWER = "status_answer"
+    ATTESTATION = "attestation"
+    REJECTED = "rejected"
+    STATUS_EMPTY = "status_empty"
+    SAME_KEY_REJECTED = "same_key_rejected"
+    ATTESTED_NOT_COMMITTED = "attested_not_committed"
+    NO_WRITE = "no_write"
+    """The stack sent no write request for the intent, nor possibly sent one."""
+
+
 class ResultModel(BaseModel):
     """Base of the result models: unknown fields are refused and values never change."""
 
@@ -190,6 +222,46 @@ class CountedReport(ResultModel):
     claims: tuple[ClaimJudgment, ...]
 
 
+class RecoveryEntry(ResultModel):
+    """Recovery latency for one task intent a fault touched (0014).
+
+    The start is the first fault, by seq, that touched the intent. The end is the first
+    harness seq at or after the start from which the stack's knowledge of the intent
+    (`K_i`, 0004) equals its outcome until the run stops: the start itself when the stack
+    held that evidence already. An intent with no end is unresolved: its end, latencies
+    and `settled_by` are None, and `knowledge_at_stop` says what the stack knew when the
+    run stopped.
+    """
+
+    intent_id: str
+    fault_seq: int
+    """The harness seq of the first fault that touched the intent."""
+    fault: str
+    """That fault's id, such as `F2`."""
+    start_vt: int
+    """When that fault fired."""
+    outcome: Outcome
+    settled_by: SettledBy | None
+    end_seq: int | None
+    end_vt: int | None
+    """When the evidence that settled the outcome reached the stack: a delivery's
+    `delivered_vt`, or an attestation's `vt`."""
+    latency_ms: int | None
+    """`end_vt - start_vt`, in virtual ms."""
+    latency_wall_ms: int | None
+    """The same span by the wall clock, rounded to the nearest ms: from the start fault's
+    `wall_at` to the delivery's `delivered_wall_at` or the attestation's `wall_at`, and 0
+    when the end is the start. None when a wall-clock time it needs is missing. For
+    metrics only."""
+    knowledge_at_stop: Knowledge | None
+    """For an unresolved intent, `K_i` when the run stopped; None for a resolved one."""
+
+    @property
+    def resolved(self) -> bool:
+        """Whether the stack's evidence settled the intent's outcome."""
+        return self.end_seq is not None
+
+
 class RunSummary(ResultModel):
     """The run the result is for, from `harness.run`, without wall-clock time."""
 
@@ -222,11 +294,14 @@ class RunResult(ResultModel):
     """All five properties, in order."""
     metrics: dict[str, int]
     """Every metric: each property's, the run's own counts of human actions and
-    approvals, and the tokens its model calls used (`fivefold.evaluator.metrics`)."""
+    approvals, the intents a fault touched and those left unresolved, and the tokens its
+    model calls used (`fivefold.evaluator.metrics`)."""
     excused_intents: tuple[ExcusedIntent, ...]
     """The required intents property 4 excuses, with their excuse, in scenario order."""
     report: CountedReport | None
     """The counted report and how each claim was judged; None when there is none."""
+    recovery: tuple[RecoveryEntry, ...]
+    """Recovery latency of each task intent a fault touched, in scenario order (0014)."""
 
     def property_result(self, number: int) -> PropertyResult:
         """The result of property `number`, 1 to 5."""
@@ -236,6 +311,34 @@ class RunResult(ResultModel):
         raise KeyError(number)
 
 
+WALL_CLOCK_SUFFIXES = ("wall_at", "wall_ms")
+"""Wall-clock columns and fields end in one of these. They are for metrics only (0009)."""
+
+
+def without_wall_clock(value: object) -> object:
+    """JSON data without the fields whose names end in a wall-clock suffix, at any depth."""
+    if isinstance(value, dict):
+        return {
+            key: without_wall_clock(item)
+            for key, item in value.items()
+            if not str(key).endswith(WALL_CLOCK_SUFFIXES)
+        }
+    if isinstance(value, list):
+        return [without_wall_clock(item) for item in value]
+    return value
+
+
 def result_json(result: RunResult) -> str:
     """The result as JSON: sorted keys, two-space indents and a final newline."""
-    return json.dumps(result.model_dump(mode="json"), sort_keys=True, indent=2) + "\n"
+    return _json(result.model_dump(mode="json"))
+
+
+def comparable_json(result: RunResult) -> str:
+    """The result as `result_json` writes it, without its wall-clock fields: what a
+    comparison that needs equal bytes compares (0009, as amended by 0014). Two runs with
+    the same records but for wall-clock times give the same text."""
+    return _json(without_wall_clock(result.model_dump(mode="json")))
+
+
+def _json(data: object) -> str:
+    return json.dumps(data, sort_keys=True, indent=2) + "\n"

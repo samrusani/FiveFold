@@ -6,6 +6,10 @@ properties, over all five properties. Record 0006 fixes some outcomes before any
 the committed cells must agree with them. It fixes no G1 outcome: G1's cells come from
 G1's first run, and G1, which fires each fault where G2 does, has a cell for each of G2's
 but F10's, which has no status answer to change in G1.
+
+In G1 and G2, where an intent's outcome is committed and evidence came after the fault,
+recovery must end when the gateway first recorded one of the intent's actions Confirmed
+(0014). The evaluator never reads the gateway's tables; the test does, to compare.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import pytest
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
+from fivefold.evaluator import Outcome
 from fivefold.faults.catalog import BUILT, FaultId
 from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
@@ -153,3 +158,13 @@ def test_the_cell_gets_its_expected_verdict(run_database: Callable[[str], str], 
         result.property for result in evaluation.properties if str(result.verdict) == "fail"
     )
     assert (str(evaluation.verdict), failing) == (cell.verdict, cell.failing)
+    for recovered in evaluation.recovery:
+        later = recovered.end_seq is not None and recovered.end_seq > recovered.fault_seq
+        if cell.config != "B0" and recovered.outcome is Outcome.COMMITTED and later:
+            with psycopg.connect(dsn) as conn:
+                confirmed = conn.execute(
+                    "SELECT min(e.vt) FROM gw.action_event e JOIN gw.action a USING (action_id)"
+                    " WHERE e.to_state = 'confirmed' AND a.intent_id = %s",
+                    (recovered.intent_id,),
+                ).fetchone()
+            assert confirmed == (recovered.end_vt,), f"{cell.name}: the gateway's first Confirmed"

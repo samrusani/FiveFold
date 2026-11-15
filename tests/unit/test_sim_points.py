@@ -59,6 +59,26 @@ class Rig:
     def status(self, *, vt: int) -> StatusShape | None:
         return self.points.status_answer(self.request("get_order_status", vt=vt))
 
+    def answered(self, request: Envelope, *, intent_id: str = "REQ-1") -> Envelope:
+        """The status answer to `request`, as the transport sends it: a message of its own,
+        which the points see through their observer."""
+        answer = Envelope(
+            seq=request.seq + 1,
+            hop="gw_sim",
+            kind="answer",
+            sender="simulator",
+            receiver="gateway",
+            api=request.api,
+            correlation=request.seq,
+            intent_id=intent_id,
+            idempotency_key=None,
+            answer_class=None,
+            body={"intent_id": intent_id},
+            sent_vt=self.scheduler.now,
+        )
+        self.points.answer_sent(answer, "sent")
+        return answer
+
 
 def f5(variant: str | None = None, **params: int) -> dict[str, Any]:
     return {
@@ -250,3 +270,74 @@ def test_a_fault_with_nothing_to_do_at_a_simulator_point_is_refused() -> None:
     rig = Rig([], planned=[wrong])
     with pytest.raises(SimulatorPointError, match=r"F2 cannot act at sim\.write\.received"):
         rig.write(vt=10)
+
+
+# The intents faults touch (0014) -----------------------------------------------------------
+
+
+def test_f5_and_f10_name_the_intent_of_the_request_they_acted_on() -> None:
+    rig = Rig([f10_beyond(count=1), f5(), f10("delayed", count=1)])
+    rig.write(vt=10)
+    rig.status(vt=20)
+    assert [(f.fault, f.variant, f.point, f.intent_id) for f in rig.log.faults] == [
+        ("F10", "stale_beyond_lag", "sim.write.received", "REQ-1"),
+        ("F5", None, "sim.write.received", "REQ-1"),
+        ("F10", "delayed", "sim.status.answer", "REQ-1"),
+    ]
+
+
+@pytest.mark.parametrize("variant", ["delayed", "stale_within_lag", "stale_beyond_lag"])
+def test_f10_logs_each_status_answer_it_changes_once_the_answer_is_sent(variant: str) -> None:
+    """Whichever variant, and wherever it fired, F10 acts on the next `count` status
+    answers, which can concern several intents. Each answer it changed gets one more row,
+    after the row written when F10 fired: at the status answer point, naming the answer and
+    its intent (0014). Stale beyond L fires where the order arrives (0013)."""
+    beyond = variant == "stale_beyond_lag"
+    rig = Rig([f10_beyond(count=2) if beyond else f10(variant, count=2)])
+    if beyond:
+        order = rig.request("submit_purchase_order", vt=500)
+        assert rig.points.write_received(order) is None
+    first = rig.request("get_order_status", vt=1_000)
+    assert rig.points.status_answer(first) is not None
+    fired = (
+        (500, order.seq, "sim.write.received")
+        if beyond
+        else (1_000, first.seq, "sim.status.answer")
+    )
+    rig.scheduler.clock.advance_to(3_000)
+    answer = rig.answered(first)
+    rig.points.answer_sent(answer, "delivered")
+    second = rig.request("get_order_status", vt=4_000)
+    assert rig.points.status_answer(second) is not None
+    other = rig.answered(second, intent_id="REQ-2")
+    third = rig.request("get_order_status", vt=7_000)
+    assert rig.points.status_answer(third) is None, "F10 changed two answers"
+    rig.answered(third)
+    assert [(f.vt, f.target_seq, f.point, f.intent_id, f.params) for f in rig.log.faults] == [
+        (*fired, "REQ-1", {"count": 2}),
+        (3_000, answer.seq, "sim.status.answer", "REQ-1", {"count": 2, "answer_no": 1}),
+        (4_000, other.seq, "sim.status.answer", "REQ-2", {"count": 2, "answer_no": 2}),
+    ]
+    assert {(f.fault, f.variant, f.action) for f in rig.log.faults} == {
+        ("F10", variant, "degrade_status")
+    }
+
+
+def test_an_answer_f10_shapes_is_logged_for_the_f10_that_shapes_it() -> None:
+    """Two F10 entries overlap: both count the second answer, and only the first, which
+    shapes it, logs it. The later one never shapes an answer, so it has its own row only."""
+    rig = Rig([f10("delayed", count=2), f10_beyond(count=1)])
+    request = rig.request("get_order_status", vt=1_000)
+    rig.points.status_answer(request)
+    rig.answered(request)
+    assert rig.write(vt=1_500) is None
+    request = rig.request("get_order_status", vt=2_000)
+    rig.points.status_answer(request)
+    rig.answered(request)
+    assert rig.status(vt=3_000) is None
+    assert [(f.variant, f.point, f.params) for f in rig.log.faults] == [
+        ("delayed", "sim.status.answer", {"count": 2}),
+        ("delayed", "sim.status.answer", {"count": 2, "answer_no": 1}),
+        ("stale_beyond_lag", "sim.write.received", {"count": 1}),
+        ("delayed", "sim.status.answer", {"count": 2, "answer_no": 2}),
+    ]

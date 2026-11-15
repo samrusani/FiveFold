@@ -6,7 +6,9 @@ simulator counter numbers every simulator event, so the order of the calls here 
 order of events in the run. By default a write cites an approval that policy granted for
 its intent, and the versions the stack read of its dependencies. The property tests at
 the end are 0004's Checks: `unknown` never passes when commit evidence was delivered and
-not voided, and a missing effect never fails both property 1 and property 4.
+not voided, and a missing effect never fails both property 1 and property 4; and 0014's:
+recovery latency is never negative, ends where the stack's knowledge settles, and no
+wall-clock column changes a virtual value.
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -41,6 +44,7 @@ from fivefold.domain.rules import (
 )
 from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
 from fivefold.evaluator import (
+    RECOVERY_METRICS,
     RUN_METRICS,
     TOKEN_METRICS,
     ActorAction,
@@ -55,22 +59,27 @@ from fivefold.evaluator import (
     Knowledge,
     Message,
     ModelCall,
+    Outcome,
     PropertyResult,
     PropertyVerdict,
     Read,
     ReasonCode,
     RecordsError,
+    RecoveryEntry,
     RunInfo,
     RunRecords,
     RunResult,
+    SettledBy,
     Settlement,
     SubmittedReport,
     Verdict,
+    comparable_json,
     evaluate,
     facts_without_effects,
     result_json,
     run_verdict,
     stack_knowledge,
+    without_wall_clock,
 )
 
 PO = "submit_purchase_order"
@@ -511,8 +520,13 @@ class World:
     # Faults, humans and reports ----------------------------------------------------------
 
     def crash(
-        self, *voided: Message, point: str = "gw.dispatch.after_answer", vt: int = 0
+        self,
+        *voided: Message,
+        point: str = "gw.dispatch.after_answer",
+        vt: int = 0,
+        intent_id: str | None = None,
     ) -> Fault:
+        """A crash that voids `voided`; it touched `intent_id`, if given (0014)."""
         fault = Fault(
             seq=self.next(),
             fault="F3",
@@ -523,14 +537,21 @@ class World:
             component=self.stack,
             voided=tuple(message.seq for message in voided),
             params={},
+            intent_id=intent_id,
         )
         self.faults.append(fault)
         return fault
 
     def possibly_sent(
-        self, intent_id: str = "REQ-1", *, vt: int = 1_000, key: str | None = None
+        self,
+        intent_id: str = "REQ-1",
+        *,
+        vt: int = 1_000,
+        key: str | None = None,
+        touches: bool = False,
     ) -> Fault:
-        """A gateway crash after recording an attempt and before sending it (F1b)."""
+        """A gateway crash after recording an attempt and before sending it (F1b). With
+        `touches`, its record names the intent it touched, as the harness writes it."""
         request: dict[str, object] = {"intent_id": intent_id, "idempotency_key": key}
         fault = Fault(
             seq=self.next(),
@@ -542,9 +563,35 @@ class World:
             vt=vt,
             component="gateway",
             params={"restart_delay_ms": 1_000, "request": request},
+            intent_id=intent_id if touches else None,
         )
         self.faults.append(fault)
         return fault
+
+    def touch(
+        self,
+        intent_id: str | None,
+        *,
+        vt: int,
+        fault: str = "F2",
+        point: str = "net.gw_sim.answer",
+        target: Message | None = None,
+    ) -> Fault:
+        """A fault whose record names the task intent it touched, as the harness writes it
+        (0014), on the message `target` if any. It does nothing else here."""
+        record = Fault(
+            seq=self.next(),
+            fault=fault,
+            point=point,
+            occurrence=1,
+            action="drop",
+            vt=vt,
+            target_seq=None if target is None else target.seq,
+            params={},
+            intent_id=intent_id,
+        )
+        self.faults.append(record)
+        return record
 
     def attest(
         self,
@@ -2083,8 +2130,10 @@ def test_every_property_is_evaluated() -> None:
         "unknown_claims",
         "success_claimed_with_duplicate",
         *RUN_METRICS,
+        *RECOVERY_METRICS,
         *TOKEN_METRICS,
     }
+    assert result.recovery == (), "no fault touched an intent"
     assert result.verdict is Verdict.PASS
 
 
@@ -2116,6 +2165,421 @@ def test_the_json_has_sorted_keys_and_does_not_depend_on_record_order() -> None:
         model_calls=records.model_calls[::-1],
     )
     assert result_json(evaluate(reversed_records)) == text
+
+
+# Recovery latency (0014) -------------------------------------------------------------------
+
+WALL_EPOCH = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+"""A wall-clock time for hand-built records."""
+
+
+def stamped(records: RunRecords, wall: Callable[[int], datetime | None]) -> RunRecords:
+    """`records` with the wall-clock time `wall` gives each harness event: a fault's and an
+    actor action's own seq, and a message's delivery."""
+    return dataclasses.replace(
+        records,
+        faults=tuple(dataclasses.replace(f, wall_at=wall(f.seq)) for f in records.faults),
+        messages=tuple(
+            dataclasses.replace(
+                m, delivered_wall_at=None if m.delivered_seq is None else wall(m.delivered_seq)
+            )
+            for m in records.messages
+        ),
+        actor_actions=tuple(
+            dataclasses.replace(a, wall_at=wall(a.seq)) for a in records.actor_actions
+        ),
+    )
+
+
+def resolved(
+    fault: Fault,
+    end_seq: int,
+    end_vt: int,
+    settled_by: SettledBy,
+    *,
+    outcome: Outcome = Outcome.COMMITTED,
+    intent_id: str = "REQ-1",
+    wall_ms: int | None = None,
+) -> RecoveryEntry:
+    """The entry of an intent whose outcome the evidence at `end_seq` settled."""
+    return RecoveryEntry(
+        intent_id=intent_id,
+        fault_seq=fault.seq,
+        fault=fault.fault,
+        start_vt=fault.vt,
+        outcome=outcome,
+        settled_by=settled_by,
+        end_seq=end_seq,
+        end_vt=end_vt,
+        latency_ms=end_vt - fault.vt,
+        latency_wall_ms=wall_ms,
+        knowledge_at_stop=None,
+    )
+
+
+def unresolved(
+    fault: Fault, outcome: Outcome, knowledge: Knowledge, *, intent_id: str = "REQ-1"
+) -> RecoveryEntry:
+    """The entry of an intent whose outcome the evidence never settled."""
+    return RecoveryEntry(
+        intent_id=intent_id,
+        fault_seq=fault.seq,
+        fault=fault.fault,
+        start_vt=fault.vt,
+        outcome=outcome,
+        settled_by=None,
+        end_seq=None,
+        end_vt=None,
+        latency_ms=None,
+        latency_wall_ms=None,
+        knowledge_at_stop=knowledge,
+    )
+
+
+def delivered_at(message: Message) -> tuple[int, int]:
+    """A delivered message's delivery seq and virtual time."""
+    assert message.delivered_seq is not None and message.delivered_vt is not None
+    return message.delivered_seq, message.delivered_vt
+
+
+def lost_reply(world: World, *, vt: int = 1_000, key: str | None = None) -> tuple[Effect, Fault]:
+    """F2: the order commits, and its answer is dropped on the stack's hop."""
+    order = world.request(vt=vt, key=key)
+    effect = world.commit(order)
+    answer = world.committed(order, effect, fate="in_flight")
+    fault = world.touch("REQ-1", vt=answer.sent_vt, target=answer)
+    world.drop(answer)
+    return effect, fault
+
+
+def lost_request(world: World, *, vt: int = 1_000, key: str | None = None) -> Fault:
+    """F12: the order is dropped on its way to the simulator."""
+    order = world.request(vt=vt, key=key, deliver=False)
+    fault = world.touch("REQ-1", fault="F12", point="net.gw_sim.request", vt=vt, target=order)
+    world.drop(order)
+    return fault
+
+
+def test_a_write_answer_naming_an_effect_ends_recovery() -> None:
+    """F2 at C2 in G2: the retry with the same key gets the stored result."""
+    world = World()
+    effect, fault = lost_reply(world, key="A-0001")
+    retry = world.request(vt=3_020, key="A-0001")
+    replayed = world.committed(retry, effect, replay=True)
+    world.report({"REQ-1": ("done", ["PO-0001"]), **DONE_NOTHING})
+    assert world.evaluate().recovery == (
+        resolved(fault, *delivered_at(replayed), SettledBy.WRITE_ANSWER),
+    )
+    assert delivered_at(replayed)[1] - fault.vt == 2_030
+
+
+def test_a_status_answer_listing_an_effect_ends_recovery() -> None:
+    """F2 at C1: a probe finds the order."""
+    world = World(contract=Contract.C1)
+    effect, fault = lost_reply(world)
+    found = world.status("REQ-1", [effect], as_of_vt=4_000)
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(fault, *delivered_at(found), SettledBy.STATUS_ANSWER)
+    assert entry.latency_ms == 4_010 - 1_020
+
+
+def test_an_attestation_naming_an_effect_ends_recovery() -> None:
+    """F2 at C0 with a resolver: a human attests the order."""
+    world = World(contract=Contract.C0)
+    _, fault = lost_reply(world)
+    attested = world.attest("committed", vt=31_000, effect_id="PO-0001")
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(fault, attested.seq, 31_000, SettledBy.ATTESTATION)
+
+
+def test_a_rejection_of_the_request_ends_recovery_with_nothing_committed() -> None:
+    """F7 late at C3: the quote changes as the order leaves, and the destination refuses it."""
+    world = World(contract=Contract.C3)
+    order = world.request(vt=1_000, deliver=False)
+    fault = world.touch("REQ-1", fault="F7", point="net.gw_sim.request", vt=1_000, target=order)
+    world.deliver(order)
+    refused = world.rejected(order)
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(
+        fault, *delivered_at(refused), SettledBy.REJECTED, outcome=Outcome.NOT_COMMITTED
+    )
+    assert entry.latency_ms == 30
+
+
+def test_an_empty_status_answer_after_the_settle_time_ends_recovery() -> None:
+    """F12 at C1: the order is lost; only a status answer accurate to the send plus S shows
+    it never commits."""
+    world = World(contract=Contract.C1)
+    fault = lost_request(world)
+    world.status("REQ-1", as_of_vt=1_000 + S - 1)
+    settled = world.status("REQ-1", as_of_vt=1_000 + S)
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(
+        fault, *delivered_at(settled), SettledBy.STATUS_EMPTY, outcome=Outcome.NOT_COMMITTED
+    )
+    assert entry.latency_ms == S + 10
+
+
+def test_a_rejected_retry_with_the_same_key_ends_recovery_for_the_lost_request() -> None:
+    """F12 at C2: the order is lost, and its retry with the same key is refused. The one
+    rejection settles both requests; the first one's settlement names it."""
+    world = World()
+    fault = lost_request(world, key="A-0001")
+    retry = world.request(vt=3_000, key="A-0001")
+    refused = world.rejected(retry)
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(
+        fault,
+        *delivered_at(refused),
+        SettledBy.SAME_KEY_REJECTED,
+        outcome=Outcome.NOT_COMMITTED,
+    )
+
+
+def test_an_attestation_that_nothing_committed_ends_recovery() -> None:
+    """F12 at C0 with a resolver, which attests after the settle time."""
+    world = World(contract=Contract.C0)
+    fault = lost_request(world)
+    attested = world.attest("not_committed", vt=1_000 + S, intent_id="REQ-1")
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(
+        fault,
+        attested.seq,
+        1_000 + S,
+        SettledBy.ATTESTED_NOT_COMMITTED,
+        outcome=Outcome.NOT_COMMITTED,
+    )
+
+
+def test_an_intent_the_stack_never_wrote_for_ends_at_the_fault() -> None:
+    """F6 early in G2: the approval is revoked at the dispatch check, so nothing is sent.
+    `K_i` is not_committed from the start: 0 ms, by the wall clock too."""
+    world = World()
+    fault = world.touch("REQ-1", fault="F6", point="gw.dispatch.before_check", vt=1_000)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(
+        fault, fault.seq, 1_000, SettledBy.NO_WRITE, outcome=Outcome.NOT_COMMITTED, wall_ms=0
+    )
+
+
+def test_evidence_held_before_the_fault_gives_zero() -> None:
+    """F11 after the tool result in G2: the gateway had the order's answer before the agent
+    was killed, so the end is the start."""
+    world = World()
+    order = world.request(vt=1_000)
+    world.committed(order, world.commit(order))
+    fault = world.touch("REQ-1", fault="F11", point="agent.after_tool_result", vt=1_100)
+    (entry,) = world.evaluate().recovery
+    assert entry == resolved(fault, fault.seq, 1_100, SettledBy.WRITE_ANSWER, wall_ms=0)
+
+
+@pytest.mark.parametrize(
+    ("contract", "lost", "outcome"),
+    [
+        (Contract.C0, "reply", Outcome.COMMITTED),
+        (Contract.C0, "request", Outcome.NOT_COMMITTED),
+        (Contract.C2, "request", Outcome.NOT_COMMITTED),
+    ],
+)
+def test_an_intent_whose_outcome_the_evidence_never_settles_is_unresolved(
+    contract: Contract, lost: str, outcome: Outcome
+) -> None:
+    """F2 and F12 with nothing to recover by: no end, no latency, `K_i` at the stop."""
+    world = World(contract=contract)
+    fault = lost_reply(world)[1] if lost == "reply" else lost_request(world)
+    world.report({"REQ-1": ("unknown", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert result.recovery == (unresolved(fault, outcome, Knowledge.UNKNOWABLE),)
+    assert (result.metrics["affected_intents"], result.metrics["unresolved_intents"]) == (1, 1)
+
+
+def test_a_commit_the_evidence_said_would_never_happen_is_unresolved() -> None:
+    """F5 beyond the deadline at C1: an empty status answer after S says the order never
+    commits, then it commits late. The stack's knowledge stays not_committed against a
+    committed outcome."""
+    world = World(contract=Contract.C1)
+    order = world.request(vt=1_000)
+    fault = world.touch("REQ-1", fault="F5", point="sim.write.received", vt=1_010, target=order)
+    world.status("REQ-1", as_of_vt=1_000 + S)
+    late = world.commit(order, vt=21_000)
+    world.answer(order, committed_body(late), vt=21_000, fate="dropped")
+    assert world.evaluate().recovery == (
+        unresolved(fault, Outcome.COMMITTED, Knowledge.NOT_COMMITTED),
+    )
+
+
+def test_a_possibly_sent_request_needs_its_own_settlement() -> None:
+    """F1b at C1: the request may have left, so only a status answer accurate to the crash
+    plus S ends recovery."""
+    world = World(contract=Contract.C1)
+    fault = world.possibly_sent(vt=1_000, touches=True)
+    world.status("REQ-1", as_of_vt=1_000 + S - 1)
+    assert world.evaluate().recovery == (
+        unresolved(fault, Outcome.NOT_COMMITTED, Knowledge.UNKNOWABLE),
+    )
+    settled = world.status("REQ-1", as_of_vt=1_000 + S)
+    assert world.evaluate().recovery == (
+        resolved(
+            fault, *delivered_at(settled), SettledBy.STATUS_EMPTY, outcome=Outcome.NOT_COMMITTED
+        ),
+    )
+
+
+def test_a_later_duplicate_does_not_move_the_end() -> None:
+    """F2 in B0: the keyless resend commits a second order, whose answer ends recovery; a
+    third order's answer afterwards changes nothing."""
+    world = World(Config.B0)
+    _, fault = lost_reply(world)
+    resend = world.request(vt=3_000)
+    first_known = world.committed(resend, world.commit(resend))
+    third = world.request(vt=5_000)
+    world.committed(third, world.commit(third))
+    assert world.evaluate().recovery == (
+        resolved(fault, *delivered_at(first_known), SettledBy.WRITE_ANSWER),
+    )
+
+
+def test_the_last_request_to_be_settled_ends_recovery() -> None:
+    """Two lost orders at C1: each needs its own empty status answer after S."""
+    world = World(contract=Contract.C1)
+    fault = lost_request(world, vt=1_000)
+    world.request(vt=4_000, deliver=False)
+    world.status("REQ-1", as_of_vt=1_000 + S)
+    settled = world.status("REQ-1", as_of_vt=4_000 + S)
+    (entry,) = world.evaluate().recovery
+    assert (entry.fault_seq, entry.end_seq, entry.end_vt) == (fault.seq, *delivered_at(settled))
+
+
+def test_evidence_after_the_counted_report_ends_recovery_too() -> None:
+    """The drain lets reconciliation settle (0009): an answer delivered after the report
+    still ends recovery, though property 5 judges the report without it."""
+    world = World()
+    effect, fault = lost_reply(world, key="A-0001")
+    world.report({"REQ-1": ("unknown", ()), **DONE_NOTHING}, vt=5_000)
+    retry = world.request(vt=6_000, key="A-0001")
+    replayed = world.committed(retry, effect, replay=True)
+    result = world.evaluate()
+    assert result.recovery == (resolved(fault, *delivered_at(replayed), SettledBy.WRITE_ANSWER),)
+    assert _claim(result) == (Knowledge.UNKNOWABLE, True)
+
+
+def test_an_answer_a_crash_voided_does_not_end_recovery() -> None:
+    """F3 in G2: the crash voids the answer it touched; the retry's answer ends recovery."""
+    world = World()
+    order = world.request(vt=1_000, key="A-0001")
+    effect = world.commit(order)
+    voided = world.committed(order, effect)
+    fault = world.crash(voided, vt=1_050, intent_id="REQ-1")
+    retry = world.request(vt=3_000, key="A-0001")
+    replayed = world.committed(retry, effect, replay=True)
+    assert world.evaluate().recovery == (
+        resolved(fault, *delivered_at(replayed), SettledBy.WRITE_ANSWER),
+    )
+
+
+def test_f9_touches_every_task_intent_and_entries_follow_the_scenario() -> None:
+    """F9's record names no intent: a second worker can act on any. Faults that name no
+    intent, or an intent outside the task, touch none."""
+    world = World()
+    world.touch(None, fault="F12", point="net.gw_sim.request", vt=500)
+    world.touch("REQ-9", vt=600)
+    started = world.touch(None, fault="F9", point="agent.step", vt=1_000)
+    world.touch("REQ-1", vt=1_500)
+    result = world.evaluate()
+    assert [(entry.intent_id, entry.fault_seq, entry.fault) for entry in result.recovery] == [
+        ("REQ-1", started.seq, "F9"),
+        ("REQ-2", started.seq, "F9"),
+    ]
+    assert {entry.settled_by for entry in result.recovery} == {SettledBy.NO_WRITE}
+
+
+def test_the_first_fault_by_seq_that_touched_an_intent_is_its_start() -> None:
+    """F10 changes status answers about several intents: its row for an answer about REQ-2
+    starts REQ-2's recovery, after its first row started REQ-1's. Record order does not
+    matter."""
+    world = World(contract=Contract.C1)
+    first = world.touch("REQ-1", fault="F10", point="sim.status.answer", vt=1_000)
+    world.touch("REQ-1", fault="F10", point="sim.status.answer", vt=1_010)
+    second = world.touch("REQ-2", fault="F10", point="sim.status.answer", vt=2_010)
+    records = world.records()
+    shuffled = dataclasses.replace(records, faults=records.faults[::-1])
+    for run in (records, shuffled):
+        assert [(e.intent_id, e.fault_seq, e.start_vt) for e in evaluate(run).recovery] == [
+            ("REQ-1", first.seq, 1_000),
+            ("REQ-2", second.seq, 2_010),
+        ]
+
+
+def test_wall_clock_latency_runs_from_the_fault_to_the_evidence() -> None:
+    """From the fault's `wall_at` to the delivery's `delivered_wall_at` or the attestation's
+    `wall_at`, rounded to the nearest millisecond, half to even; None when one is missing."""
+    world = World()
+    effect, fault = lost_reply(world, key="A-0001")
+    retry = world.request(vt=3_020, key="A-0001")
+    replayed = world.committed(retry, effect, replay=True)
+    end, _ = delivered_at(replayed)
+    for gap_us, wall_ms in ((1_520_500, 1_520), (1_521_500, 1_522), (1_520_501, 1_521)):
+        times = {fault.seq: WALL_EPOCH, end: WALL_EPOCH + timedelta(microseconds=gap_us)}
+        (entry,) = evaluate(stamped(world.records(), times.get)).recovery
+        assert (entry.latency_ms, entry.latency_wall_ms) == (2_030, wall_ms)
+    (entry,) = evaluate(stamped(world.records(), {fault.seq: WALL_EPOCH}.get)).recovery
+    assert (entry.latency_ms, entry.latency_wall_ms) == (2_030, None)
+    resolver = World(contract=Contract.C0)
+    _, lost = lost_reply(resolver)
+    attested = resolver.attest("committed", vt=31_000, effect_id="PO-0001")
+    times = {lost.seq: WALL_EPOCH, attested.seq: WALL_EPOCH + timedelta(seconds=30)}
+    (entry,) = evaluate(stamped(resolver.records(), times.get)).recovery
+    assert (entry.latency_ms, entry.latency_wall_ms) == (29_980, 30_000)
+
+
+def test_evidence_dated_before_the_fault_it_ends_is_refused() -> None:
+    """Virtual time never goes back between two harness events, so such records are
+    broken: the evaluator refuses to guess."""
+    world = World()
+    effect, _ = lost_reply(world, key="A-0001", vt=5_000)
+    retry = world.request(vt=1_000, key="A-0001")
+    world.committed(retry, effect, replay=True)
+    with pytest.raises(RecordsError, match=r"dated vt 1030, before the fault at seq"):
+        world.evaluate()
+
+
+def test_the_settlements_name_every_settlement_of_record_0004() -> None:
+    """`settled_by` names the commit evidence, each way a request is shown never to
+    commit, or that nothing was sent."""
+    assert {str(kind) for kind in Settlement} <= {str(kind) for kind in SettledBy}
+    assert {str(kind) for kind in SettledBy} - {str(kind) for kind in Settlement} == {
+        "write_answer",
+        "status_answer",
+        "attestation",
+        "no_write",
+    }
+
+
+def test_comparisons_leave_out_wall_clock_fields_at_any_depth_and_nothing_else() -> None:
+    """0009, as amended by 0014: fields whose names end in `wall_at` or `wall_ms` are
+    wall-clock time, wherever they are; `comparable_json` is `result_json` without them."""
+    data = {
+        "latency_ms": 5,
+        "latency_wall_ms": 7,
+        "wall_at": "x",
+        "walls": 1,
+        "rows": [{"wall_ms": 1, "seq": 2}, [{"delivered_wall_at": 3}], "wall_ms"],
+    }
+    assert without_wall_clock(data) == {
+        "latency_ms": 5,
+        "walls": 1,
+        "rows": [{"seq": 2}, [{}], "wall_ms"],
+    }
+    world = World()
+    _, fault = lost_reply(world, key="A-0001")
+    retry = world.request(vt=3_020, key="A-0001")
+    end, _ = delivered_at(world.committed(retry, world.effects[0], replay=True))
+    timed = stamped(world.records(), {fault.seq: WALL_EPOCH, end: WALL_EPOCH}.get)
+    plain, stamped_result = evaluate(world.records()), evaluate(timed)
+    assert result_json(plain) != result_json(stamped_result)
+    assert comparable_json(plain) == comparable_json(stamped_result)
+    assert json.loads(comparable_json(plain)) == without_wall_clock(json.loads(result_json(plain)))
 
 
 # Properties (0004, Checks) -----------------------------------------------------------------
@@ -2345,3 +2809,214 @@ def test_a_missing_effect_never_fails_both_property_1_and_property_4(
         assert intent not in _named(fewer, 1)
         excused_now = {excuse.intent_id for excuse in fewer.excused_intents}
         assert (intent in _named(fewer, 4)) != (intent in excused_now)
+
+
+RECOVERY_STEPS = (
+    "touch",
+    "touch",
+    "touch_every",
+    "commit_seen",
+    "commit_lost",
+    "commit_lost",
+    "commit_voided",
+    "rejected",
+    "rejected",
+    "request_lost",
+    "request_lost",
+    "no_answer",
+    "status_seen",
+    "status_seen",
+    "status_empty",
+    "possibly_sent",
+    "attest_commit",
+    "attest_none",
+    "retry_refused",
+    "lost_then_settled",
+    "report",
+)
+"""What one step of a random run for recovery latency does: a fault that touches an
+intent, F9, or a step of `STEPS` that writes, asks for status, crashes or attests. Two
+steps settle a lost request: its retry with the same key is refused, or after S an empty
+status answer (at C1) or a human says it never committed. The report can come at any
+step, so evidence can follow it. Status answers come only at C1, where the destination
+offers them. Most steps act on REQ-1, and lost writes, rejections and status answers come
+twice as often, so that every way of ending recovery appears (counted 2026-11-15: each
+`SettledBy` at 300 examples)."""
+
+C1 = Contract.C1
+
+OUTCOME_KNOWLEDGE = {
+    Outcome.COMMITTED: Knowledge.COMMITTED,
+    Outcome.NOT_COMMITTED: Knowledge.NOT_COMMITTED,
+}
+
+
+def _recovery_world(data: st.DataObject) -> tuple[World, dict[str, int]]:
+    """A random run with faults that touch intents, in which virtual time never goes back
+    from one harness event to the next: each step has 20,000 ms, more than any step needs.
+
+    Returns the world, and the seq of the first fault that touched each task intent,
+    worked out here as the run is built, independently of the evaluator.
+    """
+    config = data.draw(st.sampled_from(list(Config)), label="config")
+    world = World(config, data.draw(st.sampled_from(list(Contract)), label="contract"))
+    touched: dict[str, int] = {}
+    steps = data.draw(st.lists(st.sampled_from(RECOVERY_STEPS), min_size=1, max_size=14))
+    for number, step in enumerate(steps):
+        vt = 20_000 * (number + 1)
+        intent = data.draw(st.sampled_from(["REQ-1", "REQ-1", "REQ-1", "REQ-2", "REQ-9"]))
+        effects = [effect for effect in world.effects if effect.intent_id == intent]
+        if step == "touch":
+            named = data.draw(st.sampled_from([*TASK_INTENTS, "REQ-9", None]), label="touched")
+            fault = world.touch(named, vt=vt)
+            if named in TASK_INTENTS:
+                touched.setdefault(named, fault.seq)
+        elif step == "touch_every":
+            fault = world.touch(None, fault="F9", point="agent.step", vt=vt)
+            for name in TASK_INTENTS:
+                touched.setdefault(name, fault.seq)
+        elif step == "report":
+            world.report({name: ("unknown", ()) for name in TASK_INTENTS}, vt=vt)
+        elif step == "retry_refused":
+            world.drop(world.request(intent, vt=vt, key="A-0001", deliver=False))
+            world.rejected(world.request(intent, vt=vt + 1_000, key="A-0001"))
+        elif step == "lost_then_settled":
+            world.drop(world.request(intent, vt=vt, deliver=False))
+            if intent in TASK_INTENTS and world.contract is C1:
+                world.status(intent, as_of_vt=vt + S)
+            elif intent in TASK_INTENTS:
+                world.attest("not_committed", vt=vt + S, intent_id=intent)
+        elif step.startswith(("commit", "rejected", "request", "no_answer")):
+            key = data.draw(st.sampled_from([None, "A-0001", "A-0001"]), label="key")
+            request = world.request(intent, vt=vt, key=key, deliver=step != "request_lost")
+            if step == "request_lost":
+                world.drop(request)
+                continue
+            if step == "no_answer":
+                continue
+            body: object
+            if step.startswith("commit"):
+                body = committed_body(world.commit(request))
+            else:
+                body = WriteRejected(reason=WriteRejectReason.FORBIDDEN).model_dump(mode="json")
+            if step == "commit_lost":
+                world.answer(request, body, fate="dropped")
+            elif step == "commit_voided":
+                fault = world.crash(world.answer(request, body), vt=vt + 100, intent_id=intent)
+                if intent in TASK_INTENTS:
+                    touched.setdefault(intent, fault.seq)
+            else:
+                world.answer(request, body)
+        elif step.startswith("status") and intent in TASK_INTENTS and world.contract is C1:
+            listed = effects if step == "status_seen" else []
+            offset = data.draw(st.sampled_from([0, S - 1, S]), label="as_of offset")
+            world.status(intent, listed, as_of_vt=vt + offset)
+        elif step == "possibly_sent" and intent in TASK_INTENTS:
+            key = data.draw(st.sampled_from([None, "A-0001"]), label="key")
+            fault = world.possibly_sent(intent, vt=vt, key=key, touches=True)
+            touched.setdefault(intent, fault.seq)
+        elif step == "attest_commit" and effects:
+            world.attest("committed", vt=vt, effect_id=effects[0].effect_id)
+        elif step == "attest_none" and intent in TASK_INTENTS:
+            made_at = vt + data.draw(st.sampled_from([0, S]), label="attested after")
+            world.attest("not_committed", vt=made_at, intent_id=intent)
+    return world, touched
+
+
+def _rising_wall(data: st.DataObject, last: int) -> Callable[[int], datetime | None]:
+    """Wall-clock times that never go back from one harness seq to the next."""
+    steps = data.draw(
+        st.lists(st.integers(0, 3_000_000), min_size=last + 1, max_size=last + 1),
+        label="wall-clock steps in microseconds",
+    )
+    times = [WALL_EPOCH]
+    for step in steps:
+        times.append(times[-1] + timedelta(microseconds=step))
+    return lambda seq: times[seq]
+
+
+def _any_wall(data: st.DataObject, last: int) -> Callable[[int], datetime | None]:
+    """Any wall-clock times, missing ones included, in any order."""
+    times = data.draw(
+        st.lists(
+            st.none()
+            | st.datetimes(
+                datetime(2020, 1, 1, tzinfo=UTC),
+                datetime(2030, 1, 1, tzinfo=UTC),
+                timezones=st.just(UTC),
+            ),
+            min_size=last + 1,
+            max_size=last + 1,
+        ),
+        label="wall-clock times",
+    )
+    return lambda seq: times[seq]
+
+
+def _last_seq(world: World) -> int:
+    return world.seq
+
+
+@RANDOM_RUNS
+@given(st.data())
+def test_recovery_latency_is_never_negative_and_ends_where_the_knowledge_settles(
+    data: st.DataObject,
+) -> None:
+    """0014: an entry for each touched task intent, in scenario order, from its first
+    fault. A resolved intent's `K_i(t)` equals its outcome at its end and at every later
+    seq, and not just before an end after the start; an unresolved one's never does by
+    the stop. Latencies are never negative, by the wall clock either while it runs
+    forward."""
+    world, touched = _recovery_world(data)
+    records = stamped(world.records(), _rising_wall(data, _last_seq(world)))
+    result = evaluate(records)
+    assert [entry.intent_id for entry in result.recovery] == [
+        name for name in TASK_INTENTS if name in touched
+    ]
+    seqs = range(1, _last_seq(world) + 1)
+
+    def known(seq: int) -> dict[str, Knowledge]:
+        """`K_i(seq)`: the evidence the stack had once harness event `seq` happened."""
+        return {name: k.knowledge for name, k in stack_knowledge(records, seq + 1).items()}
+
+    for entry in result.recovery:
+        assert entry.fault_seq == touched[entry.intent_id]
+        target = OUTCOME_KNOWLEDGE[entry.outcome]
+        has_effect = any(effect.intent_id == entry.intent_id for effect in world.effects)
+        assert (entry.outcome is Outcome.COMMITTED) == has_effect
+        if entry.end_seq is None:
+            assert known(seqs[-1])[entry.intent_id] is not target
+            assert entry.knowledge_at_stop is known(seqs[-1])[entry.intent_id]
+            assert (entry.end_vt, entry.latency_ms, entry.latency_wall_ms) == (None,) * 3
+            continue
+        assert entry.end_vt is not None and entry.latency_ms is not None
+        assert entry.end_seq >= entry.fault_seq
+        assert entry.latency_ms == entry.end_vt - entry.start_vt >= 0
+        assert entry.latency_wall_ms is not None and entry.latency_wall_ms >= 0
+        assert entry.knowledge_at_stop is None and entry.settled_by is not None
+        for seq in seqs:
+            if seq >= entry.end_seq:
+                assert known(seq)[entry.intent_id] is target, (entry, seq)
+        if entry.end_seq > entry.fault_seq:
+            assert known(entry.end_seq - 1)[entry.intent_id] is not target
+    assert result.metrics["affected_intents"] == len(result.recovery)
+    assert result.metrics["unresolved_intents"] == sum(
+        1 for entry in result.recovery if not entry.resolved
+    )
+
+
+@RANDOM_RUNS
+@given(st.data())
+def test_wall_clock_columns_change_no_virtual_value(data: st.DataObject) -> None:
+    """0014: whatever the wall-clock times, missing or out of order, the result is the
+    same but for its fields that end in `wall_ms`."""
+    world, _ = _recovery_world(data)
+    records = world.records()
+    plain = evaluate(records)
+    for _ in range(2):
+        timed = evaluate(stamped(records, _any_wall(data, _last_seq(world))))
+        assert comparable_json(timed) == comparable_json(plain)
+        assert without_wall_clock(json.loads(result_json(timed))) == json.loads(
+            comparable_json(plain)
+        )
+        assert timed.model_copy(update={"recovery": plain.recovery}) == plain

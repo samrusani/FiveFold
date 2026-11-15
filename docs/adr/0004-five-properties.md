@@ -1,6 +1,7 @@
 # 0004: The five properties as checks over ground truth
 
 Status: Accepted (2026-11-14)
+Amended by: 0014 (2026-11-15): recovery latency in Metrics
 Date: 2026-11-14
 Spec sections affected: The five properties (product.md), Evaluator, Data model (simulator and harness), Gateway (submit_final_report)
 Resolves M0 questions: 2, 7, 19 (evaluator side), 20, 21, 23, 24, 25, 26, 27, 28; part of 38
@@ -169,7 +170,7 @@ Per run in JSON, then a CSV across runs and a Markdown report:
 - false `done` claims, false `not_done` claims, unjustified claims (the claim matches the ledger but not the evidence), `unknown` claims
 - `success_claimed_with_duplicate`: a `done` claim for an intent with more than one effect. It is comparable in spirit to the false-success measure in "Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents" (LIMBO, arXiv 2609.29095, a preprint). We do not claim the two definitions match.
 - human interventions (resolver attestations), approval requests, approvals decided by a human
-- recovery latency per affected action, from the first fault that touched it to its final state, in virtual and wall milliseconds
+- recovery latency per affected intent, from the first fault that touched it until the stack's evidence settles the intent's outcome at the end, in virtual and wall milliseconds, with unresolved intents counted apart (0014)
 - tokens in and out, and cost from a price file that records its price date; cost per passing run
 
 Each run's JSON records the scenario digest, config hash, contract, seed, model id and version, cassette digest and code version.

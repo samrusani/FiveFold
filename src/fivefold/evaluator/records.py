@@ -5,6 +5,11 @@ The evaluator decides only from them. `fivefold.evaluator.load` reads them from 
 database; tests build them by hand. The harness's model calls feed the token metrics
 only, never a verdict.
 
+Wall-clock times are left out, except the three that recovery latency's wall-clock
+measure reads (0014): when a fault fired, when a message was delivered and when a human
+acted. They are for metrics only and decide nothing (0009). Records built by hand may
+leave them out; a measure that needs a missing one is then left out too.
+
 The harness's conventions that the property checks rely on (0006, 0008):
 
 - Components are `gateway`, `simulator`, the agent workers `agent-1` and `agent-2`, and
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import JsonValue
@@ -57,6 +63,10 @@ RESOLVER = "resolver"
 
 ATTEST = "attest"
 """The actor-log action of an attestation by the resolver (0003, escalation)."""
+
+TOUCHES_EVERY_INTENT = "F9"
+"""The fault that starts a second agent worker on the same task: it touches every task
+intent, so its record names none (0014)."""
 
 
 class RecordsError(Exception):
@@ -284,6 +294,8 @@ class Message:
     delivered_seq: int | None = None
     delivered_vt: int | None = None
     copy_of: int | None = None
+    delivered_wall_at: datetime | None = None
+    """When it was delivered, by the wall clock: for metrics only (0014)."""
 
     def delivered_before(self, seq: int) -> bool:
         """Whether the message was delivered before harness event `seq`."""
@@ -296,7 +308,10 @@ class Message:
 class Fault:
     """A row of `harness.fault_log`: a fault that fired (0006).
 
-    `voided` holds the seqs of messages whose delivery a crash voided.
+    `voided` holds the seqs of messages whose delivery a crash voided. `intent_id` is the
+    task intent the fault touched, as the harness recorded it: None for F9, which touches
+    every task intent, and for a fault on a message without an intent (0014). F10 has one
+    row more for each status answer it changed, with that answer as `target_seq`.
     """
 
     seq: int
@@ -310,6 +325,9 @@ class Fault:
     component: str | None = None
     voided: tuple[int, ...] = ()
     params: Mapping[str, object] | None = None
+    intent_id: str | None = None
+    wall_at: datetime | None = None
+    """When it fired, by the wall clock: for metrics only (0014)."""
 
 
 @dataclass(frozen=True)
@@ -322,6 +340,8 @@ class ActorAction:
     subject: str
     details: Mapping[str, object]
     vt: int
+    wall_at: datetime | None = None
+    """When it was done, by the wall clock: for metrics only (0014)."""
 
 
 @dataclass(frozen=True)
