@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fivefold.faults.catalog import BUILT, POINTS, FaultId, FaultKind
+from fivefold.faults.catalog import BUILT, POINTS, FaultId, FaultKind, point_exists
 
 
 class Trigger(BaseModel):
@@ -79,6 +79,22 @@ class PlannedFault(BaseModel):
 def parse_plan(entries: Sequence[Mapping[str, Any]]) -> tuple[PlannedFault, ...]:
     """Validate a scenario's `faults` list (0006, Plans)."""
     return tuple(PlannedFault.model_validate(entry) for entry in entries)
+
+
+def check_configuration(plan: Sequence[PlannedFault], *, gateway: bool) -> None:
+    """Refuse a plan with a fault at a point the configuration does not have.
+
+    Such a fault would never fire, or, at a B0-equivalent point in a G mode, would fire
+    as the wrong fault. `gateway` is whether the configuration has one (G1, G2).
+    """
+    wrong = [
+        f"{planned.fault} at {planned.at.point}"
+        for planned in plan
+        if not point_exists(planned.kind, planned.at.point, gateway=gateway)
+    ]
+    if wrong:
+        where = "with a gateway" if gateway else "without a gateway"
+        raise ValueError(f"not in a configuration {where}: {', '.join(wrong)} (0006, 0008)")
 
 
 class Fired:

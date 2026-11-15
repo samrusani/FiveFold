@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Callable
 from typing import Any, LiteralString
 
@@ -202,3 +203,11 @@ def test_a_crash_run_is_deterministic(run_database: Callable[[str], str]) -> Non
         )
         logs.append(json.dumps(log, sort_keys=True, default=str))
     assert logs[0] == logs[1]
+
+
+def test_a_g2_run_refuses_f1_at_b0s_equivalent_point() -> None:
+    """In G2, F1 is a gateway crash; at `agent.before_tool_call` it would kill the agent and
+    test nothing about recovery (0006)."""
+    spec = RunSpec(load_scenario_file(DEV_001), "G2", Contract.C2, 7, plan=f1("a", "B0"))
+    with pytest.raises(ValueError, match=re.escape("F1 at agent.before_tool_call")):
+        InprocRun(spec, "postgresql://unused")

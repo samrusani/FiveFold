@@ -48,7 +48,7 @@ from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import evaluate_run
 from fivefold.faults.catalog import Action
-from fivefold.faults.plan import FaultInjector, Fired, parse_plan
+from fivefold.faults.plan import FaultInjector, Fired, check_configuration, parse_plan
 from fivefold.gateway.dispatcher import Dispatcher, Timing
 from fivefold.gateway.freshness import RuleFreshness
 from fivefold.gateway.pg_store import PgStore
@@ -148,6 +148,8 @@ class InprocRun:
         if spec.config not in ("B0", "G2"):
             raise ValueError(f"this build runs B0 and G2, not {spec.config}")
         self.spec = spec
+        self._plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(spec.scenario))
+        check_configuration(self._plan, gateway=spec.config != "B0")
         self._dsn = dsn
         self.scheduler = Scheduler()
         self.result = RunResult(spec.run_id)
@@ -165,7 +167,7 @@ class InprocRun:
         harness_conn = psycopg.connect(self._conninfo("ff_harness"), autocommit=True)
         self._closing.append(harness_conn)
         self.log = PgHarnessLog(harness_conn)
-        plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(scenario))
+        plan = self._plan
         self.log.run_recorded(
             RunRecord(
                 run_id=spec.run_id,

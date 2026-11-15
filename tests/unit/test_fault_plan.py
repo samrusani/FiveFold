@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
 from fivefold.faults.catalog import BUILT, POINTS, FaultId
-from fivefold.faults.plan import FaultInjector, parse_plan
+from fivefold.faults.plan import FaultInjector, check_configuration, parse_plan
 
 DEMO_1 = [
     {
@@ -205,3 +207,43 @@ def test_each_variant_is_accepted_at_its_own_points() -> None:
 def test_f1_restarts_after_a_second_by_default() -> None:
     (planned,) = parse_plan([{"fault": "F1", "at": {"point": "gw.dispatch.after_check"}}])
     assert planned.param("restart_delay_ms") == 1_000
+
+
+@pytest.mark.parametrize(
+    ("fault", "point", "gateway"),
+    [
+        ("F1", "agent.before_tool_call", True),
+        ("F1", "gw.dispatch.after_check", False),
+        ("F2", "net.agent_sim.answer", True),
+        ("F2", "net.gw_sim.answer", False),
+        ("F12", "net.agent_gw.request", False),
+    ],
+)
+def test_a_point_the_configuration_does_not_have_is_refused(
+    fault: str, point: str, gateway: bool
+) -> None:
+    """F1 at `agent.before_tool_call` is B0's equivalent; in G2 it would kill the agent
+    instead of crashing the gateway (0006)."""
+    plan = parse_plan([{"fault": fault, "at": {"point": point}}])
+    with pytest.raises(ValueError, match=re.escape(f"{fault} at {point}")):
+        check_configuration(plan, gateway=gateway)
+
+
+def test_each_fault_is_accepted_where_its_configuration_has_the_point() -> None:
+    gateway = parse_plan(
+        [
+            {"fault": "F1", "at": {"point": "gw.dispatch.after_record"}},
+            {"fault": "F2", "at": {"point": "net.gw_sim.answer"}},
+            {"fault": "F11", "at": {"point": "agent.after_tool_call"}},
+            {"fault": "F12", "at": {"point": "net.agent_gw.request"}},
+        ]
+    )
+    baseline = parse_plan(
+        [
+            {"fault": "F1", "at": {"point": "agent.before_tool_call"}},
+            {"fault": "F2", "at": {"point": "net.agent_sim.answer"}},
+            {"fault": "F11", "at": {"point": "agent.after_tool_result"}},
+        ]
+    )
+    check_configuration(gateway, gateway=True)
+    check_configuration(baseline, gateway=False)
