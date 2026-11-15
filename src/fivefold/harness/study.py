@@ -43,7 +43,7 @@ Its outputs, in DIR:
 - `CELL-seed-SEED.json`: each episode's result JSON, such as `F2-C2-G2-seed-7.json` or
   `none-C2-B0-seed-8.json`. A cell's name holds its fault, variant, contract level and
   configuration, so no two episodes share a file. The same inputs with the scripted model
-  give the same bytes (0009).
+  give the same bytes, but for the wall-clock latencies of recovery (0009, 0014).
 - `cassettes/CELL-seed-SEED.json`: each live episode's cassette (0009). It replays the
   run with no network. `python -m fivefold.recorder play` compares the replay with the
   original run's database, so it needs the episode's database kept. The report reads only

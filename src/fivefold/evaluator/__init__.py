@@ -5,7 +5,8 @@ never calls a model or reads a transcript. It imports only `fivefold.domain`: it
 other components' tables, never their code. It checks all five properties: 1, exactly
 once (`checks`); 2, authorized at commit (`authorization`); 3, inputs still fresh
 (`freshness`); 4, actually committed (`liveness`); and 5, truthfully reported (`checks`,
-with `evidence`).
+with `evidence`). It also measures recovery latency for each intent a fault touched
+(`recovery`, 0014), from the same records.
 
 Typical use, after the run has stopped:
 
@@ -22,16 +23,19 @@ fivefold.evaluator report`).
 from fivefold.evaluator.checks import CLAIM_METRICS
 from fivefold.evaluator.evaluate import evaluate, run_verdict
 from fivefold.evaluator.evidence import (
+    CommitEvidence,
+    CommitSource,
     IntentKnowledge,
     Knowledge,
     RequestFinding,
     SentWrite,
     Settlement,
+    commit_evidence,
     stack_knowledge,
 )
 from fivefold.evaluator.liveness import facts_without_effects
 from fivefold.evaluator.load import load_run
-from fivefold.evaluator.metrics import RUN_METRICS, TOKEN_METRICS
+from fivefold.evaluator.metrics import RECOVERY_METRICS, RUN_METRICS, TOKEN_METRICS
 from fivefold.evaluator.records import (
     ActorAction,
     Approval,
@@ -48,6 +52,7 @@ from fivefold.evaluator.records import (
     RunRecords,
     SubmittedReport,
 )
+from fivefold.evaluator.recovery import recovery_entries
 from fivefold.evaluator.report import (
     COST_COLUMN,
     CSV_COLUMNS,
@@ -60,19 +65,25 @@ from fivefold.evaluator.report import (
     runs_csv,
 )
 from fivefold.evaluator.result import (
+    WALL_CLOCK_SUFFIXES,
     ClaimJudgment,
     CountedReport,
     Excuse,
     ExcusedIntent,
     Failure,
+    Outcome,
     PropertyResult,
     PropertyVerdict,
     ReasonCode,
+    RecoveryEntry,
     RequestOutcome,
     RunResult,
     RunSummary,
+    SettledBy,
     Verdict,
+    comparable_json,
     result_json,
+    without_wall_clock,
 )
 from fivefold.evaluator.store import EVALUATOR_ROLE, WrongRole, evaluate_run, write_result
 
@@ -82,11 +93,15 @@ __all__ = [
     "CSV_COLUMNS",
     "EVALUATOR_ROLE",
     "METRICS",
+    "RECOVERY_METRICS",
     "RUN_METRICS",
     "TOKEN_METRICS",
+    "WALL_CLOCK_SUFFIXES",
     "ActorAction",
     "Approval",
     "ClaimJudgment",
+    "CommitEvidence",
+    "CommitSource",
     "Config",
     "CountedReport",
     "Destination",
@@ -100,11 +115,13 @@ __all__ = [
     "Knowledge",
     "Message",
     "ModelCall",
+    "Outcome",
     "PropertyResult",
     "PropertyVerdict",
     "Read",
     "ReasonCode",
     "RecordsError",
+    "RecoveryEntry",
     "ReportError",
     "RequestFinding",
     "RequestOutcome",
@@ -113,10 +130,13 @@ __all__ = [
     "RunResult",
     "RunSummary",
     "SentWrite",
+    "SettledBy",
     "Settlement",
     "SubmittedReport",
     "Verdict",
     "WrongRole",
+    "commit_evidence",
+    "comparable_json",
     "evaluate",
     "evaluate_run",
     "facts_without_effects",
@@ -124,10 +144,12 @@ __all__ = [
     "load_results",
     "load_run",
     "markdown_report",
+    "recovery_entries",
     "result_json",
     "run_cost",
     "run_verdict",
     "runs_csv",
     "stack_knowledge",
+    "without_wall_clock",
     "write_result",
 ]

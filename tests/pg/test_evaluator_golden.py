@@ -6,6 +6,11 @@ ff_harness, numbering every send, delivery, fault, actor action and report on on
 counter. The evaluator then reads the run as ff_eval. There is at least one golden run
 per reason code (0004, Checks), one for each passing verdict, one for each excuse, and
 one whose model calls used tokens.
+
+Each fault row names the task intent it touched, as the harness writes it, so the golden
+runs with faults have recovery entries (0014). The recorder stamps a fault, a delivery and
+a human's action with a wall-clock time twice its virtual time from a fixed moment, so
+each wall-clock latency is fixed too: twice the virtual one.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import copy
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -46,6 +52,7 @@ from fivefold.evaluator import (
     PropertyVerdict,
     ReasonCode,
     RunResult,
+    SettledBy,
     Settlement,
     Verdict,
     WrongRole,
@@ -60,6 +67,14 @@ Connection = psycopg.Connection[TupleRow]
 PO = "submit_purchase_order"
 SETTLE_MS = 10_050
 """S for dev-001: max_hop_latency 50 plus commit_deadline 10,000."""
+
+WALL_EPOCH = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+
+
+def wall(vt: int) -> datetime:
+    """The wall-clock time the recorder gives an event at `vt`: twice `vt` after a fixed
+    moment."""
+    return WALL_EPOCH + timedelta(milliseconds=2 * vt)
 
 
 class Recorder:
@@ -178,8 +193,8 @@ class Recorder:
         delivered = self.next()
         self.harness.execute(
             "UPDATE harness.message_log SET fate = 'delivered', delivered_seq = %s,"
-            " delivered_vt = %s WHERE seq = %s",
-            (delivered, vt, seq),
+            " delivered_vt = %s, delivered_wall_at = %s WHERE seq = %s",
+            (delivered, vt, wall(vt), seq),
         )
         return delivered
 
@@ -201,12 +216,15 @@ class Recorder:
         voided: Sequence[int] = (),
         params: Mapping[str, object] | None = None,
         variant: str | None = None,
+        intent_id: str | None = "REQ-1",
     ) -> int:
+        """A fault that fired, naming the intent it touched: REQ-1, the task's one intent,
+        unless told otherwise (0014)."""
         seq = self.next()
         self.harness.execute(
             "INSERT INTO harness.fault_log (seq, fault, variant, point, occurrence, action,"
-            " target_seq, component, voided, params, vt)"
-            " VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s)",
+            " target_seq, component, voided, params, vt, intent_id, wall_at)"
+            " VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 seq,
                 fault,
@@ -218,6 +236,8 @@ class Recorder:
                 list(voided),
                 Jsonb(dict(params or {})),
                 vt,
+                intent_id,
+                wall(vt),
             ),
         )
         return seq
@@ -225,9 +245,9 @@ class Recorder:
     def attest(self, details: Mapping[str, object], *, vt: int) -> int:
         seq = self.next()
         self.harness.execute(
-            "INSERT INTO harness.actor_log (seq, actor, action, subject, details, vt)"
-            " VALUES (%s, 'resolver', 'attest', 'ESC-0001', %s, %s)",
-            (seq, Jsonb(dict(details)), vt),
+            "INSERT INTO harness.actor_log (seq, actor, action, subject, details, vt, wall_at)"
+            " VALUES (%s, 'resolver', 'attest', 'ESC-0001', %s, %s, %s)",
+            (seq, Jsonb(dict(details)), vt, wall(vt)),
         )
         return seq
 
@@ -266,9 +286,9 @@ class Recorder:
         else:
             answer = control.decide(approval_id, Decision(action), actor="approver", vt=vt)
         self.harness.execute(
-            "INSERT INTO harness.actor_log (seq, actor, action, subject, details, vt)"
-            " VALUES (%s, 'approver', %s, %s, %s, %s)",
-            (self.next(), action, approval_id, Jsonb({"status": str(answer.status)}), vt),
+            "INSERT INTO harness.actor_log (seq, actor, action, subject, details, vt, wall_at)"
+            " VALUES (%s, 'approver', %s, %s, %s, %s, %s)",
+            (self.next(), action, approval_id, Jsonb({"status": str(answer.status)}), vt, wall(vt)),
         )
 
     def approval(self, *, supplier_id: str, unit_price_minor: int, vt: int) -> str:
@@ -755,6 +775,10 @@ class Golden:
     """Changes to dev-001's authority section for this run."""
     model: tuple[str, str] = ("scripted", "scripted-policy")
     """The run's model adapter and model, as `harness.run` records them."""
+    recovery: tuple[SettledBy | None, int | None] | None = None
+    """REQ-1's recovery entry, when a fault touched it: what settled its outcome and its
+    latency in virtual ms, both None when unresolved. Its wall-clock latency is twice the
+    virtual one (`wall`)."""
 
     @property
     def codes(self) -> dict[int, tuple[ReasonCode, ...]]:
@@ -772,16 +796,31 @@ QUEUED = {"auto_approve_up_to_minor": 50_000}
 """dev-001's authority with an order of 54,000 above the auto-approval threshold, so its
 approval waits for the approver."""
 
+RESOLVED = {"affected_intents": 1}
+"""The counts of a run whose one touched intent was resolved."""
+
+UNRESOLVED = {"affected_intents": 1, "unresolved_intents": 1}
+"""The counts of a run whose one touched intent stayed unresolved."""
+
 GOLDEN: list[Golden] = [
-    Golden(g2_demo_1, Config.G2, Contract.C2, Verdict.PASS, Knowledge.COMMITTED),
+    Golden(
+        g2_demo_1,
+        Config.G2,
+        Contract.C2,
+        Verdict.PASS,
+        Knowledge.COMMITTED,
+        metrics=RESOLVED,
+        recovery=(SettledBy.WRITE_ANSWER, 2_160),
+    ),
     Golden(
         g2_demo_1_with_a_live_model,
         Config.G2,
         Contract.C2,
         Verdict.PASS,
         Knowledge.COMMITTED,
-        metrics={"tokens_in": 2_100, "tokens_out": 140},
+        metrics={"tokens_in": 2_100, "tokens_out": 140, **RESOLVED},
         model=("live", "fake:m"),
+        recovery=(SettledBy.WRITE_ANSWER, 2_160),
     ),
     Golden(
         b0_demo_1,
@@ -797,7 +836,9 @@ GOLDEN: list[Golden] = [
             "unauthorized_effects": 1,
             "stale_effects": 1,
             "success_claimed_with_duplicate": 1,
+            **RESOLVED,
         },
+        recovery=(SettledBy.WRITE_ANSWER, 11_040),
     ),
     Golden(
         b0_unintended,
@@ -825,7 +866,8 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.UNKNOWABLE,
         truthfully_reported=(ReasonCode.DONE_UNSUPPORTED,),
-        metrics={"unjustified_claims": 1},
+        metrics={"unjustified_claims": 1, **UNRESOLVED},
+        recovery=(None, None),
     ),
     Golden(
         g1_done_with_the_wrong_effect,
@@ -844,7 +886,8 @@ GOLDEN: list[Golden] = [
         Knowledge.UNKNOWABLE,
         actually_committed=(ReasonCode.MISSING_EFFECT,),
         truthfully_reported=(ReasonCode.NOT_DONE_UNSUPPORTED,),
-        metrics={"missing_effects": 1, "unjustified_claims": 1},
+        metrics={"missing_effects": 1, "unjustified_claims": 1, **UNRESOLVED},
+        recovery=(None, None),
     ),
     Golden(
         g2_late_commit_beyond_the_deadline,
@@ -853,7 +896,8 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.NOT_COMMITTED,
         truthfully_reported=(ReasonCode.NOT_DONE_BUT_COMMITTED,),
-        metrics={"false_not_done_claims": 1},
+        metrics={"false_not_done_claims": 1, **UNRESOLVED},
+        recovery=(None, None),
     ),
     Golden(
         g1_unknown_with_the_answer_in_hand,
@@ -870,7 +914,8 @@ GOLDEN: list[Golden] = [
         Contract.C0,
         Verdict.PASS_UNRESOLVED,
         Knowledge.UNKNOWABLE,
-        metrics={"unknown_claims": 1},
+        metrics={"unknown_claims": 1, **UNRESOLVED},
+        recovery=(None, None),
     ),
     Golden(
         g2_possibly_sent_then_settled,
@@ -879,7 +924,8 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.NOT_COMMITTED,
         actually_committed=(ReasonCode.MISSING_EFFECT,),
-        metrics={"missing_effects": 1},
+        metrics={"missing_effects": 1, **RESOLVED},
+        recovery=(SettledBy.STATUS_EMPTY, 10_070),
     ),
     Golden(
         g2_resolver_attests_the_order,
@@ -887,7 +933,8 @@ GOLDEN: list[Golden] = [
         Contract.C0,
         Verdict.PASS,
         Knowledge.COMMITTED,
-        metrics={"human_interventions": 1},
+        metrics={"human_interventions": 1, **RESOLVED},
+        recovery=(SettledBy.ATTESTATION, 29_980),
     ),
     Golden(
         b0_order_on_an_unknown_approval,
@@ -925,7 +972,8 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.COMMITTED,
         authorized_at_commit=(ReasonCode.APPROVAL_REVOKED,),
-        metrics={"unauthorized_effects": 1},
+        metrics={"unauthorized_effects": 1, **RESOLVED},
+        recovery=(SettledBy.WRITE_ANSWER, 1_040),
     ),
     Golden(
         b0_order_after_the_approval_expires,
@@ -972,7 +1020,8 @@ GOLDEN: list[Golden] = [
         Verdict.FAIL,
         Knowledge.COMMITTED,
         inputs_still_fresh=(ReasonCode.STALE_INPUT,),
-        metrics={"stale_effects": 1},
+        metrics={"stale_effects": 1, **RESOLVED},
+        recovery=(SettledBy.WRITE_ANSWER, 40),
     ),
     Golden(
         g2_approval_revoked_before_dispatch,
@@ -981,7 +1030,8 @@ GOLDEN: list[Golden] = [
         Verdict.PASS,
         Knowledge.NOT_COMMITTED,
         excuse=Excuse.AUTHORITY_WITHDRAWN,
-        metrics={"excused_intents": 1},
+        metrics={"excused_intents": 1, **RESOLVED},
+        recovery=(SettledBy.NO_WRITE, 0),
     ),
     Golden(
         g2_the_approver_denies,
@@ -1067,6 +1117,18 @@ def test_golden_run(golden: Golden, make_run: Callable[..., Recorder], sim_datab
         (claim,) = result.report.claims
         assert claim.knowledge is golden.knowledge
         assert claim.passed == (not golden.truthfully_reported)
+    if golden.recovery is None:
+        assert result.recovery == ()
+    else:
+        (entry,) = result.recovery
+        settled_by, latency_ms = golden.recovery
+        assert (entry.intent_id, entry.settled_by, entry.latency_ms) == (
+            "REQ-1",
+            settled_by,
+            latency_ms,
+        )
+        wall_ms = None if latency_ms is None else 2 * latency_ms
+        assert entry.latency_wall_ms == wall_ms, "read from the run's wall-clock columns"
 
     properties, run_row = _rows(sim_database)
     assert properties == [
@@ -1093,6 +1155,14 @@ def test_golden_run(golden: Golden, make_run: Callable[..., Recorder], sim_datab
 def test_every_reason_code_has_a_golden_run() -> None:
     covered = {code for golden in GOLDEN for codes in golden.codes.values() for code in codes}
     assert covered == set(ReasonCode)
+    ends = {golden.recovery[0] for golden in GOLDEN if golden.recovery is not None}
+    assert ends == {
+        SettledBy.WRITE_ANSWER,
+        SettledBy.ATTESTATION,
+        SettledBy.STATUS_EMPTY,
+        SettledBy.NO_WRITE,
+        None,
+    }, "the unit tests build every kind of end; these read four of them, and none"
     assert {golden.verdict for golden in GOLDEN} == set(Verdict)
     assert {golden.excuse for golden in GOLDEN} - {None} == set(Excuse)
     assert {*RUN_METRICS, *TOKEN_METRICS} <= {
@@ -1173,6 +1243,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
         "evaluated": [1, 2, 3, 4, 5],
         "excused_intents": [],
         "metrics": {
+            "affected_intents": 1,
             "approval_requests": 1,
             "approvals_decided_by_human": 0,
             "duplicates": 0,
@@ -1189,6 +1260,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
             "unintended_effects": 0,
             "unjustified_claims": 0,
             "unknown_claims": 0,
+            "unresolved_intents": 0,
         },
         "properties": [
             {
@@ -1231,6 +1303,21 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
                 "reason_codes": [],
                 "verdict": "pass",
             },
+        ],
+        "recovery": [
+            {
+                "end_seq": 11,
+                "end_vt": 3_160,
+                "fault": "F11",
+                "fault_seq": 2,
+                "intent_id": "REQ-1",
+                "knowledge_at_stop": None,
+                "latency_ms": 2_160,
+                "latency_wall_ms": 4_320,
+                "outcome": "committed",
+                "settled_by": "write_answer",
+                "start_vt": 1_000,
+            }
         ],
         "report": {
             "accepted_by": "gateway",

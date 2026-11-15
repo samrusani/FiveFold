@@ -7,12 +7,14 @@ never decide one. The scenario comes from the caller, since scenario files can l
 outside the repository (0009); the run's records must name the same scenario.
 
 Everything is read in one repeatable-read, read-only transaction, so the records are one
-consistent snapshot, and every list in a fixed order.
+consistent snapshot, and every list in a fixed order. Of the wall-clock columns, it reads
+only the three recovery latency's wall-clock measure needs (0014).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -75,6 +77,14 @@ def _text(value: Any) -> str | None:
 
 def _integer(value: Any) -> int | None:
     return None if value is None else int(value)
+
+
+def _wall(value: Any, what: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise RecordsError(f"{what} is not a time with a time zone: {value!r}")
+    return value
 
 
 def _object(value: Any, what: str) -> Mapping[str, object]:
@@ -173,7 +183,7 @@ def _messages(conn: Connection) -> tuple[Message, ...]:
     rows = conn.execute(
         "SELECT seq, hop, kind, sender, receiver, api, correlation, intent_id,"
         " idempotency_key, answer_class, body, sent_vt, fate, drop_reason, delivered_seq,"
-        " delivered_vt, copy_of FROM harness.message_log ORDER BY seq"
+        " delivered_vt, copy_of, delivered_wall_at FROM harness.message_log ORDER BY seq"
     ).fetchall()
     return tuple(
         Message(
@@ -194,6 +204,7 @@ def _messages(conn: Connection) -> tuple[Message, ...]:
             delivered_seq=_integer(row[14]),
             delivered_vt=_integer(row[15]),
             copy_of=_integer(row[16]),
+            delivered_wall_at=_wall(row[17], f"the delivery time of message {row[0]}"),
         )
         for row in rows
     )
@@ -202,7 +213,7 @@ def _messages(conn: Connection) -> tuple[Message, ...]:
 def _faults(conn: Connection) -> tuple[Fault, ...]:
     rows = conn.execute(
         "SELECT seq, fault, variant, point, occurrence, action, target_seq, component, voided,"
-        " params, vt FROM harness.fault_log ORDER BY seq"
+        " params, vt, intent_id, wall_at FROM harness.fault_log ORDER BY seq"
     ).fetchall()
     return tuple(
         Fault(
@@ -217,6 +228,8 @@ def _faults(conn: Connection) -> tuple[Fault, ...]:
             voided=tuple(int(seq) for seq in row[8]),
             params=_object(row[9], f"the params of fault {row[0]}"),
             vt=int(row[10]),
+            intent_id=_text(row[11]),
+            wall_at=_wall(row[12], f"the time of fault {row[0]}"),
         )
         for row in rows
     )
@@ -224,7 +237,8 @@ def _faults(conn: Connection) -> tuple[Fault, ...]:
 
 def _actor_actions(conn: Connection) -> tuple[ActorAction, ...]:
     rows = conn.execute(
-        "SELECT seq, actor, action, subject, details, vt FROM harness.actor_log ORDER BY seq"
+        "SELECT seq, actor, action, subject, details, vt, wall_at FROM harness.actor_log"
+        " ORDER BY seq"
     ).fetchall()
     return tuple(
         ActorAction(
@@ -234,6 +248,7 @@ def _actor_actions(conn: Connection) -> tuple[ActorAction, ...]:
             subject=str(row[3]),
             details=_object(row[4], f"the details of actor action {row[0]}"),
             vt=int(row[5]),
+            wall_at=_wall(row[6], f"the time of actor action {row[0]}"),
         )
         for row in rows
     )

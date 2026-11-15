@@ -31,6 +31,11 @@ Each of these establishes that `q` never commits (a `Settlement`):
 never commits by the evidence (true when none was sent), and `unknowable` otherwise. A
 request that a crash left possibly sent counts as sent, without an answer (0006).
 
+Recovery latency reads the same evidence at other moments than `t_r` (0014): with `t_r`
+past the run's last event, `stack_knowledge` gives `K_i` at the stop and, for each request,
+the first evidence that it never commits; `commit_evidence` gives each effect's first
+commit evidence.
+
 Readings of the harness's records that the decision records leave open:
 
 - A possibly-sent request is a `harness.fault_log` row at `gw.dispatch.after_record`. Its
@@ -77,6 +82,26 @@ class Knowledge(StrEnum):
     COMMITTED = "committed"
     NOT_COMMITTED = "not_committed"
     UNKNOWABLE = "unknowable"
+
+
+class CommitSource(StrEnum):
+    """What showed the stack that an effect committed (0004, evidence table)."""
+
+    WRITE_ANSWER = "write_answer"
+    """A write answer naming the effect, new or replayed."""
+    STATUS_ANSWER = "status_answer"
+    """A C1 status answer listing the effect."""
+    ATTESTATION = "attestation"
+    """A human attestation naming the effect."""
+
+
+@dataclass(frozen=True)
+class CommitEvidence:
+    """The first evidence that an effect committed: the harness seq at which the stack got
+    it, and what it was."""
+
+    seq: int
+    source: CommitSource
 
 
 class Settlement(StrEnum):
@@ -151,8 +176,8 @@ class _NotCommitted:
 
 @dataclass
 class _Evidence:
-    committed: dict[str, int]
-    """Effect id to the harness seq of its first commit evidence."""
+    committed: dict[str, CommitEvidence]
+    """Effect id to its first commit evidence."""
     rejections: list[_Rejection]
     empty_statuses: list[_EmptyStatus]
     not_committed: list[_NotCommitted]
@@ -186,6 +211,11 @@ def stack_knowledge(records: RunRecords, t_r: int) -> dict[str, IntentKnowledge]
             knowledge = Knowledge.UNKNOWABLE
         found[intent.id] = IntentKnowledge(intent.id, knowledge, known, findings)
     return found
+
+
+def commit_evidence(records: RunRecords, t_r: int) -> dict[str, CommitEvidence]:
+    """The first commit evidence for each effect that has any before `t_r`, by effect id."""
+    return dict(_gather(records, t_r).committed)
 
 
 def evidence_messages(records: RunRecords, t_r: int) -> list[Message]:
@@ -274,10 +304,12 @@ def _gather(records: RunRecords, t_r: int) -> _Evidence:
     requests = {message.seq: message for message in records.messages if message.kind == "request"}
     evidence = _Evidence(committed={}, rejections=[], empty_statuses=[], not_committed=[])
 
-    def commit(effect_id: str, seq: int, source: str) -> None:
+    def commit(effect_id: str, seq: int, source: CommitSource, what: str) -> None:
         if effect_id not in ledger:
-            raise RecordsError(f"{source} names effect {effect_id}, which the ledger lacks")
-        evidence.committed.setdefault(effect_id, seq)
+            raise RecordsError(f"{what} names effect {effect_id}, which the ledger lacks")
+        first = evidence.committed.get(effect_id)
+        if first is None or seq < first.seq:
+            evidence.committed[effect_id] = CommitEvidence(seq, source)
 
     for message in evidence_messages(records, t_r):
         seq = message.delivered_seq or 0
@@ -285,7 +317,7 @@ def _gather(records: RunRecords, t_r: int) -> _Evidence:
         try:
             if message.api in WRITE_APIS and kind == "committed":
                 committed = WriteCommitted.model_validate(message.body)
-                commit(committed.effect_id, seq, f"answer {message.seq}")
+                commit(committed.effect_id, seq, CommitSource.WRITE_ANSWER, f"answer {message.seq}")
             elif message.api in WRITE_APIS and kind == "rejected":
                 WriteRejected.model_validate(message.body)
                 request = (
@@ -297,7 +329,8 @@ def _gather(records: RunRecords, t_r: int) -> _Evidence:
             elif message.api in STATUS_APIS and kind == "status":
                 status = StatusAnswer.model_validate(message.body)
                 for listed in status.effects:
-                    commit(listed.effect_id, seq, f"status answer {message.seq}")
+                    what = f"status answer {message.seq}"
+                    commit(listed.effect_id, seq, CommitSource.STATUS_ANSWER, what)
                 if not status.effects:
                     evidence.empty_statuses.append(
                         _EmptyStatus(status.intent_id, str(status.operation), status.as_of_vt, seq)
@@ -313,7 +346,8 @@ def _gather(records: RunRecords, t_r: int) -> _Evidence:
             effect_id = action.details.get("effect_id")
             if not isinstance(effect_id, str):
                 raise RecordsError(f"attestation {action.seq} of a commit names no effect")
-            commit(effect_id, action.seq, f"attestation {action.seq}")
+            what = f"attestation {action.seq}"
+            commit(effect_id, action.seq, CommitSource.ATTESTATION, what)
         elif resolution == "not_committed":
             intent_id = action.details.get("intent_id")
             if not isinstance(intent_id, str):

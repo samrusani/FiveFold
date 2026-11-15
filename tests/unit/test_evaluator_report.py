@@ -2,9 +2,8 @@
 
 A CSV with one row per run and a Markdown report: their columns, tables and
 denominators, tokens and, with a price file, each run's exact cost and the cost per
-passing run, a fixed order whatever order the results come in, the files they refuse,
-and the metric that is not computed yet. `python -m fivefold.evaluator report` writes
-both.
+passing run, recovery latency (0014), a fixed order whatever order the results come in,
+and the files they refuse. `python -m fivefold.evaluator report` writes both.
 """
 
 from __future__ import annotations
@@ -39,9 +38,14 @@ from fivefold.evaluator import (
     Config,
     Destination,
     FactVersion,
+    Knowledge,
+    Outcome,
+    RecoveryEntry,
     ReportError,
     RunInfo,
     RunRecords,
+    SettledBy,
+    comparable_json,
     evaluate,
     load_prices,
     load_results,
@@ -51,8 +55,10 @@ from fivefold.evaluator import (
     runs_csv,
 )
 from fivefold.evaluator.__main__ import main
+from fivefold.evaluator.metrics import RECOVERY_METRICS
 from fivefold.evaluator.report import (
     EXACT,
+    RECOVERY_COLUMNS,
     SCRIPTED_MODEL,
     PlanEntry,
     cost_per_passing_run,
@@ -117,6 +123,45 @@ def demo_1_plan(config: str) -> list[JsonValue]:
     return [lost_reply(hop), killed]
 
 
+def recovered(
+    latency_ms: int | None,
+    wall_ms: int | None = None,
+    *,
+    intent_id: str = "REQ-1",
+    fault: str = "F2",
+    start_vt: int = 4_815,
+) -> RecoveryEntry:
+    """A recovery entry, resolved by a write answer `latency_ms` after the fault, or
+    unresolved when `latency_ms` is None (0014)."""
+    if latency_ms is None:
+        return RecoveryEntry(
+            intent_id=intent_id,
+            fault_seq=64,
+            fault=fault,
+            start_vt=start_vt,
+            outcome=Outcome.COMMITTED,
+            settled_by=None,
+            end_seq=None,
+            end_vt=None,
+            latency_ms=None,
+            latency_wall_ms=None,
+            knowledge_at_stop=Knowledge.UNKNOWABLE,
+        )
+    return RecoveryEntry(
+        intent_id=intent_id,
+        fault_seq=64,
+        fault=fault,
+        start_vt=start_vt,
+        outcome=Outcome.COMMITTED,
+        settled_by=SettledBy.WRITE_ANSWER,
+        end_seq=82,
+        end_vt=start_vt + latency_ms,
+        latency_ms=latency_ms,
+        latency_wall_ms=wall_ms,
+        knowledge_at_stop=None,
+    )
+
+
 def make_result(
     *,
     config: str = "G2",
@@ -136,9 +181,11 @@ def make_result(
     cassette: str | None = None,
     parent: str | None = None,
     point: int = 12,
+    recovery: Sequence[RecoveryEntry] = (),
 ) -> RunResult:
     """A run's result as the evaluator writes it. The plan is demo 1's unless given; with
-    `params` given, the run records those params instead, plan or not."""
+    `params` given, the run records those params instead, plan or not. The recovery counts
+    follow the recovery entries unless `metrics` sets them."""
     failing = failing or {}
     properties = tuple(
         PropertyResult(
@@ -184,9 +231,15 @@ def make_result(
         verdict=verdict,
         evaluated=evaluated,
         properties=properties,
-        metrics={**dict.fromkeys(METRICS, 0), **(metrics or {})},
+        metrics={
+            **dict.fromkeys(METRICS, 0),
+            "affected_intents": len(recovery),
+            "unresolved_intents": sum(1 for entry in recovery if not entry.resolved),
+            **(metrics or {}),
+        },
         excused_intents=(),
         report=None,
+        recovery=tuple(recovery),
     )
 
 
@@ -202,11 +255,17 @@ def b0_demo_1(seed: int = 7) -> RunResult:
             "success_claimed_with_duplicate": 1,
             "approval_requests": 1,
         },
+        recovery=[recovered(11_048, 11_160, fault="F11", start_vt=5_292)],
     )
 
 
 def g2_demo_1(seed: int = 7) -> RunResult:
-    return make_result(config="G2", seed=seed, metrics={"approval_requests": 1})
+    return make_result(
+        config="G2",
+        seed=seed,
+        metrics={"approval_requests": 1},
+        recovery=[recovered(405, 268, fault="F11", start_vt=4_464)],
+    )
 
 
 def csv_rows(text: str) -> list[dict[str, str]]:
@@ -276,9 +335,12 @@ def test_the_csv_has_a_header_and_one_row_per_run() -> None:
         "0",
         "1",
         "0",
+        "1",
+        "0",
         "0",
         "0",
     ]
+    assert (b0["recovery_ms_max"], b0["recovery_wall_ms_max"]) == ("11048", "11160")
     assert (g2["config"], g2["verdict"], g2["reason_codes"]) == ("G2", "pass", "")
     assert g2["planned_faults"].startswith("F2 at net.gw_sim.answer when")
     identity = {
@@ -334,8 +396,12 @@ def test_the_csv_columns_are_fixed_and_name_every_metric_in_record_0004s_order()
         "human_interventions",
         "approval_requests",
         "approvals_decided_by_human",
+        "affected_intents",
+        "unresolved_intents",
         "tokens_in",
         "tokens_out",
+        "recovery_ms_max",
+        "recovery_wall_ms_max",
     )
 
 
@@ -377,7 +443,7 @@ def test_the_metrics_are_the_ones_the_evaluator_computes() -> None:
     )
     result = evaluate(records)
     assert set(result.metrics) == set(METRICS)
-    assert len(METRICS) == 16
+    assert len(METRICS) == 18
     assert runs_csv([result]).count("\n") == 2
 
 
@@ -605,30 +671,183 @@ def test_metric_totals_are_summed_by_configuration_with_the_number_of_runs() -> 
     assert ["approval_requests", "3", "1"] in rows
 
 
-def test_the_report_says_what_is_not_computed_and_shows_no_value_for_it() -> None:
-    """Only recovery latency is left, and without a price file, cost: neither shows a
-    value, not even a zero."""
+def test_every_metric_of_record_0004_is_computed_and_only_cost_needs_a_price_file() -> None:
+    """Record 0004's list of what the report does not compute yet is empty since record
+    0014: recovery latency is computed. Without a price file, cost shows no value, not even
+    a zero."""
     results = [b0_demo_1(), g2_demo_1()]
     report = markdown_report(results)
-    assert section(report, "Not computed yet") == [
-        "",
-        "Record 0004 also lists recovery latency per affected action, in virtual and wall"
-        " milliseconds. The evaluator does not compute it yet: it waits for record 0014. No"
-        " result holds a value for it, so this report shows none, not zeros.",
-    ]
-    assert report.endswith("not zeros.\n")
+    assert "Not computed yet" not in report and "not computed yet" not in report
     assert section(report, "Cost") == [
         "",
         "Cost is not computed, because no price file was given. Give one with `--prices`, in"
         " the format of `prices/example.yaml`. The tokens each run used are in the metric"
         " totals and in the CSV.",
-        "",
     ]
-    assert "latency" not in report.split("## Not computed yet")[0].lower()
+    assert report.endswith("totals and in the CSV.\n")
     assert "USD" not in report and "passing run" not in report
     header = runs_csv(results).splitlines()[0]
-    assert "tokens_in,tokens_out" in header
-    assert not any(word in header for word in ("latency", "cost"))
+    assert header.endswith("tokens_in,tokens_out,recovery_ms_max,recovery_wall_ms_max")
+    assert "cost" not in header
+
+
+# Recovery latency (0014) ------------------------------------------------------------------
+
+
+RECOVERY_RESULTS = [
+    make_result(config="G2", seed=7, recovery=[recovered(2_257, 109)]),
+    make_result(config="G2", seed=8, recovery=[recovered(2_301, 2_016)]),
+    make_result(config="G2", seed=9, recovery=[recovered(1_999, 500)]),
+    make_result(config="G2", seed=10, recovery=[recovered(2_100, None)]),
+    make_result(config="G2", contract="C0", seed=7, unknown=True, recovery=[recovered(None)]),
+    make_result(
+        config="B0",
+        seed=7,
+        plan=[lost_reply("agent_sim")],
+        failing=B0_FAILURES,
+        recovery=[recovered(2_013, 627)],
+    ),
+    make_result(
+        config="B0",
+        seed=8,
+        plan=[lost_reply("agent_sim")],
+        failing=B0_FAILURES,
+        recovery=[recovered(2_013, 1_371)],
+    ),
+    make_result(config="G2", seed=7, plan=[]),
+]
+"""Demo 1 in G2 four times, its C0 run unresolved, F2 in B0 twice, and a run with no
+fault. The fourth G2 run's wall-clock times are missing."""
+
+
+def test_the_recovery_table_shows_counts_medians_and_the_largest_latency() -> None:
+    """Medians are over resolved intents, the lower middle value for an even count; a row
+    with no resolved intent shows none."""
+    report = markdown_report(RECOVERY_RESULTS)
+    lost_b0 = "F2 at net.agent_sim.answer when answer=committed, api=submit_purchase_order"
+    demo = plan_label(planned_faults(g2_demo_1()), params=False)
+    assert table(report, "Recovery latency by fault plan") == [
+        [
+            "Faults planned",
+            "Configuration",
+            "Contract",
+            "affected",
+            "resolved",
+            "unresolved",
+            "median latency (virtual ms)",
+            "largest latency (virtual ms)",
+            "median wall-clock latency (ms)",
+        ],
+        [lost_b0, "B0", "C2", "2", "2", "0", "2013", "2013", "627"],
+        [demo, "G2", "C0", "1", "0", "1", "none", "none", "none"],
+        [demo, "G2", "C2", "4", "4", "0", "2100", "2301", "500"],
+        ["none", "G2", "C2", "0", "0", "0", "none", "none", "none"],
+    ]
+    lines = section(report, "Recovery latency by fault plan")
+    assert "Latencies are never summed." in lines[1]
+    assert report.index("## Verdicts by fault plan") < report.index("## Recovery latency")
+    assert report.index("## Recovery latency") < report.index("## Metric totals")
+
+
+def test_a_wall_clock_median_without_any_wall_clock_time_says_so() -> None:
+    results = [make_result(seed=seed, recovery=[recovered(1_000 + seed)]) for seed in (1, 2)]
+    (_, row) = table(markdown_report(results), "Recovery latency by fault plan")
+    assert row[3:] == ["2", "2", "0", "1001", "1002", "not recorded"]
+
+
+def test_the_csv_holds_each_run_s_largest_latencies_and_never_a_sum() -> None:
+    """The largest latency among the run's resolved intents, virtual and by the wall clock;
+    empty when no intent was resolved. The metric totals count intents; they never sum a
+    latency."""
+    two = make_result(
+        seed=11,
+        recovery=[
+            recovered(1_200, 900, intent_id="REQ-1"),
+            recovered(800, 1_300, intent_id="REQ-2"),
+            recovered(None, intent_id="REQ-3"),
+        ],
+    )
+    rows = csv_rows(runs_csv([*RECOVERY_RESULTS, two]))
+    shown = ("config", "contract", "seed", *RECOVERY_COLUMNS, *RECOVERY_METRICS)
+    assert [tuple(row[name] for name in shown) for row in rows] == [
+        ("B0", "C2", "7", "2013", "627", "1", "0"),
+        ("B0", "C2", "8", "2013", "1371", "1", "0"),
+        ("G2", "C0", "7", "", "", "1", "1"),
+        ("G2", "C2", "7", "2257", "109", "1", "0"),
+        ("G2", "C2", "8", "2301", "2016", "1", "0"),
+        ("G2", "C2", "9", "1999", "500", "1", "0"),
+        ("G2", "C2", "10", "2100", "", "1", "0"),
+        ("G2", "C2", "11", "1200", "1300", "3", "1"),
+        ("G2", "C2", "7", "", "", "0", "0"),
+    ]
+    totals = table(markdown_report([*RECOVERY_RESULTS, two]), "Metric totals by configuration")
+    assert ["affected_intents", "2", "8"] in totals and ["unresolved_intents", "0", "2"] in totals
+    assert not any("latency" in row[0] or "recovery" in row[0] for row in totals)
+
+
+def test_results_that_differ_only_in_wall_clock_fields_are_the_same_result(
+    tmp_path: Path,
+) -> None:
+    """Two files of one run scored twice: equal but for the wall clock, so the second would
+    count the run twice (0014). Another virtual latency is another result."""
+    first = make_result(recovery=[recovered(2_257, 109)])
+    again = make_result(recovery=[recovered(2_257, 3_296)])
+    other = make_result(recovery=[recovered(2_258, 109)])
+    assert result_json(first) != result_json(again)
+    assert comparable_json(first) == comparable_json(again)
+    save(tmp_path / "twice", "a.json", first)
+    save(tmp_path / "twice", "b.json", again)
+    with pytest.raises(ReportError, match=r"a\.json and .*b\.json hold the same result"):
+        load_results([tmp_path / "twice"])
+    save(tmp_path / "two", "a.json", first)
+    save(tmp_path / "two", "b.json", other)
+    assert len(load_results([tmp_path / "two"])) == 2
+
+
+def test_the_wall_clock_never_decides_the_order_of_two_different_results() -> None:
+    """Two runs alike down to their results: one settled by a status answer, the other by a
+    write answer. In their JSON the wall-clock latency comes before `settled_by`, so
+    ordering by the whole JSON would let the wall clock decide; the virtual content comes
+    first instead. Two results that differ only by the wall clock still have an order."""
+    by_status = recovered(2_257, 9).model_copy(update={"settled_by": SettledBy.STATUS_ANSWER})
+    for status_wall, write_wall in ((9, 1), (1, 9)):
+        status = make_result(
+            recovery=[by_status.model_copy(update={"latency_wall_ms": status_wall})]
+        )
+        write = make_result(recovery=[recovered(2_257, write_wall)])
+        for results in ([status, write], [write, status]):
+            walls = [row["recovery_wall_ms_max"] for row in csv_rows(runs_csv(results))]
+            assert walls == [str(status_wall), str(write_wall)], "status_answer sorts first"
+    twins = [make_result(recovery=[recovered(2_257, wall)]) for wall in (9, 1)]
+    assert runs_csv(twins) == runs_csv(twins[::-1])
+
+
+@pytest.mark.parametrize(
+    ("result", "why"),
+    [
+        (
+            make_result(recovery=[recovered(405)], metrics={"affected_intents": 2}),
+            "its recovery entries give 1 affected and 0 unresolved intents, but its metrics say"
+            " 2 and 0",
+        ),
+        (
+            make_result(recovery=[recovered(None)], metrics={"unresolved_intents": 0}),
+            "give 1 affected and 1 unresolved intents, but its metrics say 1 and 0",
+        ),
+        (
+            make_result(recovery=[recovered(-1)]),
+            "the recovery entry of REQ-1 must have a latency of 0 ms or more exactly when it"
+            " has an end",
+        ),
+        (
+            make_result(recovery=[recovered(5).model_copy(update={"latency_ms": None})]),
+            "must have a latency of 0 ms or more exactly when it has an end",
+        ),
+    ],
+)
+def test_recovery_entries_the_outputs_cannot_show_are_refused(result: RunResult, why: str) -> None:
+    with pytest.raises(ReportError, match=why):
+        runs_csv([result])
 
 
 # Tokens and cost ---------------------------------------------------------------------------
@@ -815,7 +1034,7 @@ def test_the_cost_table_counts_runs_passing_runs_tokens_and_cost_by_model() -> N
         ["ollama:llama3.1:8b", "G2", "C2", "1", "1", "5000", "500", "0", "0"],
         ["scripted", "G2", "C0", "1", "1", "0", "0", "0", "0"],
     ]
-    assert "Not computed yet" in report and "Cost is not computed" not in report
+    assert "Cost is not computed" not in report
     assert markdown_report(COST_RESULTS).split("## Cost")[0] == report.split("## Cost")[0]
 
 
@@ -954,6 +1173,33 @@ def test_the_csv_lists_a_branch_after_the_runs_of_its_configuration() -> None:
         ("G2", "7", PARENT, "4"),
         ("G2", "7", PARENT, "4"),
         ("G2", "7", PARENT, "10"),
+    ]
+
+
+def test_a_branch_s_recovery_latency_shows_in_rows_of_its_own() -> None:
+    """The recovery table groups runs as the other tables do, so a branch's recovery
+    entries never count in its parent's cell (0009, 0014). The CSV keeps each run's own."""
+    results = [
+        g2_demo_1(seed=7),
+        g2_demo_1(seed=8),
+        live(seed=7, parent=PARENT, point=4, recovery=[recovered(1_200, 300)]),
+        live(seed=7, parent=PARENT, point=4, recovery=[recovered(None)]),
+        make_result(seed=7, parent=PARENT, point=10, recovery=[recovered(2_257, 57)]),
+    ]
+    assert [
+        row[1:] for row in table(markdown_report(results), "Recovery latency by fault plan")[1:]
+    ] == [
+        ["G2", "C2", "2", "2", "0", "405", "405", "268"],
+        ["G2, branch point 4", "C2", "2", "1", "1", "1200", "1200", "300"],
+        ["G2, branch point 10", "C2", "1", "1", "0", "2257", "2257", "57"],
+    ]
+    rows = csv_rows(runs_csv(results))
+    assert [(r["branch_point"], *(r[name] for name in RECOVERY_COLUMNS)) for r in rows] == [
+        ("", "405", "268"),
+        ("", "405", "268"),
+        ("4", "1200", "300"),
+        ("4", "", ""),
+        ("10", "2257", "57"),
     ]
 
 

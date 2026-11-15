@@ -21,7 +21,7 @@ import pytest
 from fivefold.harness.demo import DEMOS, Demo
 from fivefold.harness.run import Config, InprocRun
 from fivefold.recorder.cassette import sha256
-from fivefold.recorder.playback import RECORDS, compare, records
+from fivefold.recorder.playback import RECORDS, _comparable, compare, records
 
 pytestmark = pytest.mark.pg
 
@@ -70,6 +70,23 @@ def test_another_seed_gives_other_records(run_database: Callable[[str], str]) ->
         runs.append(records(dsn))
     differing = {difference.records for difference in compare(runs[0], runs[1])}
     assert "message log" in differing
+
+
+def test_the_check_ignores_wall_clock_fields_in_the_evaluation_and_nothing_else() -> None:
+    """0009, as amended by 0014: a run's recovery latency by the wall clock differs from
+    one run to the next; its virtual latency must not."""
+
+    def evaluation(latency_ms: int, wall_ms: int) -> str:
+        entry = {"intent_id": "REQ-1", "latency_ms": latency_ms, "latency_wall_ms": wall_ms}
+        row = {"run_id": "RUN-1", "result": {"recovery": [entry], "run": {"seed": 7}}}
+        return _comparable("evaluation", row)
+
+    assert evaluation(2_257, 109) == evaluation(2_257, 1_371)
+    assert evaluation(2_257, 109) != evaluation(2_258, 109)
+    message = {"seq": 1, "wall_at": "now", "body": {"latency_wall_ms": 1}}
+    assert _comparable("message log", message) != _comparable(
+        "message log", {**message, "body": {"latency_wall_ms": 2}}
+    ), "only the evaluation's own fields are left out, at any depth"
 
 
 def test_the_check_sees_a_difference_in_any_record() -> None:
