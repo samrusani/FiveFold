@@ -1,0 +1,28 @@
+# Expected outcomes for the cells of the development scenario, dev-001 (decision record
+# 0006, Expected outcomes). A cell is a fault variant, a contract level and a
+# configuration. `verdict` is the run verdict over the properties the evaluator checks so
+# far (`evaluated`), and `failing` lists the properties that fail.
+#
+# Cells are added as faults and contract levels are built, from the first reviewed
+# deterministic run, and frozen before any live-model run. Nobody edits an expectation to
+# match a result: if a run contradicts one, the expectation is revisited by decision
+# record (0006). tests/pg/test_expected.py runs every cell.
+#
+# How each cell's plan is built is in src/fivefold/harness/cells.py: F2 drops the
+# purchase order's committed answer on the stack's hop to the simulator; F11 kills the
+# agent at the named point of its purchase order call and resumes it 1,000 ms later.
+
+scenario: dev-001-single-po
+seed: 7
+evaluated: [1, 5]
+
+cells:
+  # F2, reply lost after commit (properties 1 and 5).
+  - {fault: F2, variant: null, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F2, variant: null, contract: C2, config: B0, verdict: fail, failing: [1]}
+
+  # F11, agent killed and resumed from its checkpoint (properties 1, 2 and 5).
+  - {fault: F11, variant: after_tool_call, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F11, variant: after_tool_call, contract: C2, config: B0, verdict: fail, failing: [1]}
+  - {fault: F11, variant: after_tool_result, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F11, variant: after_tool_result, contract: C2, config: B0, verdict: fail, failing: [1]}

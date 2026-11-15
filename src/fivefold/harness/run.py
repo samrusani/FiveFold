@@ -16,17 +16,17 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
    the agents running for the drain window, `2 x (D + max_hop_latency) + L` (0009), and
-   stops every component.
+   stops every component;
+7. runs the evaluator, which scores the run from the simulator's and the harness's
+   records and writes its result to the `eval` schema (0004, 0009).
 
 Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
-`ff_harness` and `ff_agent` (0008).
+`ff_harness`, `ff_agent` and `ff_eval` (0008).
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -41,7 +41,9 @@ from fivefold.agents.scripted import ScriptedModel
 from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
 from fivefold.agents.worker import WorkerEnd, WorkerSpec, build_graph, run_worker
 from fivefold.domain.contracts import Capability, Contract
-from fivefold.domain.scenario import Scenario
+from fivefold.domain.scenario import Scenario, scenario_digest
+from fivefold.evaluator import RunResult as Evaluation
+from fivefold.evaluator import evaluate_run
 from fivefold.faults.catalog import Action
 from fivefold.faults.plan import FaultInjector, Fired, parse_plan
 from fivefold.gateway.dispatcher import Dispatcher, Timing
@@ -117,17 +119,13 @@ class RunSpec:
 
 @dataclass
 class RunResult:
-    """How a run ended: each worker's end, and the virtual time the run stopped."""
+    """How a run ended: each worker's end, the virtual time the run stopped, and the
+    evaluator's result."""
 
     run_id: str
     ends: dict[str, tuple[WorkerEnd, str]] = field(default_factory=dict)
     stopped_vt: int = 0
-
-
-def scenario_digest(scenario: Scenario) -> str:
-    """The SHA-256 of the scenario's canonical JSON."""
-    text = json.dumps(scenario.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    evaluation: Evaluation | None = None
 
 
 def drain_window_ms(scenario: Scenario) -> int:
@@ -230,6 +228,7 @@ class InprocRun:
         await self.scheduler.run(deadline_ms=self.scheduler.now + drain_window_ms(scenario))
         self.result.stopped_vt = self.scheduler.now
         await self._stop()
+        self.result.evaluation = evaluate_run(self._conninfo("ff_eval"), scenario)
         return self.result
 
     # The gateway --------------------------------------------------------------------------

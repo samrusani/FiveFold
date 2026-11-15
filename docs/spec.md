@@ -125,7 +125,8 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009) |
 | harness | MessageLog | seq, hop, kind, sender, receiver, api, correlation id, intent_id, idempotency_key, sent_vt, fate, drop reason, delivered_seq, delivered_vt, answer class, body | Every message and its fate (0004). One counter numbers every harness event, so `seq` and `delivered_seq` order sends and deliveries |
 | harness | FaultLog, ActorLog, FinalReport | | Faults fired and the deliveries they voided; scripted human actions; submitted reports |
-| eval | Result | run_id, property, verdict, reason codes, metrics | One row per run and property |
+| eval | RunResult | run_id, verdict, evaluated, metrics, result | One row per run: the verdict over the properties evaluated, and the whole result as JSON |
+| eval | Result | run_id, property, verdict, reason codes, metrics, failures | One row per run and property |
 
 ## Action identity
 

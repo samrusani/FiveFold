@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 done, 14 Nov 2026; M1 in progress. Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 in progress. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
@@ -50,7 +50,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [x] T2: purchase-order service with the idempotency_key capability (C2), the effects ledger and fact history, plus policy approvals in the approvals service
 - [x] T2: deterministic scheduler with the virtual clock and in-process transports, tested for ordering, timers, crash and restart
 - [x] T2: fault scheduler that fires F2 on an event counter
-- [ ] T3: evaluator that reads the sim ledger and the harness message log, and scores properties 1 and 5 to JSON
+- [x] T3: evaluator that reads the sim ledger and the harness message log, and scores properties 1 and 5 to JSON
 - [x] T4: LangGraph agent for the procurement task over gateway tools, the B0 variant and the scripted model
 - [x] T5: repo scaffold, CI with pytest and Hypothesis, Docker Compose, a `make demo` stub
 - [ ] T6: 10 held-out scenarios in a location the other teams cannot see
