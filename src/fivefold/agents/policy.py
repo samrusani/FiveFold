@@ -19,9 +19,8 @@ result: the tool's JSON, parsed. The scripted model replays it over the conversa
 tool results to find the next call, so the policy keeps no state outside the
 conversation, and a worker resumed from its checkpoint (F11) decides the same way.
 
-One case has no row in 0008's table: an action rejected with reason `run_closed`, which
-another worker's report can cause (0010). The policy stops working on the intent, as for
-other reasons with no row of their own.
+An action rejected with reason `run_closed`, which another worker's report can cause
+(0010), stops work on the intent, as 0008's table says since record 0011 amended it.
 """
 
 from __future__ import annotations
