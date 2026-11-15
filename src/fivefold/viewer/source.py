@@ -116,7 +116,8 @@ class RunSource:
             yield conn
 
     def runs(self) -> list[dict[str, Any]]:
-        """Every run database the registry lists, newest first."""
+        """Every run database the registry lists, newest first: by the wall-clock time its
+        row was written, which serves display only (0009)."""
         return self._registry_rows("TRUE", ())
 
     def registered(self, database: str) -> dict[str, Any]:

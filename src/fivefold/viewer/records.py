@@ -2,8 +2,7 @@
 ledger and fact history (0012). Every query reads only `sim`, `gw`, `harness` or `eval`.
 
 The viewer shows the evaluator's verdicts as the evaluator wrote them in `eval` (0004); it
-judges nothing itself. Wall-clock columns are left out, except where a person needs them
-to tell runs apart, and none of them orders anything (0009).
+judges nothing itself. Wall-clock columns are left out (0009).
 """
 
 from __future__ import annotations
