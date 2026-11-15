@@ -30,6 +30,15 @@ All four demos of record 0006 run from a seed (see Demo below). The development 
 2. **Approval goes stale** (C2). A human approves the order; before it is sent, the quote's price goes up (2a, fault F7) or the approval is revoked (2b, F6). G2 refuses to send and names the stale fact (`quote/S-1/W-100`, version 1 to 2, `unit_price_minor`) or the revoked approval. In 2a the agent reads again and orders at the new price on a new approval. B0 orders anyway, on the old price or the revoked approval.
 3. **Outcome unknown** (C0). The order's reply is lost, and the destination offers no way to ask. G2 tells the agent that the outcome is unknown and what a human must reconcile, the report says "unknown", and the verdict is pass_unresolved. B0 orders twice.
 
+## Recorded playback
+
+A run can record every model call into a cassette, and be played back from it into a fresh database (record 0009). The replay must ask the model exactly what the recording did, and its logs, effects ledger and evaluation must match the original run's byte for byte, apart from wall-clock times. Playback needs PostgreSQL but no API key.
+
+```
+uv run python -m fivefold.recorder record --demo 1 --config G2 --cassette demo-1-g2.json
+uv run python -m fivefold.recorder play demo-1-g2.json --scenario scenarios/dev/dev-001-single-po.yaml
+```
+
 ## Documents
 
 - [docs/product.md](docs/product.md): what and why, scope and non-goals
