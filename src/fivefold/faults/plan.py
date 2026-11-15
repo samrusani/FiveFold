@@ -153,7 +153,8 @@ def check_run(plan: Sequence[PlannedFault], *, params: Params, contract: Contrac
     """Refuse a plan that the run's timing or contract level cannot carry out (0005, 0006).
 
     - F5 in contract holds a write past the caller's timeout and commits it before the
-      deadline: T < `delay_ms` < D. Beyond the deadline it commits after D: `delay_ms` > D.
+      deadline: T < `delay_ms` < D. Beyond the deadline it commits after D: `delay_ms` > D,
+      and the plan must set it, since 0006 gives that variant no default.
     """
     t_ms, d_ms = params.dispatch_timeout_ms, params.commit_deadline_ms
     wrong: list[str] = []
@@ -161,7 +162,9 @@ def check_run(plan: Sequence[PlannedFault], *, params: Params, contract: Contrac
         if planned.fault is FaultId.F5:
             delay = planned.param("delay_ms")
             if planned.variant == F5_BEYOND_DEADLINE:
-                if delay <= d_ms:
+                if "delay_ms" not in planned.params:
+                    wrong.append(f"F5 {planned.variant} needs delay_ms set: 0006 gives no default")
+                elif delay <= d_ms:
                     wrong.append(f"F5 {planned.variant} needs delay_ms above D ({d_ms})")
             elif not t_ms < delay < d_ms:
                 wrong.append(f"F5 in contract needs delay_ms between T ({t_ms}) and D ({d_ms})")

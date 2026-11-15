@@ -86,6 +86,15 @@ def test_f5_beyond_the_deadline_waives_it() -> None:
     assert rig.log.faults[0].params == {"delay_ms": 20_000}
 
 
+def test_two_f5_entries_at_one_write_are_refused() -> None:
+    """A write is held once. Without this, the second entry would be recorded with a delay
+    the write never had."""
+    rig = Rig([f5(), f5("beyond_deadline", delay_ms=20_000)])
+    with pytest.raises(SimulatorPointError, match=r"2 F5 entries fired at one write"):
+        rig.write(vt=10)
+    assert rig.log.faults == [], "neither is recorded"
+
+
 def test_a_fault_with_nothing_to_do_at_a_simulator_point_is_refused() -> None:
     """Only F5 acts where writes arrive; a broken plan fails loudly instead of firing
     nothing (the catalog already refuses such plans)."""

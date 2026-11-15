@@ -40,17 +40,26 @@ class SimulatorPoints:
         self._log = log
 
     def write_received(self, request: Envelope) -> WriteDelay | None:
-        """`sim.write.received`: F5 holds the write and commits it `delay_ms` later."""
-        delay: WriteDelay | None = None
-        for fired in self._faults.at(WRITE_RECEIVED, _fields(request)):
-            if fired.planned.kind.action is not Action.DELAY_COMMIT:
-                raise SimulatorPointError(f"{fired.fault} cannot act at {WRITE_RECEIVED}")
-            delay_ms = fired.planned.param("delay_ms")
-            self._record(fired, WRITE_RECEIVED, request, {"delay_ms": delay_ms})
-            if delay is None:
-                waive = fired.planned.variant == F5_BEYOND_DEADLINE
-                delay = WriteDelay(delay_ms, waive_deadline=waive)
-        return delay
+        """`sim.write.received`: F5 holds the write and commits it `delay_ms` later.
+
+        A write is held once. Two F5 entries that fire at the same write are a plan bug:
+        the second would be recorded and take no effect, so the run stops instead.
+        """
+        fired = self._faults.at(WRITE_RECEIVED, _fields(request))
+        for one in fired:
+            if one.planned.kind.action is not Action.DELAY_COMMIT:
+                raise SimulatorPointError(f"{one.fault} cannot act at {WRITE_RECEIVED}")
+        if not fired:
+            return None
+        if len(fired) > 1:
+            raise SimulatorPointError(
+                f"{len(fired)} F5 entries fired at one write (message {request.seq});"
+                " a write is held once"
+            )
+        (hold,) = fired
+        delay_ms = hold.planned.param("delay_ms")
+        self._record(hold, WRITE_RECEIVED, request, {"delay_ms": delay_ms})
+        return WriteDelay(delay_ms, waive_deadline=hold.planned.variant == F5_BEYOND_DEADLINE)
 
     def _record(
         self, fired: Fired, point: str, request: Envelope, used: Mapping[str, object]

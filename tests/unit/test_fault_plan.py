@@ -414,13 +414,15 @@ def test_f5s_delay_must_fit_its_variant_against_t_and_d(
             check_run(plan, params=params(), contract=Contract.C2)
 
 
-def test_f5_beyond_the_deadline_has_no_default_delay_that_fits() -> None:
-    """0006 gives only the in-contract default (5,000), which is not beyond D."""
+@pytest.mark.parametrize("deadline_ms", [10_000, 4_000])
+def test_f5_beyond_the_deadline_must_set_its_delay(deadline_ms: int) -> None:
+    """0006 gives only the in-contract default (5,000). Beyond the deadline the plan must
+    set `delay_ms`, even where that default would exceed a short D."""
     plan = parse_plan(
         [{"fault": "F5", "variant": "beyond_deadline", "at": {"point": "sim.write.received"}}]
     )
-    with pytest.raises(ValueError, match=r"needs delay_ms above D \(10000\)"):
-        check_run(plan, params=params(), contract=Contract.C1)
+    with pytest.raises(ValueError, match=r"F5 beyond_deadline needs delay_ms set"):
+        check_run(plan, params=params(commit_deadline_ms=deadline_ms), contract=Contract.C1)
 
 
 def test_f5_fires_with_and_without_a_gateway() -> None:
