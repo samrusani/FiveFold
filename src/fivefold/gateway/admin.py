@@ -3,9 +3,10 @@
 Escalation hands an action whose outcome is unknown to a human: after the `escalated`
 note, only an attestation moves the action (0010, reading 7). A human resolves an
 escalation through the admin API by attesting that the action committed, naming the
-effect, or that it did not (0003, escalation). `GatewayAdmin` is the core that API
-serves, in the gateway's process; the HTTP layer of the spec's admin API is not built.
-It reads time only from the run's virtual clock (0009), and it never
+effect, or that it did not (0003, escalation). `GatewayAdmin` is the core of that API,
+in the gateway's process. In-process runs call it directly, as the scripted resolver
+does; `admin_api.py` serves it over HTTP, with the gateway's records, for a gateway
+served over HTTP. It reads time only from the run's virtual clock (0009), and it never
 contacts the simulator: the human checks the world out of band, and the gateway records
 what the human attests.
 
