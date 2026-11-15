@@ -12,11 +12,13 @@
 # gateway after the order's dispatch check (a) or after its attempt is recorded (b), and
 # in B0 kills the agent just before it sends the order; the component restarts 1,000 ms
 # later. F2 drops the purchase order's committed answer on the stack's hop to the
-# simulator. F6 revokes the order's approval, and F7 changes the quote it relies on: early
-# at the gateway's dispatch check (G2) or as the approval answer reaches the agent (B0),
-# late as the order leaves for the simulator. F9 starts a second worker at the first
-# worker's first step. F11 kills the agent at the named point of its purchase order call
-# and resumes it 1,000 ms later. F12 drops the order's request on the named hop.
+# simulator. F3 crashes the gateway after the order's answer arrives, before it is
+# recorded, and in B0 kills the agent as the order's result arrives. F6 revokes the
+# order's approval, and F7 changes the quote it relies on: early at the gateway's
+# dispatch check (G2) or as the approval answer reaches the agent (B0), late as the
+# order leaves for the simulator. F9 starts a second worker at the first worker's first
+# step. F11 kills the agent at the named point of its purchase order call and resumes it
+# 1,000 ms later. F12 drops the order's request on the named hop.
 #
 # dev-001's budget covers one order but not two, so a second order on the first approval
 # fails property 1 (a duplicate), property 2 (the approval backs the first order) and
@@ -48,6 +50,21 @@ cells:
   - {fault: F1, variant: b, contract: C3, config: G2, verdict: pass, failing: []}
   - {fault: F1, variant: a, contract: C3, config: B0, verdict: pass, failing: []}
   - {fault: F1, variant: b, contract: C3, config: B0, verdict: pass, failing: []}
+
+  # F3, gateway crash after the reply arrives, before it is recorded (properties 1 and 5).
+  # The crash voids the answer. Recovery finds the open attempt; C2 and C3 retry with the
+  # same key into the stored result, and C1's probe finds the order. At C0 the gateway
+  # escalates and the agent reports unknown: pass_unresolved, with no resolver (0006).
+  # B0's equivalent kills the agent as the order's result arrives; it resumes and orders
+  # again, and at C3 the destination refuses the second order.
+  - {fault: F3, variant: null, contract: C0, config: G2, verdict: pass_unresolved, failing: []}
+  - {fault: F3, variant: null, contract: C0, config: B0, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F3, variant: null, contract: C1, config: G2, verdict: pass, failing: []}
+  - {fault: F3, variant: null, contract: C1, config: B0, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F3, variant: null, contract: C2, config: G2, verdict: pass, failing: []}
+  - {fault: F3, variant: null, contract: C2, config: B0, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F3, variant: null, contract: C3, config: G2, verdict: pass, failing: []}
+  - {fault: F3, variant: null, contract: C3, config: B0, verdict: fail, failing: [5]}
 
   # F2, reply lost after commit (properties 1 and 5). G2 retries with the same key at C2
   # and C3 and probes at C1. At C0 it escalates and the agent reports unknown, so with no

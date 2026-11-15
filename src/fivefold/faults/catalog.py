@@ -59,8 +59,8 @@ class Action(StrEnum):
     """Drop the message at the point (F2 drops an answer, F12 a request)."""
     KILL = "kill"
     """Stop the component at the point; it restarts after `restart_delay_ms`: the gateway
-    through startup recovery (F1), an agent worker from its last checkpoint (F1's B0
-    equivalent, F11)."""
+    through startup recovery (F1, F3), an agent worker from its last checkpoint (F1's and
+    F3's B0 equivalents, F11)."""
     REVOKE = "revoke"
     """Revoke the approval the action or the message cites (F6)."""
     CHANGE_QUOTE = "change_quote"
@@ -116,6 +116,15 @@ BUILT: Mapping[FaultId, FaultKind] = {
         },
         minimums={"restart_delay_ms": 0},
         baseline_points=frozenset({"agent.before_tool_call"}),
+    ),
+    FaultId.F3: FaultKind(
+        FaultId.F3,
+        "Gateway crash after reply, before recording",
+        frozenset({"gw.dispatch.after_answer", "agent.after_tool_result"}),
+        Action.KILL,
+        {"restart_delay_ms": 1_000},
+        minimums={"restart_delay_ms": 0},
+        baseline_points=frozenset({"agent.after_tool_result"}),
     ),
     FaultId.F2: FaultKind(
         FaultId.F2,
