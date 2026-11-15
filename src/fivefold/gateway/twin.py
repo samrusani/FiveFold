@@ -105,8 +105,16 @@ class TwinStore:
     def begin_check(self, action_id: str) -> CheckTicket:
         return cast(CheckTicket, self._both("begin_check", action_id))
 
-    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
-        return cast(ReadRecord, self._both("record_read", key, version, vt))
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
+        return cast(ReadRecord, self._both("record_read", key, version, data, vt))
+
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        expected = self.oracle.read_of(key, version)
+        if self.pg.read_of(key, version) != expected:
+            raise StoreMismatch(f"reads of {key} at {version} differ")
+        return expected
 
     def propose(self, call: WriteCall, vt: int) -> ActionResult | Refusal:
         return cast(ActionResult | Refusal, self._both("propose", call, vt))

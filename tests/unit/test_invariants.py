@@ -60,7 +60,7 @@ def _write(
     store: MemoryStore, intent: str, key: str, version: int, vt: int
 ) -> ActionResult | Refusal:
     """A write call for `intent` that cites a read of fact `f` at `version`."""
-    read = store.record_read("f", version, vt)
+    read = store.record_read("f", version, {}, vt)
     return store.propose(
         WriteCall(intent, INTENTS[intent], "t", {}, key, (read.read_id,), ("f",)), vt
     )

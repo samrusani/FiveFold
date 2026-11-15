@@ -353,7 +353,10 @@ def _proposal(
 
 def test_reads_and_write_calls_are_history_for_every_role(migrated_database: str) -> None:
     with psycopg.connect(migrated_database, autocommit=True) as conn:
-        conn.execute("INSERT INTO gw.read (read_id, key, version, vt) VALUES ('R-0001', 'f', 1, 0)")
+        conn.execute(
+            "INSERT INTO gw.read (read_id, key, version, data, vt)"
+            " VALUES ('R-0001', 'f', 1, '{}', 0)"
+        )
         _proposal(conn, "P-0001", "refused", "unknown_intent", None)
         for change in (
             "UPDATE gw.read SET version = 2",

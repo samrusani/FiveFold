@@ -99,7 +99,7 @@ _ESCALATION: LiteralString = (
 _TOOL_CALL: LiteralString = (
     "SELECT call_no, tool, action_id, result, as_of_seq, vt FROM gw.tool_call"
 )
-_READ: LiteralString = "SELECT read_id, key, version, vt FROM gw.read"
+_READ: LiteralString = "SELECT read_id, key, version, data, vt FROM gw.read"
 _PROPOSAL: LiteralString = (
     "SELECT proposal_id, operation, intent_id, args, based_on, admission, reason, action_id, vt"
     " FROM gw.proposal ORDER BY substring(proposal_id FROM 3)::bigint"
@@ -427,17 +427,27 @@ class _PgTransaction(Transaction):
                 ),
             )
 
-    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
         row = self._one(
             "UPDATE gw.run_state SET last_read_no = last_read_no + 1 RETURNING last_read_no",
             (),
         )
-        read = ReadRecord(read_id_for(int(row[0])), key, version, vt)
+        read_id = read_id_for(int(row[0]))
         self._conn.execute(
-            "INSERT INTO gw.read (read_id, key, version, vt) VALUES (%s, %s, %s, %s)",
-            (read.read_id, key, version, vt),
+            "INSERT INTO gw.read (read_id, key, version, data, vt) VALUES (%s, %s, %s, %s, %s)",
+            (read_id, key, version, Jsonb(dict(data)), vt),
         )
-        return read
+        return _read((read_id, key, version, dict(data), vt))
+
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        row = self._conn.execute(
+            _READ + " WHERE key = %s AND version = %s"
+            " ORDER BY substring(read_id FROM 3)::bigint LIMIT 1",
+            (key, version),
+        ).fetchone()
+        return None if row is None else _read(row)
 
     def reads(self, read_ids: Iterable[str]) -> Mapping[str, ReadRecord]:
         wanted = sorted(set(read_ids))
@@ -608,7 +618,10 @@ def _tool_call(row: Row) -> ToolCall:
 
 
 def _read(row: Row) -> ReadRecord:
-    return ReadRecord(row[0], row[1], row[2], row[3])
+    data = plain_from_json(row[3])
+    if not isinstance(data, Mapping):
+        raise ValueError(f"read {row[0]} has a value that is not an object")
+    return ReadRecord(row[0], row[1], row[2], data, row[4])
 
 
 def _proposal(row: Row) -> ProposalRecord:

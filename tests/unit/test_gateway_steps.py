@@ -105,8 +105,8 @@ class Run:
     ) -> ActionResult | Refusal:
         """A write call that cites fresh reads of the order's two dependencies."""
         vt = self.at(1)
-        quote = self.store.record_read("quote/S-1/W-100", quote_version, vt)
-        budget = self.store.record_read("budget/CC-OPS", 1, vt)
+        quote = self.store.record_read("quote/S-1/W-100", quote_version, {}, vt)
+        budget = self.store.record_read("budget/CC-OPS", 1, {}, vt)
         return self.store.propose(
             WriteCall(
                 intent,

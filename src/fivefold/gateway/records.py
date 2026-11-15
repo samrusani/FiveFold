@@ -297,11 +297,16 @@ class WriteCall:
 
 @dataclass(frozen=True)
 class ReadRecord:
-    """A read the gateway served, which a proposal can cite by its id (0001, item 13)."""
+    """A read the gateway served, which a proposal can cite by its id (0001, item 13).
+
+    `data` is the fact's value at that version, decoded from JSON, which the dependency
+    rules compare with the value now (0004).
+    """
 
     read_id: str
     key: str
     version: int
+    data: Mapping[str, object]
     vt: int
 
 

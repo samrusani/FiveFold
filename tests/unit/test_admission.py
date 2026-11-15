@@ -60,18 +60,20 @@ def refusal(result: ActionResult | Refusal) -> RefusalReason:
 
 
 def test_reads_are_numbered_from_one(store: Store) -> None:
-    first = store.record_read(QUOTE, 3, 10)
-    second = store.record_read(BUDGET, 1, 10)
+    first = store.record_read(QUOTE, 3, {"unit_price_minor": 540, "tags": ["a"]}, 10)
+    second = store.record_read(BUDGET, 1, {"limit_minor": 100_000}, 10)
     assert (first.read_id, second.read_id) == ("R-0001", "R-0002")
     assert store.snapshot().reads["R-0001"] == first
     assert (first.key, first.version, first.vt) == (QUOTE, 3, 10)
+    assert dict(first.data) == {"unit_price_minor": 540, "tags": ("a",)}
+    assert store.read_of(QUOTE, 3) == first and store.read_of(QUOTE, 4) is None
 
 
 def test_the_basis_is_each_dependency_at_its_newest_cited_version(store: Store) -> None:
-    old_quote = store.record_read(QUOTE, 1, 0).read_id
-    new_quote = store.record_read(QUOTE, 2, 0).read_id
-    budget = store.record_read(BUDGET, 4, 0).read_id
-    extra = store.record_read("quote/S-2/W-100", 9, 0).read_id
+    old_quote = store.record_read(QUOTE, 1, {}, 0).read_id
+    new_quote = store.record_read(QUOTE, 2, {}, 0).read_id
+    budget = store.record_read(BUDGET, 4, {}, 0).read_id
+    extra = store.record_read("quote/S-2/W-100", 9, {}, 0).read_id
     result = store.propose(call((new_quote, budget, old_quote, extra)), 1)
     assert isinstance(result, ActionResult)
     action = store.snapshot().actions[result.action_id]
@@ -86,7 +88,7 @@ def test_the_basis_is_each_dependency_at_its_newest_cited_version(store: Store) 
 
 
 def test_unknown_reads_and_missing_dependencies_are_named(store: Store) -> None:
-    quote = store.record_read(QUOTE, 1, 0).read_id
+    quote = store.record_read(QUOTE, 1, {}, 0).read_id
     unknown = store.propose(call((quote, "R-0042", "R-0042", "R-0043")), 1)
     assert isinstance(unknown, Refusal) and unknown.reason is RefusalReason.UNKNOWN_READ
     assert unknown.unknown_reads == ("R-0042", "R-0043")
@@ -98,8 +100,8 @@ def test_unknown_reads_and_missing_dependencies_are_named(store: Store) -> None:
 
 def test_the_checks_run_in_the_order_of_0001_item_17(store: Store) -> None:
     """Each call fails two checks; the earlier one decides the refusal."""
-    quote = store.record_read(QUOTE, 1, 0).read_id
-    budget = store.record_read(BUDGET, 1, 0).read_id
+    quote = store.record_read(QUOTE, 1, {}, 0).read_id
+    budget = store.record_read(BUDGET, 1, {}, 0).read_id
     assert refusal(store.propose(call(("R-0099",), intent="REQ-9"), 1)) is (
         RefusalReason.UNKNOWN_INTENT
     )
@@ -135,8 +137,8 @@ def test_every_refusal_is_logged_as_the_tools_response(store: Store) -> None:
 
 
 def test_an_attaching_call_is_recorded_as_attached(store: Store) -> None:
-    quote = store.record_read(QUOTE, 1, 0).read_id
-    budget = store.record_read(BUDGET, 1, 0).read_id
+    quote = store.record_read(QUOTE, 1, {}, 0).read_id
+    budget = store.record_read(BUDGET, 1, {}, 0).read_id
     first = store.propose(call((quote, budget)), 1)
     again = store.propose(call((budget, quote)), 2)
     assert isinstance(first, ActionResult) and isinstance(again, ActionResult)

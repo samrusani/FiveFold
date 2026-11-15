@@ -137,11 +137,18 @@ class _MemoryTransaction(Transaction):
     def next_action_number(self) -> int:
         return len(self._working.actions) + 1
 
-    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
         snapshot = self._working
-        read = ReadRecord(read_id_for(len(snapshot.reads) + 1), key, version, vt)
+        number = len(snapshot.reads) + 1
+        read = ReadRecord(read_id_for(number), key, version, _object(plain_from_json(data)), vt)
         self._working = replace(snapshot, reads=frozen({**snapshot.reads, read.read_id: read}))
         return read
+
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        found = [r for r in self._working.reads.values() if (r.key, r.version) == (key, version)]
+        return min(found, key=lambda r: int(r.read_id[2:])) if found else None
 
     def reads(self, read_ids: Iterable[str]) -> Mapping[str, ReadRecord]:
         known = self._working.reads

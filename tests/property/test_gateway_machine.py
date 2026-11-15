@@ -597,12 +597,12 @@ class GatewayMachine(RuleBasedStateMachine):
         # Two keys each, in an order that PostgreSQL's jsonb does not keep, so the Postgres
         # machines show that key order never changes a result.
         args: dict[str, str | int] = {"quantity": 2, "variant": variant}
-        quote = self.store.record_read("quote", quote_version, self.vt)
-        budget = self.store.record_read("budget", budget_version, self.vt)
+        quote = self.store.record_read("quote", quote_version, {}, self.vt)
+        budget = self.store.record_read("budget", budget_version, {}, self.vt)
         based_on: tuple[str, ...] = (quote.read_id, budget.read_id)
         if citing == "twice":
             # An older read of the same quote, cited first: the newest version counts.
-            older = self.store.record_read("quote", quote_version - 1, self.vt)
+            older = self.store.record_read("quote", quote_version - 1, {}, self.vt)
             based_on = (older.read_id, *based_on)
         elif citing == "missing":
             based_on = (quote.read_id,)

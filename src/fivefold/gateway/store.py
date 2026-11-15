@@ -141,12 +141,18 @@ class Transaction(ABC):
         """Reserve the next action's number in the run."""
 
     @abstractmethod
-    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
         """Record a read the gateway served, with the next read id."""
 
     @abstractmethod
     def reads(self, read_ids: Iterable[str]) -> Mapping[str, ReadRecord]:
         """The reads among `read_ids` that the gateway issued, by id."""
+
+    @abstractmethod
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        """The first read the gateway served of `key` at `version`, if any."""
 
     @abstractmethod
     def record_proposal(
@@ -245,17 +251,30 @@ class ActionStore(ABC):
 
     # Tools ------------------------------------------------------------------------------
 
-    def record_read(self, key: str, version: int, vt: int) -> ReadRecord:
-        """Record a read the gateway served; proposals cite it by its id (0001, item 13)."""
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
+        """Record a read the gateway served; proposals cite it by its id (0001, item 13).
+
+        `data` is the fact's value as JSON; it is kept as `storable` makes it.
+        """
         check_text(key, "a fact key")
         if isinstance(version, bool) or not isinstance(version, int):
             raise ValueError(f"the version of {key} must be an integer")
+        kept = storable(data)
+        if not isinstance(kept, dict):
+            raise ValueError(f"the value of {key} must be a JSON object")
         self._clock(vt)
         with self._transaction() as tx:
-            read = tx.record_read(key, version, vt)
+            read = tx.record_read(key, version, kept, vt)
             self._check(tx)
         self._vt = vt
         return read
+
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        """The first read the gateway served of `key` at `version`, if any."""
+        with self._reading() as tx:
+            return tx.read_of(key, version)
 
     def propose(self, call: WriteCall, vt: int) -> ActionResult | Refusal:
         """A write tool call that passed the schema check: admission and matching (0001).

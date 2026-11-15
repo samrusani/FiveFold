@@ -1,6 +1,8 @@
 -- Reads and write calls (decision record 0001, items 13 to 17).
 --
--- gw.read holds every read the gateway served; a proposal cites reads by their ids.
+-- gw.read holds every read the gateway served, with the fact's value, so a later check
+-- can compare the cited version's fields with the current ones (0004, dependency
+-- rules); a proposal cites reads by their ids.
 -- gw.proposal holds every write call with its outcome, admitted or refused. The gateway
 -- only ever adds rows to either table: ff_gw has no UPDATE or DELETE privilege on them,
 -- and triggers reject both. The run's state row numbers both, so ids have no gaps.
@@ -29,8 +31,11 @@ CREATE TABLE gw.read (
     read_id text PRIMARY KEY CHECK (read_id ~ '^R-[0-9]{4,}$'),
     key text NOT NULL,
     version bigint NOT NULL,
+    data jsonb NOT NULL CHECK (jsonb_typeof(data) = 'object'),
     vt bigint NOT NULL
 );
+
+CREATE INDEX read_by_fact ON gw.read (key, version);
 
 -- `args` holds the business arguments in normal form, or, for a call refused with
 -- invalid_args, the arguments as the agent sent them. `action_id` names the action the
