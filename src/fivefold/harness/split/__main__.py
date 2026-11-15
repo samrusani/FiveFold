@@ -53,12 +53,16 @@ import yaml
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import ScenarioError
 from fivefold.evaluator import RecordsError, result_json
-from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, MigrationError
+from fivefold.harness.migrations import (
+    DEFAULT_ADMIN_DSN,
+    TEMPLATE_DATABASE,
+    TEMPLATE_ENV,
+    MigrationError,
+)
 from fivefold.harness.split.credentials import AGENT
 from fivefold.harness.split.gateway import DEFAULT_ALLOWED_HOSTS, GatewayService, admin_api
 from fivefold.harness.split.lifecycle import (
     DEFAULT_MODEL,
-    DEFAULT_TEMPLATE,
     end_run,
     score_run,
     start_run,
@@ -116,8 +120,7 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--database", help="the run database's name (default: from the run id)")
     start.add_argument(
         "--template",
-        default=DEFAULT_TEMPLATE,
-        help=f"the migrated template database (default: {DEFAULT_TEMPLATE})",
+        help=f"the migrated template database (default: {TEMPLATE_ENV}, or {TEMPLATE_DATABASE})",
     )
     start.add_argument(
         "--replace",

@@ -28,11 +28,12 @@ Its inputs:
   (`fivefold.harness.live_options`).
 - `--out DIR`: the output directory. It must be new or empty, so a study never replaces
   another's files.
-- `--database-prefix` and `--keep-databases`: episode N runs in a fresh, migrated
-  database named `PREFIX_NNNN` (default prefix `fivefold_study`), dropped once the
-  episode ends unless `--keep-databases` is given. A kept database stays in the run
-  registry, so the viewer lists it (0012); a dropped one leaves it. The admin connection
-  comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`.
+- `--database-prefix` and `--keep-databases`: episode N runs in a fresh copy of the
+  migrated template database (`fivefold.harness.migrations.create_run_database`), named
+  `PREFIX_NNNN` (default prefix `fivefold_study`), dropped once the episode ends unless
+  `--keep-databases` is given. A kept database stays in the run registry, so the viewer
+  lists it (0012); a dropped one leaves it. The admin connection comes from `--dsn`, or
+  `FIVEFOLD_ADMIN_DSN`.
 
 A study never drops a database it did not create. Before it starts, it refuses names that
 are taken. Each episode then creates its database without dropping anything first, and a
@@ -108,10 +109,9 @@ from fivefold.harness.migrations import (
     MigrationError,
     bootstrap_server,
     check_database_name,
-    create_database,
+    create_run_database,
     database_lock,
     drop_database_locked,
-    migrate,
 )
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.registry import forget
@@ -428,21 +428,20 @@ def refused_calls(cassette: Cassette) -> int:
 def run_episode(
     admin_dsn: str, study: Study, episode: Episode, *, out: Path, database: str, keep: bool
 ) -> Outcome:
-    """Run `episode` in a fresh, migrated database `database`, and save its result, and
-    its cassette when the model is live, in `out`. The database is dropped once the run
-    ends, unless `keep`; a database the episode dropped leaves the run registry too.
+    """Run `episode` in `database`, a fresh copy of the migrated template database, and
+    save its result, and its cassette when the model is live, in `out`. The database is
+    dropped once the run ends, unless `keep`; a database the episode dropped leaves the
+    run registry too.
 
     Raises `ValueError` when `database` already exists: it is someone else's, so it is
     neither replaced nor dropped, and its registry row stays.
     """
     spec = episode.spec(study.scenario, study.model)
     try:
-        created = create_database(admin_dsn, database)
+        created = create_run_database(admin_dsn, database, DB_DIR / "migrations")
     except DatabaseExists:
         raise ValueError(taken(database)) from None
     try:
-        with psycopg.connect(created.dsn, autocommit=True) as conn:
-            migrate(conn, DB_DIR / "migrations")
         run = InprocRun(spec, created.dsn)
         asyncio.run(run.execute())
     finally:

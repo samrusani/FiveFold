@@ -1,4 +1,5 @@
-"""Naming the run registry and a run's database (0012), with no database."""
+"""Naming the run registry, the template database and a run's database (0009, 0012), with
+no database."""
 
 from __future__ import annotations
 
@@ -7,8 +8,11 @@ import pytest
 from fivefold.harness.migrations import (
     REGISTRY_DATABASE,
     REGISTRY_ENV,
+    TEMPLATE_DATABASE,
+    TEMPLATE_ENV,
     MigrationError,
     registry_database,
+    template_database,
 )
 from fivefold.harness.registry import RegistryError, database_of
 
@@ -24,6 +28,15 @@ def test_the_registry_is_fivefold_registry_unless_the_environment_names_another(
 def test_a_registry_name_postgres_would_change_is_refused(name: str) -> None:
     with pytest.raises(MigrationError):
         registry_database({REGISTRY_ENV: name})
+
+
+def test_the_template_is_fivefold_template_unless_the_environment_names_another() -> None:
+    assert TEMPLATE_DATABASE == "fivefold_template"
+    assert template_database({}) == "fivefold_template"
+    assert template_database({TEMPLATE_ENV: ""}) == "fivefold_template"
+    assert template_database({TEMPLATE_ENV: "fivefold_test_simtpl"}) == "fivefold_test_simtpl"
+    with pytest.raises(MigrationError):
+        template_database({TEMPLATE_ENV: "template-1"})
 
 
 def test_a_run_database_is_named_by_its_connection_string() -> None:

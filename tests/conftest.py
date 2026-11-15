@@ -11,8 +11,10 @@ Every database the tests create starts with FIVEFOLD_TEST_DB_PREFIX (default
 `fivefold_test`), at most 40 characters. Test runs that share one server at the same time
 need different prefixes, or they drop each other's databases. That includes the run
 registry (0012): the tests' runs register in `PREFIX_registry`, never in the registry a
-person's runs are in. A run database's name, the prefix, `_simtpl_` and the test's
-suffix, can pass the 63 bytes PostgreSQL keeps; then the suffix is shortened
+person's runs are in. It includes the template database run databases are copied from
+too: the tests' runs, the commands they run included, copy `PREFIX_simtpl`, never the
+template a person's runs are made from. A run database's name, the prefix, `_simtpl_` and
+the test's suffix, can pass the 63 bytes PostgreSQL keeps; then the suffix is shortened
 (`database_name`), so every prefix the check accepts works.
 """
 
@@ -30,7 +32,6 @@ from pathlib import Path
 import psycopg
 import pytest
 from hypothesis import settings
-from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from fivefold.domain.contracts import Contract
@@ -43,10 +44,13 @@ from fivefold.harness.migrations import (
     DATABASE_LOCK_KEY,
     DEFAULT_ADMIN_DSN,
     REGISTRY_ENV,
+    TEMPLATE_ENV,
     bootstrap,
+    create_run_database,
     drop_database,
     migrate,
     prepare_registry,
+    prepare_template,
     recreate_database,
 )
 from fivefold.harness.registry import forget
@@ -62,6 +66,9 @@ if not re.fullmatch(r"[a-z_][a-z0-9_]{0,39}", DB_PREFIX):
     raise ValueError("FIVEFOLD_TEST_DB_PREFIX must be at most 40 lowercase letters, digits or _")
 REGISTRY = f"{DB_PREFIX}_registry"
 """The run registry the tests' runs register in (0012)."""
+TEMPLATE = f"{DB_PREFIX}_simtpl"
+"""The migrated template database the tests' run databases are copied from (0009)."""
+MIGRATIONS = DB_DIR / "migrations"
 
 MAX_NAME_BYTES = 63
 """PostgreSQL keeps the first 63 bytes of a name (NAMEDATALEN - 1)."""
@@ -98,16 +105,21 @@ def db_prefix() -> str:
 @pytest.fixture(scope="session")
 def admin_dsn() -> Iterator[str]:
     """The admin connection string, after the component roles and a fresh run registry are
-    in place. While the session lasts, FIVEFOLD_REGISTRY_DB names the tests' registry."""
+    in place. While the session lasts, FIVEFOLD_REGISTRY_DB names the tests' registry and
+    FIVEFOLD_TEMPLATE_DB the tests' template, which starts afresh and is dropped at the
+    end."""
     dsn = os.environ.get("FIVEFOLD_ADMIN_DSN", DEFAULT_ADMIN_DSN)
     with psycopg.connect(dsn, autocommit=True) as conn:
         bootstrap(conn, DB_DIR / "bootstrap.sql")
     drop_database(dsn, REGISTRY)
+    drop_database(dsn, TEMPLATE)
     prepare_registry(dsn, DB_DIR / "registry", REGISTRY)
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv(REGISTRY_ENV, REGISTRY)
+        patch.setenv(TEMPLATE_ENV, TEMPLATE)
         yield dsn
     drop_database(dsn, REGISTRY)
+    drop_database(dsn, TEMPLATE)
 
 
 LOCK_WAIT_TIMEOUT_S = 30.0
@@ -329,28 +341,18 @@ def dev_data() -> dict[str, object]:
 
 
 @pytest.fixture(scope="session")
-def sim_template(admin_dsn: str) -> Iterator[str]:
-    """A migrated database that simulator tests clone, so each starts fresh and fast."""
-    name = f"{DB_PREFIX}_simtpl"
-    dsn = recreate_database(admin_dsn, name)
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        migrate(conn, DB_DIR / "migrations")
-    yield name
-    drop_database(admin_dsn, name)
+def sim_template(admin_dsn: str) -> str:
+    """The tests' migrated template database, which run databases are copied from, so each
+    starts fresh and fast. The session drops it at its end (`admin_dsn`)."""
+    return prepare_template(admin_dsn, MIGRATIONS, TEMPLATE)
 
 
 @pytest.fixture
 def sim_database(admin_dsn: str, sim_template: str) -> Iterator[str]:
     """A fresh migrated database for one simulator test, dropped afterwards. Yields its DSN."""
     name = f"{DB_PREFIX}_sim"
-    drop_database(admin_dsn, name)
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        conn.execute(
-            sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                sql.Identifier(name), sql.Identifier(sim_template)
-            )
-        )
-    yield make_conninfo(admin_dsn, dbname=name)
+    created = create_run_database(admin_dsn, name, MIGRATIONS, template=sim_template, replace=True)
+    yield created.dsn
     drop_database(admin_dsn, name)
 
 
@@ -394,15 +396,11 @@ def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], 
 
     def make(suffix: str) -> str:
         name = database_name(sim_template, suffix)
-        drop_database(admin_dsn, name)
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            conn.execute(
-                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                    sql.Identifier(name), sql.Identifier(sim_template)
-                )
-            )
+        created = create_run_database(
+            admin_dsn, name, MIGRATIONS, template=sim_template, replace=True
+        )
         made.append(name)
-        return make_conninfo(admin_dsn, dbname=name)
+        return created.dsn
 
     yield make
     for name in made:

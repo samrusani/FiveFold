@@ -13,10 +13,12 @@ Each demo runs B0 and G2 on the same scenario and seed and shows them side by si
 3. "Outcome unknown" (dev-001, C0): F2 drops the order's committed answer, and no
    resolver attests what happened.
 
-Every run gets its own database, recreated from scratch and migrated, as role `ff_*`
-connections need (0008), and its row in the run registry, so the viewer lists it
-(0012). The admin connection comes from `FIVEFOLD_ADMIN_DSN`, as for the tests. A demo
-needs no API key: the model is scripted (0009).
+Every run gets its own database, as role `ff_*` connections need (0008): a fresh copy of
+the migrated template database (0009, `fivefold.harness.migrations.create_run_database`),
+which replaces the database of the demo's last run. Each run writes its row in the run
+registry, so the viewer lists it (0012). The admin connection comes from
+`FIVEFOLD_ADMIN_DSN`, as for the tests. A demo needs no API key: the model is scripted
+(0009).
 
 The demo reads the gateway's records only to show what the gateway did and told the
 agent; the verdict comes from the evaluator, which never reads them to decide (0004).
@@ -47,8 +49,7 @@ from fivefold.evaluator import result_json
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
     bootstrap_server,
-    migrate,
-    recreate_database,
+    create_run_database,
 )
 from fivefold.harness.run import GATEWAY_CONFIGS, Config, InprocRun, RunSpec
 
@@ -299,11 +300,10 @@ def save_result(
 def run_demo(
     admin_dsn: str, demo: Demo, config: Config, seed: int, *, out: Path | None = None
 ) -> Summary:
-    """Run one demo in one configuration, in a fresh database, and summarize it. With
-    `out`, also save the run's result JSON there."""
-    dsn = recreate_database(admin_dsn, f"fivefold_demo_{demo.key}_{config.lower()}")
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        migrate(conn, DB_DIR / "migrations")
+    """Run one demo in one configuration, in a fresh copy of the template database, and
+    summarize it. With `out`, also save the run's result JSON there."""
+    name = f"fivefold_demo_{demo.key}_{config.lower()}"
+    dsn = create_run_database(admin_dsn, name, DB_DIR / "migrations", replace=True).dsn
     run = InprocRun(demo.spec(config, seed), dsn)
     result = asyncio.run(run.execute())
     if out is not None:

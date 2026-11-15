@@ -7,13 +7,16 @@
    split topology must be able to run it (`fivefold.harness.split.faults`). Seeded
    parameters are drawn from the run's seed, as in the inproc topology.
 2. It makes the run's database from the migrated template database (0009), first
-   migrating the template, or making it if it does not exist yet. A database that
-   already has the run's name is refused; with replace it is dropped first, but only if
-   it is this run's: its `harness.run` holds this run, or no run yet, as a copy of the
-   template whose start failed before recording its run. Run ids that differ only in
-   case or punctuation, such as those of scenarios `sample-a` and `sample_a`, get one
-   default name, so replace never drops a database that holds another run, or one that
-   is no run database. The check and the drop happen under the database lock.
+   migrating the template, or making it if it does not exist yet, as every run database
+   is made (`fivefold.harness.migrations.create_run_database`). The template is
+   FIVEFOLD_TEMPLATE_DB, or `fivefold_template`, unless the start names another. A
+   database that already has the run's name is refused; with replace it is dropped
+   first, but only if it is this run's: its `harness.run` holds this run, or no run yet,
+   as a copy of the template whose start failed before recording its run. Run ids that
+   differ only in case or punctuation, such as those of scenarios `sample-a` and
+   `sample_a`, get one default name, so replace never drops a database that holds
+   another run, or one that is no run database. The check and the drop happen under the
+   database lock.
 3. It records the run in `harness.run`, with topology `split`, model adapter `external`
    and the model the user names, and in the run registry, for the viewer (0012). It sets
    up the simulator's run with its credentials: the gateway in G1 and G2, the agent
@@ -43,7 +46,6 @@ from typing import Any
 
 import httpx
 import psycopg
-from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from fivefold.domain.contracts import Contract
@@ -60,12 +62,12 @@ from fivefold.harness.clock import HostClock
 from fivefold.harness.log import RunRecord, SharedPgHarnessLog
 from fivefold.harness.migrations import (
     Connection,
+    DatabaseExists,
     bootstrap_server,
     check_database_name,
-    database_lock,
+    create_run_database,
     drop_database_locked,
-    migrate,
-    recreate_database,
+    template_database,
 )
 from fivefold.harness.registry import RegistryEntry, register
 from fivefold.harness.rng import Generators
@@ -86,9 +88,6 @@ from fivefold.sim import SimConfig, setup_run
 
 ROOT = Path(__file__).resolve().parents[4]
 DB_DIR = ROOT / "db"
-
-DEFAULT_TEMPLATE = "fivefold_template"
-"""The migrated template database that run databases are made from (0009)."""
 
 DEFAULT_MODEL = "unknown"
 """The model a split run records when the user names none."""
@@ -136,12 +135,13 @@ def start_run(
     plan: Sequence[Mapping[str, Any]] | None = None,
     model: str = DEFAULT_MODEL,
     database: str | None = None,
-    template: str = DEFAULT_TEMPLATE,
+    template: str | None = None,
     replace: bool = False,
 ) -> SplitRun:
     """Make a split run and its directory; see the module. `plan` defaults to the
-    scenario's fault list. With `replace`, a run already in `run_dir`, and a database of
-    the same name that is this run's, are replaced; without it they are refused."""
+    scenario's fault list, and `template` to `template_database()`. With `replace`, a run
+    already in `run_dir`, and a database of the same name that is this run's, are
+    replaced; without it they are refused."""
     scenario_text = scenario_path.read_text(encoding="utf-8")
     scenario = load_scenario(scenario_text)
     entries = list(plan) if plan is not None else _plan_of(scenario)
@@ -152,6 +152,7 @@ def start_run(
     planned = seed_parameters(planned, Generators(seed).get("faults"))
     run_id = run_id_of(scenario, config, contract, seed)
     name = database if database is not None else default_database(run_id)
+    template = template_database() if template is None else template
     check_database_name(name)
     check_database_name(template)
     if name == template:
@@ -219,32 +220,25 @@ def _run_database(admin_dsn: str, name: str, template: str, *, run_id: str, repl
     """Make the run's database from the migrated template; return its admin DSN. The
     component roles and the run registry are made first, if they are missing.
 
-    The run database is replaced, when asked and when it is run `run_id`'s
-    (`_drop_this_runs`), and copied from the template, under the database lock that
-    every create and drop takes (`fivefold.harness.migrations`), so a study's cleanup
-    never sees the name half changed, and no other start makes it in between.
+    The template is made or migrated forward, the run database is replaced, when asked
+    and when it is run `run_id`'s (`_drop_this_runs`), and the template is copied, in one
+    hold of the database lock that every create and drop takes
+    (`fivefold.harness.migrations.create_run_database`), so a study's cleanup never sees
+    the name half changed, and no other start makes it in between.
     """
     bootstrap_server(admin_dsn, DB_DIR)
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        found = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (template,)).fetchone()
-    if found is None:
-        recreate_database(admin_dsn, template)
-    with psycopg.connect(make_conninfo(admin_dsn, dbname=template), autocommit=True) as conn:
-        migrate(conn, DB_DIR / "migrations")
-    with database_lock(admin_dsn) as conn:
+
+    def drop_this_runs(conn: Connection) -> None:
         if replace:
             _drop_this_runs(conn, admin_dsn, name, run_id)
-        try:
-            conn.execute(
-                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                    sql.Identifier(name), sql.Identifier(template)
-                )
-            )
-        except psycopg.errors.DuplicateDatabase:
-            raise RunDirError(
-                f"database {name} already exists: replace it, or name another"
-            ) from None
-    return make_conninfo(admin_dsn, dbname=name)
+
+    try:
+        created = create_run_database(
+            admin_dsn, name, DB_DIR / "migrations", template=template, before_copy=drop_this_runs
+        )
+    except DatabaseExists:
+        raise RunDirError(f"database {name} already exists: replace it, or name another") from None
+    return created.dsn
 
 
 def _drop_this_runs(conn: Connection, admin_dsn: str, name: str, run_id: str) -> None:
