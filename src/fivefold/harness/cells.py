@@ -3,7 +3,8 @@
 `faults/expected.yaml` lists every cell built so far: a fault variant, a contract level and
 a configuration, with the verdict the run must get. `cell_plan` turns a cell into the plan
 the run uses. A fault that acts on a message targets the purchase order's call, on the hop
-the configuration uses: `gw_sim` in G modes, `agent_sim` in B0.
+the configuration uses: `gw_sim` in G modes, `agent_sim` in B0. G1 and G2 have the same
+gateway points, so a G1 cell fires its fault where the G2 cell does (0006, 0008).
 
 The variants of a cell:
 
@@ -55,10 +56,12 @@ APPROVAL = "request_approval"
 
 TIMINGS: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
     "early": {
+        "G1": ("gw.dispatch.before_check", {}),
         "G2": ("gw.dispatch.before_check", {}),
         "B0": ("net.agent_sim.answer", {"api": APPROVAL}),
     },
     "late": {
+        "G1": ("net.gw_sim.request", {"api": ORDER}),
         "G2": ("net.gw_sim.request", {"api": ORDER}),
         "B0": ("net.agent_sim.request", {"api": ORDER}),
     },
@@ -72,6 +75,7 @@ F1_POINTS: dict[str, str] = {"a": "gw.dispatch.after_check", "b": "gw.dispatch.a
 """Where F1 crashes the gateway, by variant (0006, catalog)."""
 
 F12_HOPS: dict[str, frozenset[str]] = {
+    "G1": frozenset({"gw_sim", "agent_gw"}),
     "G2": frozenset({"gw_sim", "agent_gw"}),
     "B0": frozenset({"agent_sim"}),
 }

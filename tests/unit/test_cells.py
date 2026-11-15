@@ -59,6 +59,14 @@ def test_every_committed_cells_plan_is_one_the_catalog_and_the_run_accept(expect
         ("F12", "gw_sim", "G2", "net.gw_sim.request", {"api": "submit_purchase_order"}, None),
         ("F12", "agent_gw", "G2", "net.agent_gw.request", {"api": "submit_purchase_order"}, None),
         ("F12", "agent_sim", "B0", "net.agent_sim.request", {"api": "submit_purchase_order"}, None),
+        ("F6", "early", "G1", "gw.dispatch.before_check", {}, "early"),
+        ("F6", "late", "G1", "net.gw_sim.request", {"api": "submit_purchase_order"}, "late"),
+        ("F7", "early_harmless", "G1", "gw.dispatch.before_check", {}, "harmless"),
+        ("F12", "gw_sim", "G1", "net.gw_sim.request", {"api": "submit_purchase_order"}, None),
+        ("F12", "agent_gw", "G1", "net.agent_gw.request", {"api": "submit_purchase_order"}, None),
+        ("F1", "a", "G1", "gw.dispatch.after_check", {"api": "submit_purchase_order"}, "a"),
+        ("F1", "b", "G1", "gw.dispatch.after_record", {"api": "submit_purchase_order"}, "b"),
+        ("F3", None, "G1", "gw.dispatch.after_answer", {"api": "submit_purchase_order"}, None),
     ],
 )
 def test_a_cell_fires_its_fault_where_record_0006_says(
@@ -82,6 +90,7 @@ def test_a_cell_fires_its_fault_where_record_0006_says(
         ("F7", "price_up", "B0"),
         ("F12", "agent_sim", "G2"),
         ("F12", "gw_sim", "B0"),
+        ("F12", "agent_sim", "G1"),
         ("F1", "c", "G2"),
         ("F9", "other_args", "B0"),
         ("F8", None, "G2"),
