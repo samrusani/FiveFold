@@ -14,7 +14,9 @@ spends, and no clock here moves for it. It keeps its checkpoints in memory.
 As in the inproc topology, a call whose connection to the gateway closes raises
 `ConnectionError`, and the next call opens a new connection; a call with no answer within
 its timeout raises `TransportTimeout`; and a server error raises `ServerError`. LangGraph's
-default retry policy retries all three (0008).
+default retry policy retries all three (0008). A call the gateway refuses because the
+run's agents' phase is over raises `RunOver`, which it does not retry: the run has nothing
+more for the agent.
 
     python -m fivefold.agents.remote --scenario PATH --config G2 --contract C2 \\
         --gateway-url http://gateway:8000/mcp
@@ -62,12 +64,20 @@ from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.harness.clock import HostClock
 from fivefold.harness.log import JsonValue
 from fivefold.harness.scheduler import HostScheduler, Scheduler, SchedulerTimeout
+from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.transport import Hop, Reply, TransportTimeout
 
 WORKER = "agent-1"
 """The split run's one agent worker (0009)."""
 
 Config = Literal["B0", "G1", "G2"]
+
+
+class RunOver(RuntimeError):
+    """The gateway answered that the run's agents' phase is over, or that the run has
+    stopped (`fivefold.harness.split.SERVICE_STOPPED`): nothing the agent sends counts any
+    more. A `RuntimeError`, which LangGraph's default retry policy never retries
+    (langgraph 1.2.22, `langgraph/_internal/_retry.py`), so the worker ends at once."""
 
 
 # G1 and G2: the gateway's MCP endpoint over streamable HTTP ------------------------------------
@@ -109,6 +119,8 @@ class HttpGatewayConnection:
         try:
             return await within(self._scheduler, call, timeout_ms, what)
         except MCPError as error:
+            if error.code == SERVICE_STOPPED:
+                raise RunOver(f"{what}: {error.message}") from error
             if error.code == types.CONNECTION_CLOSED:
                 self.close()
                 raise ConnectionError(f"{what}: the connection to the gateway closed") from error
@@ -137,9 +149,11 @@ class HttpGatewayConnection:
             self._current = fresh
             try:
                 await within(self._scheduler, session.initialize(), self._timeout_ms, "initialize")
-            except BaseException:
+            except BaseException as error:
                 if self._current is fresh:
                     self.close()
+                if isinstance(error, MCPError) and error.code == SERVICE_STOPPED:
+                    raise RunOver(f"initialize: {error.message}") from error
                 raise
             return session
 

@@ -22,3 +22,13 @@ the fault points' code runs as it does in the inproc topology. Each service writ
 harness's records of the traffic it sees (`hops`), and fires the plan's faults at the
 points it owns, on the plan's counters (`faults`). Nothing here is deterministic.
 """
+
+SERVICE_STOPPED = -32019
+"""The JSON-RPC error code the gateway answers an agent's MCP request with once the run's
+agents' phase is over, or the run has stopped.
+
+It is an implementation-defined server error: JSON-RPC leaves -32000 to -32099 to servers,
+and MCP keeps -32020 to -32099 for its own codes (mcp 2.3.0, `mcp_types/jsonrpc.py`). The
+SDK uses -32000 and -32001 for its own ends of a call; -32000, `CONNECTION_CLOSED`, is how
+a client reads a closed connection, so it cannot also mean that the run is over. The SDK
+uses -32019 nowhere (checked in mcp 2.3.0 and mcp-types 2.3.0, and by a test)."""

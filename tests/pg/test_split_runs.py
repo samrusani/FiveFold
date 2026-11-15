@@ -34,10 +34,11 @@ import uvicorn
 import yaml
 from psycopg.conninfo import make_conninfo
 
-from fivefold.agents.remote import RemoteAgent, run_remote_agent
+from fivefold.agents.remote import HttpGatewayConnection, RemoteAgent, RunOver, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
 from fivefold.gateway.admin_api import TOKEN_VARIABLE
+from fivefold.harness.clock import HostClock
 from fivefold.harness.log import SharedPgHarnessLog
 from fivefold.harness.migrations import (
     create_database,
@@ -46,6 +47,7 @@ from fivefold.harness.migrations import (
     registry_database,
 )
 from fivefold.harness.registry import forget
+from fivefold.harness.scheduler import HostScheduler
 from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
@@ -607,6 +609,41 @@ def test_the_simulator_refuses_the_agents_identity_in_g_modes(split: Split) -> N
     assert writes == (0,)
     assert reads == [(GATEWAY,)]
     assert sorted(hops) == [("agent_sim", AGENT), ("gw_sim", GATEWAY)]
+
+
+def test_once_the_agents_phase_is_over_the_scripted_agent_is_told_so(split: Split) -> None:
+    """The gateway refuses an agent's MCP request once the agents' phase is over. It said
+    so with -32000, which mcp 2.3.0 reads as a closed connection, so the scripted agent
+    reconnected and its framework retried. It now gets a code the SDK does not use, and
+    the agent's call raises `RunOver`, which ends the worker."""
+    run = split.start("G2", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    gateway = serve(GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url).app())
+
+    async def told() -> Exception:
+        scheduler = HostScheduler(HostClock(HostClock.host_ms()))
+        connection = HttpGatewayConnection(scheduler, f"{gateway.url}/mcp", timeout_ms=5_000)
+        headers = {"authorization": f"Bearer {run.secret(HARNESS)}"}
+        try:
+            listed = await connection.list_tools()
+            async with httpx.AsyncClient() as client:
+                drained = await client.post(f"{gateway.url}/harness/drain", headers=headers)
+            assert drained.json() == {"status": "draining"}
+            try:
+                await connection.call_tool(listed.tools[0].name, {}, 5_000)
+            except Exception as error:
+                return error
+            raise AssertionError("the gateway served the agent after the agents' phase")
+        finally:
+            connection.close()
+
+    try:
+        error = asyncio.run(asyncio.wait_for(told(), AGENT_S))
+    finally:
+        gateway.stop()
+        simulator.stop()
+    assert isinstance(error, RunOver), repr(error)
+    assert "the run's agents' phase is over" in str(error)
 
 
 def _start(

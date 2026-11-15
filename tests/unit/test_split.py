@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import mcp_types.jsonrpc as jsonrpc
 import pytest
 import yaml
+from mcp.server import streamable_http as mcp_streamable_http
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import scenario_from_data
@@ -24,6 +26,7 @@ from fivefold.harness.clock import HostClock
 from fivefold.harness.log import MemoryHarnessLog
 from fivefold.harness.migrations import check_database_name
 from fivefold.harness.scheduler import HostScheduler, Scheduler
+from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
@@ -460,3 +463,19 @@ def test_a_message_cannot_be_logged_as_sent_later_than_now() -> None:
             body={},
             sent_vt=1,
         )
+
+
+# The code that tells the agent its run is over ---------------------------------------------------
+
+
+def test_the_stopped_runs_error_code_is_none_the_mcp_sdk_uses() -> None:
+    """The gateway answered an agent once the agents' phase was over with -32000, which
+    mcp 2.3.0 calls `CONNECTION_CLOSED`, so the scripted agent read the run's end as a
+    closed connection and reconnected. Its code is now one the SDK does not use."""
+    defined = {
+        value for name, value in vars(jsonrpc).items() if name.isupper() and isinstance(value, int)
+    }
+    defined.add(mcp_streamable_http.REQUEST_CANCELLED)
+    assert jsonrpc.CONNECTION_CLOSED in defined, "the scan finds the SDK's codes"
+    assert SERVICE_STOPPED not in defined
+    assert -32019 <= SERVICE_STOPPED <= -32000, "an implementation-defined server error"

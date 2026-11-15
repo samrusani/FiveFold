@@ -94,6 +94,7 @@ from fivefold.harness.log import ActorRecord, HarnessLog, JsonValue
 from fivefold.harness.mcp_link import Delivery, answer_label
 from fivefold.harness.reports import ReportSink
 from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
+from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.hops import SEQ_HEADER, Hops, answer_class
 from fivefold.harness.split.rundir import SplitRun
@@ -308,9 +309,6 @@ class AgentHop:
             fired.planned.param("copy_delay_ms"), arrive, label=f"deliver copy {copy.seq}"
         )
 
-
-SERVICE_STOPPED = -32000
-"""The JSON-RPC error code of a request still held when the run stops."""
 
 INVALID_PARAMS = -32602
 """JSON-RPC's code for invalid params: how the log names a request the SDK refused."""
