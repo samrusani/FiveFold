@@ -197,6 +197,60 @@ def test_loading_refuses_what_is_not_a_cassette(text: str) -> None:
         Cassette.from_text(text)
 
 
+def _header(**change: object) -> str:
+    """`EXAMPLE_TEXT` with its run header changed, as a canonical text."""
+    data = json.loads(EXAMPLE_TEXT)
+    data["run"].update(change)
+    return json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+
+
+def test_a_branch_s_header_names_its_parent_and_its_branch_point() -> None:
+    """Two more fields in the run header, in their sorted places; a cassette with no
+    parent writes neither, so its text is the one above, as before branches existed."""
+    parent = "dev-001-single-po.G2.C2.7"
+    branch = EXAMPLE.model_copy(
+        update={
+            "run": RunHeader.model_validate(
+                {
+                    **EXAMPLE.run.model_dump(),
+                    "run_id": f"{parent}.branch-1",
+                    "parent_run_id": parent,
+                    "branch_point": 1,
+                }
+            )
+        }
+    )
+    text = branch.text()
+    assert text == _header(run_id=f"{parent}.branch-1", parent_run_id=parent, branch_point=1)
+    assert '    "branch_point": 1,\n    "config": "G2",\n' in text
+    assert (
+        f'    }},\n    "parent_run_id": "{parent}",\n    "run_id": "{parent}.branch-1",\n' in text
+    )
+    assert Cassette.from_text(text) == branch
+    assert branch.digest() != EXAMPLE.digest()
+    assert "parent_run_id" not in EXAMPLE_TEXT and "branch_point" not in EXAMPLE_TEXT
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        pytest.param(_header(parent_run_id="x"), "not a cassette", id="a parent alone"),
+        pytest.param(_header(branch_point=1), "not a cassette", id="a branch point alone"),
+        pytest.param(
+            _header(parent_run_id="x", branch_point=-1), "not a cassette", id="a negative point"
+        ),
+        pytest.param(
+            _header(parent_run_id=None, branch_point=None), "canonical form", id="null fields"
+        ),
+    ],
+)
+def test_a_header_names_both_its_parent_and_its_branch_point_or_neither(
+    text: str, why: str
+) -> None:
+    with pytest.raises(CassetteError, match=why):
+        Cassette.from_text(text)
+
+
 @pytest.mark.parametrize(
     "value",
     [
