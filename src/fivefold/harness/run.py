@@ -1,7 +1,8 @@
 """One run in the inproc topology: every component on one scheduler (0009).
 
 A run is a scenario, a configuration, a contract level, a seed and a model (0009). This
-build runs B0 and G2 with the scripted model. `InprocRun.execute`:
+build runs B0 and G2 with the scripted model, recorded into a cassette or not, or with a
+cassette's replay (`fivefold.harness.models`). `InprocRun.execute`:
 
 1. records the run, sets up the simulator for the contract with the configuration's
    credentials (only the gateway in G2, the agent workers in B0; 0008), and serves the
@@ -22,7 +23,9 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
    the agents running for the drain window, `2 x (D + max_hop_latency) + L` (0009),
-   records the stop time and stops every component;
+   records the stop time, and a recording's cassette digest, and stops every component.
+   A replay that did not serve exactly its cassette's calls then fails the run with
+   `ReplayError` (0009);
 7. runs the evaluator, which scores the run from the simulator's and the harness's
    records and writes its result to the `eval` schema (0004, 0009).
 
@@ -41,11 +44,12 @@ Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import psycopg
+from langchain_core.language_models.chat_models import BaseChatModel
 from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.checkpoint import InlinePostgresSaver, connect
@@ -80,6 +84,7 @@ from fivefold.harness.clock import settle
 from fivefold.harness.fault_effects import SimulatorFaults, message_context
 from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
+from fivefold.harness.models import SCRIPTED, ModelSpec, RunModels
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
@@ -139,6 +144,8 @@ class RunSpec:
     seed: int
     plan: Sequence[Mapping[str, Any]] | None = None
     workers: int = 1
+    model: ModelSpec = SCRIPTED
+    """The model adapter: scripted, scripted with recording, or replay (0009)."""
 
     @property
     def run_id(self) -> str:
@@ -186,6 +193,7 @@ class InprocRun:
         self._tool_names = GATEWAY_TOOL_NAMES if spec.config == "G2" else BASELINE_TOOL_NAMES
         self._closing: list[Any] = []
         self._last_write_answers: dict[tuple[str, str], int] = {}
+        self.models = RunModels(spec.model)
 
     def _conninfo(self, role: str) -> str:
         return make_conninfo(self._dsn, user=role)
@@ -206,8 +214,9 @@ class InprocRun:
                 config=spec.config,
                 contract=str(spec.contract),  # type: ignore[arg-type]
                 seed=spec.seed,
-                model_adapter="scripted",
-                model="scripted",
+                model_adapter=self.models.adapter,
+                model=self.models.name,
+                cassette_digest=self.models.cassette_digest,
                 params={
                     "params": scenario.params.model_dump(mode="json"),
                     "plan": [entry.model_dump(mode="json") for entry in plan],
@@ -276,7 +285,9 @@ class InprocRun:
         self.simulator.control.abort_overdue(vt=self.scheduler.now)
         self.result.stopped_vt = self.scheduler.now
         self.log.run_stopped(self.scheduler.now)
+        self._models_stopped()
         await self._stop()
+        self.models.check()
         self.result.evaluation = evaluate_run(self._conninfo("ff_eval"), scenario)
         return self.result
 
@@ -461,12 +472,7 @@ class InprocRun:
 
     async def _worker(self, worker: str, *, resume: bool) -> None:
         scenario = self.spec.scenario
-        mode = Mode.GATEWAY if self.spec.config == "G2" else Mode.BASELINE
-        rank = self._ranks.get(worker, 0)
-        model = ScriptedModel(
-            lambda: scripted_policy(scenario.intents, mode=mode, rank=rank),
-            lambda: self.scheduler.sleep(scenario.params.think_ms),
-        )
+        model = self._chat_model(worker)
         spec = WorkerSpec(worker, scenario.task, scenario.budget.max_agent_steps)
 
         def on_step(step: int) -> None:
@@ -625,6 +631,34 @@ class InprocRun:
             restart_after_ms=restart_after_ms,
             restart=lambda: self._start_worker(worker, resume=True),
         )
+
+    # The model adapter (0009) -------------------------------------------------------------
+
+    def _chat_model(self, worker: str) -> BaseChatModel:
+        """The chat model of `worker`, built each time it starts or resumes, by the run's
+        model adapter (`fivefold.harness.models`)."""
+        scenario = self.spec.scenario
+        mode = Mode.GATEWAY if self.spec.config == "G2" else Mode.BASELINE
+        rank = self._ranks.get(worker, 0)
+
+        def think() -> Awaitable[None]:
+            return self.scheduler.sleep(scenario.params.think_ms)
+
+        def scripted() -> BaseChatModel:
+            return ScriptedModel(
+                lambda: scripted_policy(scenario.intents, mode=mode, rank=rank), think
+            )
+
+        return self.models.chat_model(worker, scripted=scripted, think=think)
+
+    def _models_stopped(self) -> None:
+        """The run has stopped: a recording's cassette is complete, and `harness.run`
+        records its digest."""
+        if self.log.run is None:
+            raise RuntimeError("the run was never recorded")
+        digest = self.models.stopped(self.log.run)
+        if digest is not None:
+            self.log.cassette_recorded(digest)
 
     # Stopping -------------------------------------------------------------------------------
 
