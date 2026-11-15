@@ -34,7 +34,9 @@ before anything runs, unless the environment sets `FIVEFOLD_LIVE=1`, the run has
 cap in USD with a price file (`Live.spend`), the price file prices the model, so the cap
 can always be enforced, and the environment sets the provider's API key, for a provider
 that needs one (`check_live`). The key's variable is checked for being set and nothing
-more: the provider's package reads the key itself (`fivefold.agents.live.PROVIDERS`).
+more: the provider's package reads the key itself (`fivefold.agents.live.PROVIDERS`). A
+live run is also refused while a variable that would send the provider's requests to
+another backend is set, such as `GOOGLE_GENAI_USE_VERTEXAI`.
 """
 
 from __future__ import annotations
@@ -167,7 +169,8 @@ def parent_of(spec: ModelSpec) -> Parent | None:
 
 class LiveRefused(ValueError):
     """A live run that must not start: the flag, the spend cap, the model's price or the
-    provider's API key is missing."""
+    provider's API key is missing, or a variable would send the provider's requests to
+    another backend."""
 
 
 def check_live_flag(environ: Mapping[str, str]) -> None:
@@ -180,11 +183,12 @@ def check_live_flag(environ: Mapping[str, str]) -> None:
 
 def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, ModelPrice]:
     """Refuse a live run unless `environ` sets `FIVEFOLD_LIVE=1`, the run has a spend cap
-    with a price file that prices its model, and `environ` sets the provider's API key;
-    return the meter and the price.
+    with a price file that prices its model, and `environ` sets the provider's API key and
+    none of the variables the provider refuses; return the meter and the price.
 
-    The key is checked last, and only for being set; a provider this build does not have
-    is refused when its model is built (`fivefold.agents.live.check_provider`).
+    The key and the refused variables are checked last, and only for being set; a
+    provider this build does not have is refused when its model is built
+    (`fivefold.agents.live.check_provider`).
     """
     check_live_flag(environ)
     if spec.spend is None:
@@ -197,6 +201,12 @@ def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, Mode
         raise LiveRefused(
             f"a live run of {spec.provider} needs its API key in {' or '.join(entry.keys)}"
         )
+    for name in entry.forbidden if entry is not None else ():
+        if environ.get(name):
+            raise LiveRefused(
+                f"a live run of {spec.provider} refuses {name}, which would send its requests"
+                " to another backend, with other credentials: unset it"
+            )
     return spec.spend, price
 
 

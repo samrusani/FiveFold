@@ -558,7 +558,7 @@ def test_the_command_checks_a_parameter_s_value_before_it_touches_a_database(
 DUMMY_KEY = "fivefold-dummy-key-never-sent"
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+@pytest.mark.parametrize("provider", ["anthropic", "openai", "google_genai"])
 def test_the_command_refuses_a_live_run_of_an_api_provider_before_it_touches_a_database(
     admin_dsn: str,
     db_prefix: str,
@@ -570,9 +570,13 @@ def test_the_command_refuses_a_live_run_of_an_api_provider_before_it_touches_a_d
     """No flag, no key or an empty one, an unpriced model, a key, a base URL or a header as
     a parameter, and a value the provider's model refuses: each is refused in one line,
     which never shows the key, before the run's database exists and with the network
-    closed; so is a run without a spend cap. Only the last check builds the provider's
-    model, with a dummy key, and nothing invokes it."""
-    (key,) = PROVIDERS[provider].keys
+    closed; so is a run without a spend cap, and a run of Google's model while a variable
+    that switches it to Vertex AI is set. Only the check of a parameter's value builds
+    the provider's model, with a dummy key, and nothing invokes it."""
+    entry = PROVIDERS[provider]
+    key, keys = entry.keys[0], " or ".join(entry.keys)
+    for name in (*entry.keys[1:], *entry.forbidden):
+        monkeypatch.delenv(name, raising=False)
     database = f"{db_prefix}_cli_{provider}"
     prices = tmp_path / "prices.yaml"
     prices.write_text(
@@ -596,17 +600,23 @@ def test_the_command_refuses_a_live_run_of_an_api_provider_before_it_touches_a_d
 
     refusals: list[tuple[dict[str, str | None], list[str], str]] = [
         ({"FIVEFOLD_LIVE": None}, args, "live runs are off: set FIVEFOLD_LIVE=1"),
-        ({key: None}, args, f"a live run of {provider} needs its API key in {key}"),
-        ({key: ""}, args, f"a live run of {provider} needs its API key in {key}"),
+        ({key: None}, args, f"a live run of {provider} needs its API key in {keys}"),
+        ({key: ""}, args, f"a live run of {provider} needs its API key in {keys}"),
         ({}, changed(f"{provider}:m", f"{provider}:other"), f"no price for {provider}:other"),
         ({}, changed("temperature=0", f"api_key={DUMMY_KEY}"), "not api_key"),
         ({}, changed("temperature=0", "base_url=http://x"), "not base_url"),
         ({}, changed("temperature=0", 'default_headers={"x": "y"}'), "not default_headers"),
         ({}, changed("temperature=0", 'temperature="hot"'), f"{provider} refuses temperature"),
     ]
+    refusals += [
+        ({name: "true"}, args, f"a live run of {provider} refuses {name}")
+        for name in entry.forbidden
+    ]
     for environ, argv, message in refusals:
         monkeypatch.setenv("FIVEFOLD_LIVE", "1")
         monkeypatch.setenv(key, DUMMY_KEY)
+        for name in entry.forbidden:
+            monkeypatch.delenv(name, raising=False)
         for name, value in environ.items():
             if value is None:
                 monkeypatch.delenv(name)

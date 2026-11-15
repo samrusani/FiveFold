@@ -1,5 +1,5 @@
-"""The live adapter's API providers, Anthropic and OpenAI, each through its LangChain
-package (0009, Models; CLAUDE.md, live runs and secrets).
+"""The live adapter's API providers, Anthropic, OpenAI and Google, each through its
+LangChain package (0009, Models; CLAUDE.md, live runs and secrets).
 
 No test reaches a provider, or the network at all. Each chat model is built with a dummy
 key from a monkeypatched environment, while every way to open a connection or look up a
@@ -25,11 +25,14 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableBinding
 from langchain_core.tools import BaseTool, StructuredTool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai._function_utils import convert_to_genai_function_declarations
 from langchain_openai import ChatOpenAI
 from pydantic import JsonValue
 
 from fivefold.agents.live import (
     ANTHROPIC_PARAMS,
+    GOOGLE_GENAI_PARAMS,
     OPENAI_PARAMS,
     PROVIDERS,
     LiveError,
@@ -47,12 +50,19 @@ from fivefold.harness.models import Live, LiveRefused, RunModels
 from fivefold.recorder.cassette import ModelInfo
 from fivefold.recorder.recording import RecordingModel
 
-API_PROVIDERS: Final = ("anthropic", "openai")
+API_PROVIDERS: Final = ("anthropic", "openai", "google_genai")
 DUMMY_KEY: Final = "fivefold-dummy-key-never-sent"
-KEYS: Final = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+KEYS: Final = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "google_genai": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+}
+"""The variables each provider's package reads its key from; a test sets the first."""
+
 CHAT_MODELS: Final[dict[str, type[BaseChatModel]]] = {
     "anthropic": ChatAnthropic,
     "openai": ChatOpenAI,
+    "google_genai": ChatGoogleGenerativeAI,
 }
 GENERATION: Final = {
     "anthropic": {"max_tokens", "temperature", "top_k", "top_p", "thinking", "reasoning_effort"},
@@ -65,16 +75,49 @@ GENERATION: Final = {
         "frequency_penalty",
         "reasoning_effort",
     },
+    "google_genai": {
+        "max_output_tokens",
+        "temperature",
+        "top_k",
+        "top_p",
+        "seed",
+        "presence_penalty",
+        "frequency_penalty",
+        "thinking_budget",
+        "reasoning_effort",
+    },
 }
 """What each provider's parameters change: the sampling, the seed, the output limit and
 the reasoning. Changing a list means changing this test too."""
 
+OUTPUT_LIMIT: Final = {
+    "anthropic": "max_tokens",
+    "openai": "max_tokens",
+    "google_genai": "max_output_tokens",
+}
+
 SETTING: Final = re.compile(
     r"key|secret|url|base|header|proxy|client|kwargs|body|organization|project|timeout"
-    r"|retries|query|socket|stream|mcp|betas|gateway"
+    r"|retries|query|socket|stream|mcp|betas|gateway|credential|vertex|location|api_version"
 )
 """Names of the settings a live run must never set: keys, URLs, headers, clients,
-pass-through mappings and transport settings."""
+credentials, backends, pass-through mappings and transport settings."""
+
+SETTINGS: Final = {
+    "anthropic": {"api_key", "base_url", "default_headers", "model_kwargs"},
+    "openai": {"api_key", "base_url", "default_headers", "model_kwargs"},
+    "google_genai": {
+        "api_key",
+        "base_url",
+        "additional_headers",
+        "client_args",
+        "credentials",
+        "vertexai",
+        "project",
+        "model_kwargs",
+    },
+}
+"""Settings of each provider's model that the pattern must find."""
 
 ENVIRONMENT: Final = (
     "ANTHROPIC_API_URL",
@@ -87,6 +130,12 @@ ENVIRONMENT: Final = (
     "OPENAI_PROJECT_ID",
     "OPENAI_PROXY",
     "OPENAI_CUSTOM_HEADERS",
+    "GOOGLE_GEMINI_BASE_URL",
+    "GOOGLE_VERTEX_BASE_URL",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
     "LANGSMITH_GATEWAY",
 )
 """Variables that would change where a provider's model sends its requests."""
@@ -113,8 +162,10 @@ def sealed(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.setattr(chat_model, method, never)
     for name in ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
-    for name in KEYS.values():
-        monkeypatch.setenv(name, DUMMY_KEY)
+    for first, *others in KEYS.values():
+        monkeypatch.setenv(first, DUMMY_KEY)
+        for name in others:
+            monkeypatch.delenv(name, raising=False)
 
 
 def price_file(provider: str) -> PriceFile:
@@ -141,13 +192,28 @@ def quote_tool() -> BaseTool:
     )
 
 
-def bound_tool_names(provider: str, chat: BaseChatModel, tools: Sequence[BaseTool]) -> list[str]:
-    """The names of `tools` as `chat` binds them, in its provider's tool format."""
+def bound_tools(chat: BaseChatModel, tools: Sequence[BaseTool]) -> list[dict[str, Any]]:
+    """`tools` as `chat` binds them."""
     bound = chat.bind_tools(tools)
     assert isinstance(bound, RunnableBinding)
     formatted: list[dict[str, Any]] = bound.kwargs["tools"]
+    return formatted
+
+
+def bound_tool_names(provider: str, chat: BaseChatModel, tools: Sequence[BaseTool]) -> list[str]:
+    """The names of `tools` in the format `chat` sends them in. Anthropic's model binds
+    its own format; Google's binds OpenAI's and converts it for each request
+    (`_format_tools`, langchain-google-genai 4.5.0), so this converts it the same way."""
+    formatted = bound_tools(chat, tools)
     if provider == "anthropic":
         return [tool["name"] for tool in formatted]
+    if provider == "google_genai":
+        converted = convert_to_genai_function_declarations(formatted)
+        return [
+            str(declaration.name)
+            for tool in converted
+            for declaration in tool.function_declarations or []
+        ]
     return [tool["function"]["name"] for tool in formatted]
 
 
@@ -221,6 +287,33 @@ def test_the_openai_chat_model_is_built_from_its_environment_and_sends_nothing()
     assert bound_tool_names("openai", chat, [quote_tool()]) == ["get_quote"]
 
 
+def test_the_google_genai_chat_model_is_built_from_its_environment_and_sends_nothing() -> None:
+    params: dict[str, JsonValue] = {
+        "max_output_tokens": 1024,
+        "temperature": 0.0,
+        "top_k": 40,
+        "top_p": 0.9,
+        "seed": 7,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "thinking_budget": 0,
+        "reasoning_effort": "low",
+    }
+    assert set(params) == GOOGLE_GENAI_PARAMS
+    chat = provider_model("google_genai", "m", params)
+    assert isinstance(chat, ChatGoogleGenerativeAI)
+    assert chat.model == "m"
+    assert {name: getattr(chat, name) for name in params} == params
+    assert chat.model_kwargs == {}, "every parameter sets a field; none passes through"
+    key = chat.google_api_key
+    assert key is not None and key.get_secret_value() == DUMMY_KEY, "read from the environment"
+    assert chat.client is not None and chat.client.vertexai is False, "the Gemini API"
+    assert chat.base_url is None and chat.credentials is None and chat.project is None
+    assert chat.additional_headers == {"Connection": "close"}, "no connection outlives its run"
+    assert DUMMY_KEY not in repr(chat) and DUMMY_KEY not in str(chat.model_dump())
+    assert bound_tool_names("google_genai", chat, [quote_tool()]) == ["get_quote"]
+
+
 @pytest.mark.parametrize("provider", API_PROVIDERS)
 def test_a_value_a_provider_refuses_is_refused_in_one_line(provider: str) -> None:
     with pytest.raises(LiveError, match=f"{provider} refuses temperature") as refused:
@@ -234,20 +327,20 @@ def test_a_value_a_provider_refuses_is_refused_in_one_line(provider: str) -> Non
 @pytest.mark.parametrize("provider", API_PROVIDERS)
 def test_each_provider_accepts_only_generation_parameters(provider: str) -> None:
     """A live run may set what the model generates and nothing else: no key, base URL,
-    header, client or pass-through mapping, so none can reach a cassette, which records
-    every parameter, `harness.run` or a printed line."""
+    header, client, credential, backend or pass-through mapping, so none can reach a
+    cassette, which records every parameter, `harness.run` or a printed line."""
     entry, chat_model = PROVIDERS[provider], CHAT_MODELS[provider]
     assert entry.params == GENERATION[provider]
-    assert entry.keys == (KEYS[provider],)
+    assert entry.keys == KEYS[provider]
     fields = chat_model.model_fields
     assert entry.params <= set(fields), "each is a field of the chat model, which it applies"
     spellings = set(fields) | {field.alias for field in fields.values() if field.alias}
     settings = sorted(name for name in spellings if SETTING.search(name))
-    assert {"api_key", "base_url", "default_headers", "model_kwargs"} <= set(settings)
-    secrets = set(provider_model(provider, "m", {}).lc_secrets)
-    assert secrets and secrets <= set(settings)
+    assert SETTINGS[provider] <= set(settings)
     assert not entry.params & set(settings)
-    for name in settings:
+    secrets = sorted(provider_model(provider, "m", {}).lc_secrets)
+    assert secrets
+    for name in [*settings, *secrets]:
         with pytest.raises(LiveError, match=f"accepts the parameters .*, not {name}$"):
             check_provider(provider, {name: None})
 
@@ -257,7 +350,8 @@ def test_each_provider_accepts_only_generation_parameters(provider: str) -> None
 def test_each_provider_takes_every_tool_of_each_tool_surface(provider: str, surface: str) -> None:
     """The tools the agent's graph binds, with their real schemas, all reach the provider's
     format: the gateway's, as MCP lists them in G1 and G2, and B0's, at C1 too. Anthropic's
-    model would drop a tool whose schema has a top-level `anyOf` or `oneOf`."""
+    model would drop a tool whose schema has a top-level `anyOf` or `oneOf`, and Google's
+    converts each schema into a function declaration of its own."""
 
     async def call(**arguments: Any) -> str:
         return ""
@@ -308,8 +402,8 @@ def never_scripted(its_think: Think) -> BaseChatModel:
 def test_a_live_run_of_each_provider_records_its_parameters_and_never_its_key(
     provider: str,
 ) -> None:
-    params: dict[str, JsonValue] = {"temperature": 0, "max_tokens": 256}
-    flag_and_key = {"FIVEFOLD_LIVE": "1", KEYS[provider]: DUMMY_KEY}
+    params: dict[str, JsonValue] = {"temperature": 0, OUTPUT_LIMIT[provider]: 256}
+    flag_and_key = {"FIVEFOLD_LIVE": "1", KEYS[provider][0]: DUMMY_KEY}
     meter = SpendMeter(Decimal(1), price_file(provider))
     models = RunModels(Live(provider, "m", params, spend=meter), environ=flag_and_key)
     assert (models.adapter, models.name) == ("live", f"{provider}:m")
@@ -339,8 +433,9 @@ def test_a_live_run_of_each_provider_records_its_parameters_and_never_its_key(
 def test_a_live_run_of_each_provider_is_refused_before_its_model_is_built(
     provider: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No flag, no spend cap, an unpriced model, no key and a setting as a parameter are
-    each refused before the provider's model is built, so nothing runs."""
+    """No flag, no spend cap, an unpriced model, no key, a setting as a parameter, and a
+    variable that would send the requests elsewhere are each refused before the
+    provider's model is built, so nothing runs."""
     entry = PROVIDERS[provider]
     built: list[str] = []
 
@@ -348,8 +443,10 @@ def test_a_live_run_of_each_provider_is_refused_before_its_model_is_built(
         built.append(model)
         return entry.build(model, params)
 
-    monkeypatch.setitem(PROVIDERS, provider, Provider(spy, entry.params, entry.keys))
-    key = KEYS[provider]
+    monkeypatch.setitem(
+        PROVIDERS, provider, Provider(spy, entry.params, entry.keys, entry.forbidden)
+    )
+    key, keys = KEYS[provider][0], " or ".join(KEYS[provider])
     meter = SpendMeter(Decimal(1), price_file(provider))
     flag, flag_and_key = {"FIVEFOLD_LIVE": "1"}, {"FIVEFOLD_LIVE": "1", key: DUMMY_KEY}
     refusals: list[tuple[Live, dict[str, str], type[ValueError], str]] = [
@@ -365,9 +462,9 @@ def test_a_live_run_of_each_provider_is_refused_before_its_model_is_built(
             Live(provider, "m", spend=meter),
             flag,
             LiveRefused,
-            f"a live run of {provider} needs its API key in {key}",
+            f"a live run of {provider} needs its API key in {keys}",
         ),
-        (Live(provider, "m", spend=meter), {**flag, key: ""}, LiveRefused, f"key in {key}"),
+        (Live(provider, "m", spend=meter), {**flag, key: ""}, LiveRefused, f"key in {keys}"),
         (
             Live(provider, "m", {"base_url": "http://x"}, spend=meter),
             flag_and_key,
@@ -381,13 +478,43 @@ def test_a_live_run_of_each_provider_is_refused_before_its_model_is_built(
             "not api_key",
         ),
     ]
+    refusals += [
+        (
+            Live(provider, "m", spend=meter),
+            {**flag_and_key, name: "true"},
+            LiveRefused,
+            f"a live run of {provider} refuses {name}",
+        )
+        for name in entry.forbidden
+    ]
     for spec, environ, error, message in refusals:
         with pytest.raises(error, match=re.escape(message)) as refused:
             RunModels(spec, environ=environ)
-        assert DUMMY_KEY not in str(refused.value)
+        assert DUMMY_KEY not in str(refused.value) and "\n" not in str(refused.value)
     assert built == []
     RunModels(Live(provider, "m", spend=meter), environ=flag_and_key)
     assert built == ["m"], "with everything in place, the model is built"
+
+
+def test_google_genai_refuses_both_variables_that_switch_it_to_vertex_ai() -> None:
+    """langchain-google-genai 4.5.0 picks Vertex AI when `GOOGLE_GENAI_USE_VERTEXAI` is
+    true, and google-genai 3.3.0's client does so again when either it or
+    `GOOGLE_GENAI_USE_ENTERPRISE` is true, with Google's default credentials. A run is
+    refused while either is set, whatever its value."""
+    assert PROVIDERS["google_genai"].forbidden == (
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+    )
+    assert PROVIDERS["anthropic"].forbidden == PROVIDERS["openai"].forbidden == ()
+    meter = SpendMeter(Decimal(1), price_file("google_genai"))
+    flag_and_key = {"FIVEFOLD_LIVE": "1", "GEMINI_API_KEY": DUMMY_KEY}
+    for value in ("true", "1", "false"):
+        with pytest.raises(LiveRefused, match="refuses GOOGLE_GENAI_USE_ENTERPRISE"):
+            RunModels(
+                Live("google_genai", "m", spend=meter),
+                environ={**flag_and_key, "GOOGLE_GENAI_USE_ENTERPRISE": value},
+            )
+    RunModels(Live("google_genai", "m", spend=meter), environ=flag_and_key)
 
 
 def test_a_provider_with_no_key_variables_needs_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,4 +529,4 @@ def test_a_provider_with_no_key_variables_needs_no_key(monkeypatch: pytest.Monke
     meter = SpendMeter(Decimal(1), price_file("keyless"))
     RunModels(Live("keyless", "m", spend=meter), environ={"FIVEFOLD_LIVE": "1"})
     assert events == ["m"]
-    assert PROVIDERS["ollama"].keys == ()
+    assert PROVIDERS["ollama"].keys == () and PROVIDERS["ollama"].forbidden == ()

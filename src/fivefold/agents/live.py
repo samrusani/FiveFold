@@ -16,9 +16,9 @@ flight, no event fires, so no other worker's think can end and send another. Eac
 is checked just before it is sent, once every earlier call has been charged. So the
 spend passes the cap by at most one call's cost: its input tokens at the input price plus
 its output tokens at the output price. The provider's output limit bounds the output:
-`num_predict` for Ollama, `max_tokens` for Anthropic and OpenAI. A reply that reports no
-usage, from a model that is not free, makes the spend unknown, and the cap then counts as
-reached.
+`num_predict` for Ollama, `max_tokens` for Anthropic and OpenAI, `max_output_tokens` for
+Google. A reply that reports no usage, from a model that is not free, makes the spend
+unknown, and the cap then counts as reached.
 
 The harness records every live call into the run's cassette (0009), a refused one too, so
 the replay adapter serves the same replies and the run plays back with no network. A call
@@ -34,11 +34,17 @@ the base URL from its own environment variables:
 - `anthropic`, through langchain-anthropic: the key from `ANTHROPIC_API_KEY`; the base URL
   from `ANTHROPIC_API_URL` or `ANTHROPIC_BASE_URL`, or else Anthropic's API;
 - `openai`, through langchain-openai: the key from `OPENAI_API_KEY`; the base URL from
-  `OPENAI_API_BASE` or `OPENAI_BASE_URL`, or else OpenAI's API.
+  `OPENAI_API_BASE` or `OPENAI_BASE_URL`, or else OpenAI's API;
+- `google_genai`, through langchain-google-genai and the `google-genai` package: the key
+  from `GOOGLE_API_KEY` or `GEMINI_API_KEY`; the base URL from `GOOGLE_GEMINI_BASE_URL`, or
+  else Google's Gemini API.
 
 Nothing here passes, prints or records a key or a base URL. A live run of a provider that
 needs a key is refused unless one of its key variables is set, which is all that the
-check reads (`fivefold.harness.models.check_live`).
+check reads (`fivefold.harness.models.check_live`). A live run of `google_genai` is also
+refused while `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_ENTERPRISE` is set: either
+one sends its requests to Vertex AI instead, with Google's default credentials
+(`Provider.forbidden`).
 
 Each run executes on an event loop of its own (`asyncio.run`), but langchain-anthropic
 1.7.10 and langchain-openai 1.8.0 keep one async HTTP client for the whole process: each
@@ -53,13 +59,22 @@ it. Checked in h11 0.16.0 (`_connection.py`, `_keep_alive`): a request with that
 turns keep-alive off; and in httpcore2 2.16.0 (`_async/http11.py`, `_response_closed`):
 the client then closes the connection once the reply ends, whatever the server does.
 
+langchain-google-genai 4.5.0 builds a google-genai client for each model, so each run's
+client is new. But google-genai 3.3.0 closes a collected async client on whatever event
+loop is running at the time (`AsyncHttpx2Client.__del__`, `_api_client.py`). Observed
+against a local server: an earlier run's client, collected during a later run, failed
+there on the connections it kept, and one model called from a second loop failed with
+`RuntimeError: Event loop is closed`. So the Google model sends the same header,
+through `additional_headers`, and keeps no connection either.
+
 To add a provider:
 
 1. add its LangChain chat model package as an exact dependency, in a commit of its own
    that changes no other locked version;
 2. add an entry to `PROVIDERS`: a function that builds the chat model from the model's
-   name and parameters, the names of the generation parameters it accepts, and the
-   variables its package reads its key from;
+   name and parameters, the names of the generation parameters it accepts, the
+   variables its package reads its key from, and any variable that would send its
+   requests elsewhere;
 3. add the provider's prices, with their date, to the price file the runs use.
 
 Checked in langchain-ollama 1.1.0 (`chat_models.py`): `ChatOllama(model=...)` takes
@@ -97,6 +112,24 @@ need it, to the Responses API (`_use_responses_api`), and the reply's `usage_met
 holds `input_tokens` and `output_tokens` from either (`_create_usage_metadata`,
 `_create_usage_metadata_responses`).
 
+Checked in langchain-google-genai 4.5.0 (`_common.py`, `chat_models.py`):
+`ChatGoogleGenerativeAI(model=...)` takes `max_output_tokens`, `temperature`, `top_k`,
+`top_p`, `seed`, `presence_penalty`, `frequency_penalty`, `thinking_budget` and
+`reasoning_effort`, and puts any argument it does not know into `model_kwargs`
+(`build_extra`); the key comes from `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+(`secret_from_env`, then `_apply_gateway_config`); `_determine_backend` picks Vertex AI
+when `GOOGLE_GENAI_USE_VERTEXAI` is true, and google-genai 3.3.0's client does so again
+when it or `GOOGLE_GENAI_USE_ENTERPRISE` is true (`BaseApiClient.__init__`,
+`_api_client.py`); for the Gemini API, `validate_environment` builds a `Client` with the
+key, which loads no default credentials and sends nothing until the first call;
+`bind_tools` binds the tools in OpenAI's format, and each request converts them with
+`convert_to_genai_function_declarations` (`_format_tools`), which drops
+`additionalProperties` from a schema; `_agenerate` sends one `generate_content`, which
+google-genai tries up to `max_retries` times (default 6, `HttpRetryOptions`, through
+tenacity); the reply's `usage_metadata` holds `input_tokens` (the prompt's and tool-use
+prompt's tokens) and `output_tokens` (the candidates' and thoughts' tokens), and is None
+when the reply reports none (`_response_to_result`).
+
 Checked in langchain-core 1.8.0: `UsageMetadata` (`messages/ai.py`); `ainvoke` streams
 only when asked to, or when a streaming callback is attached (`_should_stream`,
 `language_models/chat_models.py`). Checked in langgraph 1.2.22 (`pregel/main.py`): a graph
@@ -119,6 +152,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from pydantic import JsonValue, PrivateAttr, ValidationError
@@ -156,8 +190,8 @@ class LiveError(ValueError):
 
 @dataclass(frozen=True)
 class Provider:
-    """A live provider: how to build its chat model, the parameters it accepts, and where
-    its package reads its API key.
+    """A live provider: how to build its chat model, the parameters it accepts, where its
+    package reads its API key, and the variables it refuses.
 
     Only generation parameters are accepted. A key, a base URL, a header or a client
     setting never is: each comes from the provider's own environment variables, so no
@@ -170,6 +204,9 @@ class Provider:
     keys: tuple[str, ...] = ()
     """The environment variables the provider's package reads its API key from, any one of
     which is enough; none for a provider that needs no key."""
+    forbidden: tuple[str, ...] = ()
+    """Environment variables that would send the provider's requests to another backend,
+    with other credentials; a live run is refused while one is set."""
 
 
 def _ollama(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
@@ -190,6 +227,13 @@ def _anthropic(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
 def _openai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
     arguments: dict[str, Any] = dict(params)
     return ChatOpenAI(model_name=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
+
+
+def _google_genai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    arguments: dict[str, Any] = dict(params)
+    return ChatGoogleGenerativeAI(
+        model=model, additional_headers=dict(CLOSE_AFTER_REPLY), **arguments
+    )
 
 
 OLLAMA_PARAMS: Final = frozenset(
@@ -225,10 +269,32 @@ OPENAI_PARAMS: Final = frozenset(
 )
 """The `ChatOpenAI` parameters a live run may set; each changes what the model generates."""
 
+GOOGLE_GENAI_PARAMS: Final = frozenset(
+    {
+        "max_output_tokens",
+        "temperature",
+        "top_k",
+        "top_p",
+        "seed",
+        "presence_penalty",
+        "frequency_penalty",
+        "thinking_budget",
+        "reasoning_effort",
+    }
+)
+"""The `ChatGoogleGenerativeAI` parameters a live run may set; each changes what the model
+generates."""
+
 PROVIDERS: dict[str, Provider] = {
     "ollama": Provider(_ollama, OLLAMA_PARAMS),
     "anthropic": Provider(_anthropic, ANTHROPIC_PARAMS, ("ANTHROPIC_API_KEY",)),
     "openai": Provider(_openai, OPENAI_PARAMS, ("OPENAI_API_KEY",)),
+    "google_genai": Provider(
+        _google_genai,
+        GOOGLE_GENAI_PARAMS,
+        ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+        ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE"),
+    ),
 }
 """The live providers, by name."""
 
