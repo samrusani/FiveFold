@@ -40,6 +40,9 @@ from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
 
 _S = ActionState
 
+_DEAD_AUTHORITY = frozenset({ApprovalStatus.DENIED, ApprovalStatus.REVOKED, ApprovalStatus.EXPIRED})
+"""Approval answers that reject a pending action whatever its basis (0002, 0010)."""
+
 
 class Freshness(Protocol):
     """Checks an action's basis against facts now (0004, dependency rules)."""
@@ -186,6 +189,9 @@ class Dispatcher:
     # PendingApproval: poll, and time out after approval_wait_ms (T4, T5) -------------------
 
     async def _pending(self, action: Action) -> None:
+        """One poll. A decision that needs no basis is recorded before any fact is read,
+        so an unreachable fact cannot hold back a denial, a revocation, an expiry or the
+        approval timeout."""
         view = self._store.view(action.action_id)
         grant = view.grant
         if grant is None:
@@ -194,18 +200,22 @@ class Dispatcher:
         seen = view.last_seq
         try:
             approval = await self._destination.approval(grant.approval_id)
+        except Unreachable:
+            await self._retry_later()
+            return
+        status = approval.status
+        if status is ApprovalStatus.PENDING and self._now() >= due:
+            self._store.time_out_approval(action.action_id, status, self._now(), seen_seq=seen)
+            return
+        if status in _DEAD_AUTHORITY:
+            self._store.poll_approval(action.action_id, status, None, self._now(), seen_seq=seen)
+            return
+        try:
             basis = self._freshness.check(action, await self._facts(action), full=True)
         except Unreachable:
             await self._retry_later()
             return
-        if approval.status is ApprovalStatus.PENDING and self._now() >= due:
-            self._store.time_out_approval(
-                action.action_id, approval.status, self._now(), seen_seq=seen
-            )
-            return
-        self._store.poll_approval(
-            action.action_id, approval.status, basis, self._now(), seen_seq=seen
-        )
+        self._store.poll_approval(action.action_id, status, basis, self._now(), seen_seq=seen)
         if self._store.view(action.action_id).action.state is _S.PENDING_APPROVAL:
             await self._scheduler.sleep(
                 min(self._timing.approval_poll_ms, max(1, due - self._now()))

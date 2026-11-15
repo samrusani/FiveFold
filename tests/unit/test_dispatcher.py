@@ -8,7 +8,7 @@ their virtual times are pinned.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from fivefold.domain.contracts import Contract, ContractParams
@@ -310,3 +310,39 @@ def test_wait_returns_at_the_wanted_state_or_when_time_is_up() -> None:
 
 def _state(run: Run, action_id: str) -> ActionState:
     return run.store.view(action_id).action.state
+
+
+def _pending_then(run: Run, decide: Callable[[str], None], at: int) -> str:
+    """Propose with approval pending; at `at`, decide and make every fact read fail."""
+    run.world.policy = ApprovalStatus.PENDING
+
+    def later(action_id: str) -> None:
+        decide(f"APR-{action_id[2:]}")
+        run.world.unreachable_checks = 10**6
+
+    async def main() -> str:
+        action_id = run.propose()
+        run.scheduler.call_at(at, lambda: later(action_id))
+        await run.scheduler.run(deadline_ms=60_000)
+        return action_id
+
+    return asyncio.run(main())
+
+
+def test_a_denial_is_recorded_even_when_facts_cannot_be_read() -> None:
+    run = Run()
+    action_id = _pending_then(
+        run,
+        lambda approval_id: run.world.approvals.__setitem__(approval_id, ApprovalStatus.DENIED),
+        3_000,
+    )
+    view = run.store.view(action_id)
+    assert (view.action.state, run.reasons(action_id)[-1]) == (S.REJECTED, "approval_denied")
+    assert view.events[-1].vt < 3_000 + 500 + 4 * HOP, "at the next poll, not at the timeout"
+
+
+def test_the_approval_timeout_needs_no_fact_read() -> None:
+    run = Run()
+    action_id = _pending_then(run, lambda approval_id: None, 1_000)
+    view = run.store.view(action_id)
+    assert (view.action.state, run.reasons(action_id)[-1]) == (S.REJECTED, "approval_timeout")
