@@ -377,3 +377,49 @@ def test_a_copy_still_due_when_the_agent_crashes_reaches_the_gateway() -> None:
     assert copy.delivered_vt > request.sent_vt + rig.transport.max_hop_latency_ms + 1
     assert rig.handled == ["REQ-1", "REQ-1"], "the gateway served the late copy too"
     assert rig.server_ended and rig.server_ended[0] > copy.delivered_vt
+
+
+class CopyFirstRig(Rig):
+    """A gateway that names which of its calls each answer is for, and answers its second
+    call before its first."""
+
+    def server(self) -> Server[Any]:
+        calls: list[int] = []
+
+        async def list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
+            schema = {"type": "object", "properties": {"intent_id": {"type": "string"}}}
+            return types.ListToolsResult(tools=[types.Tool(name="propose", input_schema=schema)])
+
+        async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
+            calls.append(len(calls) + 1)
+            call = calls[-1]
+            await self.scheduler.sleep(300 if call == 1 else 10)
+            structured = {"result": "action", "call": call}
+            return types.CallToolResult(
+                content=[types.TextContent(text=str(structured))], structured_content=structured
+            )
+
+        return Server("gateway", on_list_tools=list_tools, on_call_tool=call_tool)
+
+
+def test_f4_the_agent_gets_its_own_answer_when_the_copy_is_answered_first() -> None:
+    """0006: the answer to the copy is never delivered to the sender. The copy carries an
+    id of its own into the gateway, so its answer, sent first here, cannot be taken for
+    the answer to the agent's call."""
+    plan: list[dict[str, object]] = [
+        {
+            "fault": "F4",
+            "at": {"point": "net.agent_gw.request", "match": {"api": "propose"}},
+            "params": {"copy_delay_ms": 10},
+        }
+    ]
+    rig = CopyFirstRig(plan=plan)
+    rig.go(lambda: rig.connect(calls=1))
+    assert [result for _, result in rig.results] == [{"result": "action", "call": 1}]
+    request, copy = (m for m in rig.log.messages if (m.kind, m.api) == ("request", "propose"))
+    assert copy.copy_of == request.seq and copy.body == request.body
+    answers = [m for m in rig.log.messages if (m.kind, m.api) == ("answer", "propose")]
+    assert [(m.correlation, m.fate, m.drop_reason) for m in answers] == [
+        (copy.seq, "dropped", "answer_to_copy"),
+        (request.seq, "delivered", None),
+    ], "the copy's answer went first, and only the agent's own answer reached it"
