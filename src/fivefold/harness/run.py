@@ -26,6 +26,10 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
 7. runs the evaluator, which scores the run from the simulator's and the harness's
    records and writes its result to the `eval` schema (0004, 0009).
 
+When the drain ends, before the stop is recorded, the harness has the simulator abort
+every write still in flight past its deadline, unless a fault waived the deadline (F5
+beyond the deadline): such a write never commits, and the ledger then says so (0005).
+
 In G modes, when the scenario has a scripted resolver (0009), the gateway's dispatcher
 tells it when an action is left to a human, and it attests what the simulator's ledger
 shows through the gateway's admin path (`fivefold.harness.actors`, 0003).
@@ -269,6 +273,7 @@ class InprocRun:
         # The drain lasts its whole window (0009). The scheduler returns as soon as nothing
         # is queued and leaves the clock there, so a quiet drain moves it to the end here.
         self.scheduler.clock.advance_to(max(self.scheduler.now, drain_end))
+        self.simulator.control.abort_overdue(vt=self.scheduler.now)
         self.result.stopped_vt = self.scheduler.now
         self.log.run_stopped(self.scheduler.now)
         await self._stop()
