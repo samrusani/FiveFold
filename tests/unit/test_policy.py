@@ -219,7 +219,7 @@ def test_a_rejection_for_authority_stops_work_on_the_intent(
 def test_an_action_rejected_because_its_intent_closed_stops_work_on_the_intent(
     scenario: Scenario,
 ) -> None:
-    """Another worker's `not_done` report closed the intent (0010; Proposed record 0011)."""
+    """Another worker's `not_done` report closed the intent (0010; record 0011)."""
     world = World(Mode.GATEWAY)
     world.then("submit_purchase_order", action("pending_approval"))
     world.then(

@@ -1,6 +1,7 @@
 # 0008: Configurations and trust boundaries
 
 Status: Accepted (2026-11-14)
+Amended by: 0011 (2026-11-15): the scripted policy's next step after a `run_closed` rejection
 Date: 2026-11-14
 Spec sections affected: Baselines, Architecture (trust boundaries), Stack (database roles), CLAUDE.md (hard rules)
 Resolves M0 questions: 1, 37, 39, 40; part of 31
@@ -75,6 +76,7 @@ Deterministic tests and demos use a scripted model (0009). Its policy is the sam
 | pending_approval, proposed, authorized, dispatched or outcome_unknown | Wait with `get_action_status(wait_ms = 60,000)`, at most 3 times, then act on the new result |
 | rejected or failed because of stale inputs | Re-read and try again, at most twice. B0 requests a new approval when the old one no longer covers the order. If no acceptable option fits the budget after re-reading, stop. |
 | rejected because the approval was denied, revoked, expired or timed out | Stop working on the intent |
+| rejected because the intent or the run has closed (`run_closed`) | Stop working on the intent |
 | failed for any other reason | Try again once |
 | refused: intent_busy | Wait on the existing action as above, and adopt its result |
 | refused: intent_done | Record the existing effect id; the intent is done |
