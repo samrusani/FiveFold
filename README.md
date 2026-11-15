@@ -29,7 +29,7 @@ uv run python -m fivefold.harness.demo 1
 
 `make db-up` starts PostgreSQL 16 in Docker, on 127.0.0.1:5432. Without Docker, skip it and use your own PostgreSQL 16 server, if it trusts local connections. The commands connect to it as a superuser through `FIVEFOLD_ADMIN_DSN`, which defaults to `postgresql://postgres@127.0.0.1:5432/postgres`. For a server elsewhere, run `export FIVEFOLD_ADMIN_DSN=postgresql://USER@HOST:PORT/postgres` first.
 
-The first `uv run` downloads the locked dependencies, about 56 MB on Linux, and installs them into `.venv`. On a clean machine with an empty uv cache and a fast network, the path from `git clone` to the demo's output took 10 seconds, plus the time Docker takes to pull the PostgreSQL image the first time. The demo itself takes about 5 seconds, and prints:
+The first `uv run` downloads the locked dependencies, about 56 MB on Linux, and installs them into `.venv`. On a clean machine with an empty uv cache and a fast network, the path from `git clone` to the demo's output took 10 to 12 seconds, plus the time Docker takes to pull the PostgreSQL image the first time. The demo itself takes about 5 seconds, and prints:
 
 ```
 Demo 1: Order placed, reply lost (dev-001-single-po, C2, seed 7)
@@ -62,7 +62,7 @@ G2:
 - **B0** is the agent writing to the simulator directly. Once resumed, it orders again: two orders on one approval, and the budget is 280.00 USD overdrawn.
 - **G2** is the same agent behind the gateway. While the agent is down, the gateway retries with the same idempotency key and gets the stored result. The resumed agent's repeated order attaches to that action, so there is one order.
 - **The lines.** `orders in the ledger` is the simulator's ledger, the ground truth. `report` is the agent's final report. `gateway` says what the gateway did with each action. `message log` counts the messages between components and gives their digest, which is the same on every run of this seed.
-- **The verdict.** It is `pass`, `pass_unresolved` (all five properties hold, and some outcome is honestly reported as unknown) or `fail`, with each failing property and its reason codes. B0 fails property 1 (a duplicate order), property 2 (the second order reuses the first order's approval) and property 3 (the budget no longer covered it). G2 passes all five.
+- **The verdict.** It is `pass`, `pass_unresolved` (all five properties hold, and some outcome is honestly reported as unknown) or `fail`, with each failing property and its reason codes. B0 fails property 1 (a duplicate order), property 2 (the second order reuses the first order's approval) and property 3 (the budget no longer covered it). B0's report names only PO-0002, the one order it heard about, so property 5 holds: a report is judged against what the stack could know. G2 passes all five.
 
 ## In twenty minutes
 
@@ -70,7 +70,7 @@ Run these in the same clone, with the same database. The commands take about a m
 
 ### 1. Every demo, in B0, G1 and G2
 
-`make demo` runs the four demos of record 0006 for B0 and G2, on seed 7, in about 8 seconds. `uv run python -m fivefold.harness.demo 2a` runs one of them.
+`make demo` runs the four demos of record 0006 for B0 and G2, on seed 7, in under 10 seconds. `uv run python -m fivefold.harness.demo 2a` runs one of them.
 
 | Demo | Contract | Faults | B0 | G2 |
 | --- | --- | --- | --- | --- |
@@ -139,7 +139,7 @@ G1 stops the revoked approval, because it checks the approval before it sends. I
 
 ### 2. A small study and its report
 
-`python -m fivefold.harness.study` runs a matrix of episodes, each in a fresh database, and saves each run's result for the report. This study runs no fault, F2 (the lost reply) and F6 late (the approval revoked as the order leaves for the destination), at each contract level, in B0, G1 and G2: 36 episodes, in about 35 seconds.
+`python -m fivefold.harness.study` runs a matrix of episodes, each in a fresh database, and saves each run's result for the report. This study runs no fault, F2 (the lost reply) and F6 late (the approval revoked as the order leaves for the destination), at each contract level, in B0, G1 and G2: 36 episodes, in about 30 seconds.
 
 ```
 uv run python -m fivefold.harness.study --out study --cells none F2 F6-late
@@ -171,7 +171,7 @@ G2's three failures of property 2 are F6 late at C0, C1 and C2. The gateway chec
 
 ### 3. Recorded playback
 
-A cassette holds every model call of a run. Playback runs the run again from its cassette in a fresh database, then compares every record with the original run, apart from wall-clock times (record 0009). A live run always records a cassette, so anyone can re-run a live result without an API key.
+A cassette holds every model call of a run. Playback runs the run again from its cassette in a fresh database, then compares every record with the original run, apart from wall-clock times (record 0009). A live run always records a cassette, and its playback needs no API key and no network.
 
 ```
 uv run python -m fivefold.recorder record --demo 1 --config G2 --cassette demo-1-g2.json
