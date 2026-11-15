@@ -2,7 +2,7 @@
 
 What each of Fivefold's guarantees depends on, and the limits known so far. The guarantees are those of the gateway in configuration G2. Decision records are cited by number and live in [adr/](adr/README.md).
 
-Status: written for v0.1 on 15 Nov 2026. It states the accepted records 0001 to 0010 as written; records 0011 to 0014 are still Proposed.
+Status: written for v0.1 on 15 Nov 2026. It states the accepted records 0001 to 0011 and 0013 as written. It draws nothing yet from records 0012 (viewer tooling) and 0014 (recovery latency), whose work is not merged.
 
 ## How to read this page
 
@@ -53,16 +53,17 @@ It depends on:
 
 - the contract level. At C0 a lost request looks like a lost reply, so G2 escalates instead of resending (F1b, and F12 on `gw_sim`, 0006). At C1 the effect lands only after the settle time S and a new proposal from the agent. At C2 and C3, G2 retries (0005);
 - valid authority and unchanged exact inputs at a C2 retry: if the retry check fails, G2 does not send, and escalates (0002, rule 19);
+- at C1, status answers that arrive in time: an answer later than T counts as unanswered, and after 20 unanswered probes G2 escalates. F10's delayed cell delays 5 answers, so G2 hears the sixth and confirms the order (0005; 0013);
 - a human to resolve escalations (see [Escalations](#escalations));
 - the two excuses: a missing effect is excused only when the authority withdrew it, or when it is infeasible even without the run's own effects. The stack's own spending never excuses it (0004).
 
 ### 5. Truthfully reported
 
-G2 reports each action's state as it is, never reports OutcomeUnknown as confirmed, failed or rejected, and accepts no final report that contradicts its records (I5). It closes the run in the transaction that accepts the last report it expects (0010, item 6). A G2 stack that follows its rules therefore cannot fail property 5 through timing (0004).
+G2 reports each action's state as it is, never reports OutcomeUnknown as confirmed, failed or rejected, and accepts no final report that contradicts its records (I5). It closes the run in the transaction that accepts the last report it expects, and an earlier report's accepted `not_done` claim closes its intent the same way (0010, item 6). The scripted policy then stops working on that intent, so its claim stays `not_done` (0011). A G2 stack that follows its rules therefore cannot fail property 5 through timing (0004).
 
 It depends on:
 
-- the destination keeping its contract. When it breaks one, the evidence can mislead the stack, and the run fails (0004). Record 0006 expects F2 with F10 stale beyond L, at C1, to fail property 5; see [Known limits](#known-limits) for what its first runs did;
+- the destination keeping its contract. When it breaks one, the evidence can mislead the stack, and the run fails (0004). F10 stale beyond L, at C1, shows it: the status answers omit an order that committed, G2 marks the action Failed, and the report says "not done" while the order exists (0006; 0013);
 - the agent submitting a report: with no valid report, property 5 fails for every intent (0004).
 
 ## Contract levels
@@ -106,7 +107,7 @@ The settle time is S = `max_hop_latency` + D, 10,050 ms by default: a request se
 - An approval that expires at or before a send's time plus S counts as expired, so every approval stops being usable S before it expires: 0.3% of the example scenario's one-hour lifetime (0010, change 4).
 - Retries are at least T apart, and T exceeds `max_hop_latency`, so a definitive rejection of a retry settles the earlier attempts (0005).
 
-Scenarios can override each value, and each run records the values it used (0005). If a destination is slower than it promised, the settle rules can conclude "not committed" when a request will still commit. The catalog's contract violations show what then breaks: F5 beyond the deadline at C1, and F10 stale beyond L (0006).
+Scenarios can override each value, and each run records the values it used (0005). If a destination is slower than it promised, the settle rules can conclude "not committed" when a request will still commit. The catalog's contract violations show what then breaks: F5 beyond the deadline at C1, and F10 stale beyond L (0006; 0013).
 
 ## The gateway's database, credentials and the network boundary
 
@@ -127,10 +128,10 @@ When G2 cannot settle an outcome safely, it escalates to a human, and its automa
 
 ## Scripted and live models
 
-- Deterministic tests, the demos and `faults/expected.yaml` use a scripted model, which follows one fixed policy in every configuration (0008). Record 0006 fixes some expected outcomes; the rest come from the first reviewed deterministic run, and all are frozen before any live-model run (0006). They show what each configuration does under that policy. A live model can act differently, for example by calling B0's status tool at C1, which the scripted policy never does.
+- Deterministic tests, the demos and `faults/expected.yaml` use a scripted model, which follows one fixed policy in every configuration (0008, amended by 0011). Record 0006 fixes some expected outcomes; the rest come from the first reviewed deterministic run, and all are frozen before any live-model run (0006). They show what each configuration does under that policy. A live model can act differently, for example by calling B0's status tool at C1, which the scripted policy never does.
 - A run is deterministic given its model's outputs (0009). A live run can be reproduced only from its cassette, which records every model call. A replay fails if a request differs from the recorded one, or if the run asks for more or fewer calls than the cassette holds ([spec](spec.md), Playback and branching).
 - Every model call takes `think_ms` of virtual time, 1,000 ms by default, however long the model really takes (0009). A slow model and a fast one see the same virtual timings.
-- A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file that prices the model. The spend can pass the cap by at most the cost of the one call in flight ([spec](spec.md), Testing).
+- A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file that prices the model. [Known limits](#known-limits) says what the cap and the token counts do not cover.
 
 ## Virtual time
 
@@ -153,10 +154,10 @@ When G2 cannot settle an outcome safely, it escalates to a human, and its automa
    | F5 beyond the deadline at C1 | fail (1, 3) | The destination broke its deadline, so Failed was wrong. The agent's second order committed, then the late first one overdrew the budget. |
    | F6 late at C0 to C2 | fail (2) | Authority changed after the check and before the commit |
    | F7 late, `price_up`, at C0 to C2 | fail (3) | The quote changed after the check and before the commit |
-   | F2 with F10 stale beyond L, at C1 | fail (5) | The stale status made Failed wrong. The agent's second try was rejected, because the first order had used the budget, so the report said "not done" while an order existed. |
+   | F2 with F10 stale beyond L, at C1 | fail (5) | The stale status made Failed wrong: every answer omits the order that committed. The agent finds the budget spent, orders nothing more, and the report says "not done" while the order exists (0013). |
    | F2, F3 and F5 (both variants) at C0, with no resolver | pass_unresolved | The honest answer is "unknown", and a human must reconcile |
 
-   Two F10 cells do not match record 0006 yet. In their first runs, the delayed cell ended pass_unresolved where 0006 expects pass, and the stale-beyond-L cell passed where 0006 expects fail (5). Both stay out of `faults/expected.yaml` until the maintainer decides record 0013, which is Proposed.
+   F10 has three cells, all at C1 in G2, as record 0013 settles them: delayed and stale within L pass, and stale beyond L fails property 5, as above.
 3. **B0 has no F10 cells.** F10 changes status answers, and B0's scripted agent never calls the status tool, so F10 never fires in B0. Record 0006's B0 column for F10 reads "same, if the agent calls the status tool". G1 has no F10 cell either: its gateway never probes, and its agent has no status tool (`faults/expected.yaml`).
 4. **F8 is deferred to v0.2.** Memory correction after a proposal is not tested. F7 exercises property 3 in the meantime (0006).
 5. **One domain.** v0.1 covers procurement only: quotes, suppliers, budgets, approvals, purchase orders and inventory reservations ([product](product.md), Scope). The expected outcomes cover one development scenario, dev-001, a task with one intent (0006).
@@ -168,6 +169,9 @@ When G2 cannot settle an outcome safely, it escalates to a human, and its automa
 11. **G1 is a pattern, not a product.** G1 follows the single-use grant pattern, and no claim is made that it reproduces any specific product (0008). Record 0006 fixes no G1 outcome, so G1's cells come from its first deterministic runs (`faults/expected.yaml`).
 12. **Comparisons with prior work.** The metric `success_claimed_with_duplicate` is comparable in spirit to the false-success measure in "Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents" (LIMBO, arXiv 2609.29095, a preprint). The two definitions are not claimed to match (0004).
 13. **The development scenarios are public.** Code can be fitted to the scenarios in this repository. The plan guards against it with held-out scenarios that a separate team keeps outside the repository ([plan](plan.md), Risks).
+14. **A wall-clock timer in a run's event loop holds virtual time.** Before the scheduler moves the virtual clock, it waits until no timer is pending in the run's event loop, so that a task sleeping in wall time, such as LangGraph's retry backoff, changes wall-clock metrics only (0008, 0009). Any other timer in that loop holds virtual time until it fires, such as the one `asyncio.wait_for` sets. Code that runs a run, a test included, must not wrap it in `asyncio.wait_for`: run it in its own thread, and wait on that thread instead.
+15. **A reply with no token usage counts 0 tokens.** Token counts come from each reply's usage ([spec](spec.md), Runs and determinism). A reply that reports none adds 0 tokens to its worker's token budget, and 0 to the result's `tokens_in`, `tokens_out` and cost. Scripted replies report none by design.
+16. **The spend cap is not a hard ceiling on a provider's invoice.** Before each call, the spend counted so far, from each reply's reported tokens at the price file's prices, is checked against the cap. Once it reaches the cap, further calls are refused ([spec](spec.md), Runs and determinism), but the call in flight can pass it ([spec](spec.md), Testing). For a model priced above 0, a reply that reports no usage makes the spend unknown, and further calls are refused as well.
 
 ## Out of scope
 
