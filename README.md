@@ -20,7 +20,7 @@ Milestone M0, the design freeze, is done: decision records 0001 to 0009 were acc
 - the agent: a LangGraph agent with a scripted model, for the gateway (G2) and the baseline (B0) (`src/fivefold/agents/`);
 - the evaluator, which scores runs from ground truth; properties 1 (exactly once) and 5 (truthfully reported) so far (`src/fivefold/evaluator/`).
 
-Demo 1 runs from a seed, and every built fault cell of the development scenario gets the verdict `faults/expected.yaml` expects. Milestone M2 has started: the scripted approver and faults F1, F6, F7 and F12 are in, and B0 and G2 run at contract levels C0 to C3. In F1 the gateway crashes before it sends; it restarts through startup recovery, and the agent reconnects to it.
+Demo 1 runs from a seed, and every built fault cell of the development scenario gets the verdict `faults/expected.yaml` expects. Milestone M2 has started: the scripted approver and faults F1, F6, F7, F9 and F12 are in, and B0 and G2 run at contract levels C0 to C3. In F1 the gateway crashes before it sends; it restarts through startup recovery, and the agent reconnects to it. In F9 a second agent worker joins the same task.
 
 ## Demo
 

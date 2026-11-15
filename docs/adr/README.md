@@ -25,6 +25,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | # | Decision | Status |
 | --- | --- | --- |
 | [0010](0010-state-machine-corrections.md) | Corrections found while implementing 0003: four changes (T5 reasons, two dead reasons, answers after a crash, predictable expiry), reports and run closing, and eight readings | Accepted |
+| [0011](0011-policy-after-run-closed.md) | The scripted policy's next step after an action is rejected with `run_closed` (a row missing from 0008's table) | Proposed |
 
 ## Suggested reading order
 

@@ -118,6 +118,7 @@ def test_the_catalog_names_only_points_0006_lists() -> None:
         ("F1", "gw.dispatch.after_check"),
         ("F1", "gw.dispatch.after_record"),
         ("F1", "agent.before_tool_call"),
+        ("F9", "agent.step"),
         ("F6", "gw.dispatch.before_check"),
         ("F6", "net.agent_sim.answer"),
         ("F7", "net.gw_sim.request"),
@@ -170,6 +171,8 @@ def test_f12_never_fires_on_an_answer() -> None:
             {"fault": "F1", "at": {"point": "gw.dispatch.after_answer"}},
             "F1 does not fire at",
         ),
+        ({"fault": "F9", "at": {"point": "agent.after_tool_call"}}, "F9 does not fire at"),
+        ({"fault": "F9", "variant": "other_args", "at": {"point": "agent.step"}}, "no variant"),
         (
             {
                 "fault": "F1",
@@ -200,6 +203,8 @@ def test_each_variant_is_accepted_at_its_own_points() -> None:
             {"fault": "F1", "variant": "a", "at": {"point": "gw.dispatch.after_check"}},
             {"fault": "F1", "variant": "b", "at": {"point": "gw.dispatch.after_record"}},
             {"fault": "F1", "variant": "b", "at": {"point": "agent.before_tool_call"}},
+            {"fault": "F9", "variant": "same_args", "at": {"point": "agent.step"}},
+            {"fault": "F9", "variant": "different_args", "at": {"point": "agent.step"}},
         ]
     )
 

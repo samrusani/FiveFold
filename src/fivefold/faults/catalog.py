@@ -66,6 +66,9 @@ class Action(StrEnum):
     CHANGE_QUOTE = "change_quote"
     """Change the quote the action or the message cites (F7): its price, or only its
     lead time in the `harmless` variant."""
+    START_WORKER = "start_worker"
+    """Start another agent worker on the same task (F9). In the `different_args`
+    variant, it chooses the second-cheapest acceptable option."""
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,14 @@ BUILT: Mapping[FaultId, FaultKind] = {
         frozenset({"net.gw_sim.answer", "net.agent_sim.answer"}),
         Action.DROP,
         {},
+    ),
+    FaultId.F9: FaultKind(
+        FaultId.F9,
+        "Two workers on the same task",
+        frozenset({"agent.step"}),
+        Action.START_WORKER,
+        {},
+        variants={"same_args": None, "different_args": None},
     ),
     FaultId.F11: FaultKind(
         FaultId.F11,

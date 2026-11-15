@@ -216,6 +216,23 @@ def test_a_rejection_for_authority_stops_work_on_the_intent(
     assert report(calls)[0]["status"] == "not_done"
 
 
+def test_an_action_rejected_because_its_intent_closed_stops_work_on_the_intent(
+    scenario: Scenario,
+) -> None:
+    """Another worker's `not_done` report closed the intent (0010; Proposed record 0011)."""
+    world = World(Mode.GATEWAY)
+    world.then("submit_purchase_order", action("pending_approval"))
+    world.then(
+        "get_action_status",
+        action("rejected", "run_closed"),
+        action("rejected", "run_closed"),
+    )
+    world.then("submit_final_report", ACCEPTED)
+    calls = world.run(scenario)
+    assert names(calls).count("submit_purchase_order") == 1, "no new proposal"
+    assert report(calls)[0]["status"] == "not_done"
+
+
 def test_a_failure_for_another_reason_is_tried_again_once(scenario: Scenario) -> None:
     world = World(Mode.GATEWAY)
     world.then(
