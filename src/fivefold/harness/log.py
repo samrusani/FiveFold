@@ -89,6 +89,18 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class ActorRecord:
+    """An action of a scripted human: the approver or the resolver (0002, 0004)."""
+
+    seq: int
+    actor: Literal["approver", "resolver"]
+    action: str
+    subject: str
+    details: Mapping[str, object]
+    vt: int
+
+
+@dataclass(frozen=True)
 class ReportRecord:
     """A final report an agent worker submitted, as the report sink received it (0004).
 
@@ -143,6 +155,10 @@ class HarnessLog(ABC):
     def report_submitted(self, record: ReportRecord) -> None:
         """Record a final report as the sink received it."""
 
+    @abstractmethod
+    def actor_acted(self, record: ActorRecord) -> None:
+        """Record what a scripted human did."""
+
 
 def _check_fate(fate: Fate, reason: DropReason | None, delivered_seq: int | None) -> None:
     if fate == "delivered" and (delivered_seq is None or reason is not None):
@@ -159,6 +175,7 @@ class MemoryHarnessLog(HarnessLog):
         self._messages: dict[int, MessageRecord] = {}
         self.faults: list[FaultRecord] = []
         self.reports: list[ReportRecord] = []
+        self.actors: list[ActorRecord] = []
         self.run: RunRecord | None = None
 
     def run_recorded(self, record: RunRecord) -> None:
@@ -209,6 +226,9 @@ class MemoryHarnessLog(HarnessLog):
     def report_submitted(self, record: ReportRecord) -> None:
         self.reports.append(record)
 
+    def actor_acted(self, record: ActorRecord) -> None:
+        self.actors.append(record)
+
 
 Connection = psycopg.Connection[TupleRow]
 
@@ -228,7 +248,8 @@ class PgHarnessLog(HarnessLog):
             "SELECT greatest((SELECT max(seq) FROM harness.message_log),"
             " (SELECT max(delivered_seq) FROM harness.message_log),"
             " (SELECT max(seq) FROM harness.fault_log),"
-            " (SELECT max(seq) FROM harness.final_report))"
+            " (SELECT max(seq) FROM harness.final_report),"
+            " (SELECT max(seq) FROM harness.actor_log))"
         ).fetchone()
         self._last_seq = 0 if row is None or row[0] is None else int(row[0])
 
@@ -328,6 +349,20 @@ class PgHarnessLog(HarnessLog):
                 Jsonb(list(record.errors)),
                 record.accepted_by,
                 record.message_seq,
+                record.vt,
+            ),
+        )
+
+    def actor_acted(self, record: ActorRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO harness.actor_log (seq, actor, action, subject, details, vt)"
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                record.seq,
+                record.actor,
+                record.action,
+                record.subject,
+                Jsonb(dict(record.details)),
                 record.vt,
             ),
         )

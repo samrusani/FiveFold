@@ -308,3 +308,25 @@ def make_sim(sim_database: str, dev_data: dict[str, object]) -> Iterator[SimFact
     yield factory
     for sim in opened:
         sim.close()
+
+
+@pytest.fixture
+def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], str]]:
+    """Fresh migrated run databases for whole runs, cloned from the template; dropped afterwards."""
+    made: list[str] = []
+
+    def make(suffix: str) -> str:
+        name = f"{sim_template}_{suffix}"
+        drop_database(admin_dsn, name)
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(name), sql.Identifier(sim_template)
+                )
+            )
+        made.append(name)
+        return make_conninfo(admin_dsn, dbname=name)
+
+    yield make
+    for name in made:
+        drop_database(admin_dsn, name)

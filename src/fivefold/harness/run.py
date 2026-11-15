@@ -8,7 +8,8 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    simulator's API and, in B0, the report sink on the transport;
 2. in G2, starts the gateway: its store, its dispatcher after startup recovery, and its
    tools, one MCP server per agent connection;
-3. starts each agent worker with its own checkpoint thread;
+3. starts each agent worker with its own checkpoint thread, and the scripted approver,
+   which decides queued approval requests by the scenario's rules (0002, rule 7);
 4. fires the plan's faults: the transport fires those on its hops, and this module those
    at the agent's points (F11), with the restart from the worker's last checkpoint;
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
@@ -49,6 +50,7 @@ from fivefold.gateway.server import serve
 from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.tools import GatewayTools, ToolTiming
+from fivefold.harness.actors import ScriptedApprover
 from fivefold.harness.clock import settle
 from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
@@ -191,9 +193,17 @@ class InprocRun:
         )
         self.simulator = Simulator.setup(self._conninfo("ff_sim"), scenario, config, vt=0)
         self._closing.append(self.simulator)
+        self.approver = ScriptedApprover(
+            self.scheduler, self.simulator.control, self.log, scenario.authority
+        )
         self.transport.serve(
             SIMULATOR,
-            endpoint(self.simulator, self.scheduler, poll_ms=params.approval_poll_interval_ms),
+            endpoint(
+                self.simulator,
+                self.scheduler,
+                poll_ms=params.approval_poll_interval_ms,
+                served=[self.approver.served],
+            ),
         )
         intents = {intent.id: str(intent.operation) for intent in scenario.intents}
         self.sink = ReportSink(self.scheduler, self.log, intents)

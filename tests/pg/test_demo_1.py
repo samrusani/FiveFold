@@ -11,43 +11,18 @@ reusing the first approval and overdrawing the budget.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
 import psycopg
 import pytest
-from psycopg import sql
-from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.worker import WorkerEnd
 from fivefold.harness.demo import demo_1_spec
-from fivefold.harness.migrations import drop_database
 from fivefold.harness.run import Config, InprocRun
 
 pytestmark = pytest.mark.pg
-
-
-@pytest.fixture
-def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], str]]:
-    """Fresh migrated run databases, cloned from the template; dropped afterwards."""
-    made: list[str] = []
-
-    def make(suffix: str) -> str:
-        name = f"{sim_template}_{suffix}"
-        drop_database(admin_dsn, name)
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            conn.execute(
-                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                    sql.Identifier(name), sql.Identifier(sim_template)
-                )
-            )
-        made.append(name)
-        return make_conninfo(admin_dsn, dbname=name)
-
-    yield make
-    for name in made:
-        drop_database(admin_dsn, name)
 
 
 def run(dsn: str, config: Config, *, seed: int = 7) -> InprocRun:
