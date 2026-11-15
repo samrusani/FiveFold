@@ -21,10 +21,12 @@ Every answer carries an `answer` field naming its shape, so a union parses unamb
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -32,6 +34,7 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StringConstraints,
+    ValidationInfo,
     model_validator,
 )
 
@@ -62,6 +65,35 @@ Minor = Annotated[StrictInt, Field(ge=0)]
 
 Version = Annotated[StrictInt, Field(ge=1)]
 VirtualMs = Annotated[StrictInt, Field(ge=0)]
+
+
+@dataclass(frozen=True)
+class WaitLimit:
+    """The run's longest status-tool wait, given as validation context (0005).
+
+    Record 0005 sets it, 60,000 virtual ms unless the scenario's `max_wait_ms` says
+    otherwise. Every place a status tool's wait is checked validates with it:
+    `model_validate(data, context=WaitLimit(max_wait_ms))`.
+    """
+
+    max_wait_ms: int
+
+
+def within_wait_limit(wait_ms: int, info: ValidationInfo) -> int:
+    """Refuse a wait above the run's `max_wait_ms`, when the context gives a `WaitLimit`.
+
+    The check runs only at validation time, so the field's JSON Schema, which the agent's
+    model sees, stays as it was.
+    """
+    limit = info.context
+    if isinstance(limit, WaitLimit) and wait_ms > limit.max_wait_ms:
+        raise ValueError(f"the run's max_wait_ms is {limit.max_wait_ms}")
+    return wait_ms
+
+
+WaitMs = Annotated[VirtualMs, AfterValidator(within_wait_limit)]
+"""A status tool's wait in virtual ms: at least 0, and at most the run's `max_wait_ms`
+when validated with a `WaitLimit` (0005)."""
 
 ArgValue = StrictInt | str
 """A business argument is text or an integer (0001, item 6)."""
@@ -216,9 +248,11 @@ class GetApprovalStatus(ApiModel):
     simulator ignores it and answers at once.
     """
 
+    # The docstring above is the request's JSON Schema description, which the agent's
+    # model sees, so the run's limit on `wait_ms` is described at `WaitMs` instead.
     api: ClassVar[ApiName] = ApiName.GET_APPROVAL_STATUS
     approval_id: Id
-    wait_ms: VirtualMs = 0
+    wait_ms: WaitMs = 0
 
 
 class ApprovalAnswer(ApiModel):

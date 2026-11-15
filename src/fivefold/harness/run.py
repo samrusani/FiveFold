@@ -320,6 +320,7 @@ class InprocRun:
                 self.simulator,
                 self.scheduler,
                 poll_ms=params.approval_poll_interval_ms,
+                max_wait_ms=params.max_wait_ms,
                 served=[self.approver.served],
                 points=self._simulator_points(),
             ),
@@ -333,7 +334,11 @@ class InprocRun:
         self._closing.append(checkpoint_conn)
         self.checkpointer = InlinePostgresSaver(checkpoint_conn)
         self.checkpointer.setup()
-        self.timeouts = Timeouts(t_ms=params.dispatch_timeout_ms, tool_wait_ms=params.tool_wait_ms)
+        self.timeouts = Timeouts(
+            t_ms=params.dispatch_timeout_ms,
+            tool_wait_ms=params.tool_wait_ms,
+            max_wait_ms=params.max_wait_ms,
+        )
         if gateway:
             self._start_gateway()
         for worker in self._workers:
@@ -417,7 +422,7 @@ class InprocRun:
             self.sink,
             task_id=scenario.task_id,
             intents=intents,
-            timing=ToolTiming(tool_wait_ms=params.tool_wait_ms),
+            timing=ToolTiming(tool_wait_ms=params.tool_wait_ms, max_wait_ms=params.max_wait_ms),
         )
         self.dispatcher.start()
 

@@ -33,7 +33,7 @@ from fivefold.gateway.records import (
 from fivefold.gateway.server import serve
 from fivefold.gateway.sim_client import ReadRefused, ReadRequest
 from fivefold.gateway.state_machine import AnswerClass, GatewaySettings, Reason
-from fivefold.gateway.tools import TOOLS, GatewayTools
+from fivefold.gateway.tools import TOOLS, GatewayTools, ToolTiming
 from fivefold.harness.log import MemoryHarnessLog
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.reports import ReportSink
@@ -159,7 +159,9 @@ class Client:
 
 
 class Run:
-    def __init__(self, plan: list[dict[str, object]] | None = None) -> None:
+    def __init__(
+        self, plan: list[dict[str, object]] | None = None, timing: ToolTiming | None = None
+    ) -> None:
         self.scheduler = Scheduler()
         self.log = MemoryHarnessLog()
         self.transport = Transport(
@@ -184,6 +186,7 @@ class Run:
             ReportSink(self.scheduler, self.log, INTENTS),
             task_id="TASK-1",
             intents=INTENTS,
+            timing=timing,
         )
 
     def go(self, agent: Agent) -> None:
@@ -384,6 +387,51 @@ def test_unknown_reads_and_actions_are_tool_errors() -> None:
         (True, {"error": "invalid_args", "message": seen[2][1]["message"]}),
     ]
     assert "supplier_id" in seen[2][1]["message"]
+
+
+def test_a_status_wait_above_the_run_s_max_wait_ms_is_refused() -> None:
+    """0005: a scenario can lower the longest status wait. The published schema keeps
+    60,000 ms in every run, so the gateway checks the run's own value as it validates
+    the call, and refuses a longer wait as it refuses any other bad argument."""
+    run = Run(timing=ToolTiming(max_wait_ms=5_000))
+    seen: list[tuple[bool, dict[str, Any]]] = []
+    schemas: list[dict[str, Any]] = []
+
+    async def agent(client: Client) -> None:
+        listed = (await client.session.list_tools()).tools
+        schemas.extend(tool.input_schema for tool in listed if tool.name == "get_action_status")
+        based_on = await read_both(client)
+        await client.ok("submit_purchase_order", **ORDER, based_on=based_on)
+        for wait_ms in (5_001, 60_001, 5_000):
+            seen.append(await client.call("get_action_status", action_id="A-0001", wait_ms=wait_ms))
+
+    run.go(agent)
+    assert seen[:2] == [
+        (
+            True,
+            {
+                "error": "invalid_args",
+                "message": "wait_ms: Value error, the run's max_wait_ms is 5000",
+            },
+        ),
+        (
+            True,
+            {
+                "error": "invalid_args",
+                "message": "wait_ms: Input should be less than or equal to 60000",
+            },
+        ),
+    ]
+    failed, status = seen[2]
+    assert (failed, status["state"]) == (False, "confirmed")
+    (schema,) = schemas
+    assert schema["properties"]["wait_ms"] == {
+        "default": 0,
+        "maximum": 60000,
+        "minimum": 0,
+        "title": "Wait Ms",
+        "type": "integer",
+    }
 
 
 def test_a_report_must_cover_each_intent_once_and_match_the_records() -> None:
