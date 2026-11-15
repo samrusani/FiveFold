@@ -3,8 +3,8 @@ import { useState } from "react";
 import { api } from "../api";
 import { useLoad } from "../load";
 import { href } from "../route";
-import type { RegistryRun, RunList as RunListData } from "../types";
-import { pairs } from "../views";
+import type { ListedRun, RunList as RunListData } from "../types";
+import { experiment, pairs } from "../views";
 import { Loaded } from "./common";
 
 const loadRuns = (_key: string, signal: AbortSignal) => api.runs(signal);
@@ -77,7 +77,7 @@ function Runs({ list }: { list: RunListData }) {
             </tr>
           </thead>
           <tbody>
-            {list.runs.map((run: RegistryRun) => (
+            {list.runs.map((run: ListedRun) => (
               <tr key={run.database} data-testid="run-row">
                 <td>
                   <input
@@ -92,6 +92,9 @@ function Runs({ list }: { list: RunListData }) {
                 </td>
                 <td>
                   <code>{run.run_id}</code>
+                  {experiment(run) === null ? null : (
+                    <div className="experiment">{experiment(run)}.</div>
+                  )}
                 </td>
                 <td>{run.scenario_id}</td>
                 <td>{run.config}</td>

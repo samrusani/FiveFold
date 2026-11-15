@@ -53,6 +53,17 @@ Readings the decision records leave open:
   otherwise rounded half to even to 6 significant digits and marked `about`.
 - The cost table groups runs by model as well as by configuration and contract level, so
   that no row mixes the prices of two models.
+- An experimental branch (0009) has its parent's scenario, configuration, contract level,
+  seed and fault plan, so it would count in its parent's cell, as one more trial of it.
+  It is no such trial: it repeats its parent's first K model calls, and it may answer the
+  rest with another model. So every table shows a branch apart, in rows of its own, by
+  configuration and branch point: `G2, branch point 4` (`configuration`). Runs that are
+  no branch show as before, and so does a report with no branch. The CSV keeps one row
+  per run, with its parent and branch point.
+- A branch's tokens are those of all its model calls, the ones it replayed from its
+  parent included, as the harness logs them under the branch's model. Its cost prices
+  them all at that model's prices: exact when the replayed calls report no tokens, as the
+  scripted model's never do, or when the parent ran the same model.
 """
 
 from __future__ import annotations
@@ -86,6 +97,7 @@ from fivefold.evaluator.result import (
     PROPERTY_NAMES,
     PropertyVerdict,
     RunResult,
+    RunSummary,
     Verdict,
     result_json,
 )
@@ -127,6 +139,15 @@ NO_FAULTS = "none"
 
 UNRECORDED = "not recorded"
 """How a run whose params hold no fault plan shows its planned faults."""
+
+BRANCH_NOTE: Final = (
+    " A branch repeats its parent's first model calls, so the tables never count it in its"
+    " parent's cell: they show it in rows of its own, by configuration and branch point, the"
+    " number of its parent's model calls it replayed, such as `G2, branch point 4`. Its tokens"
+    " include those of the calls it replayed, and its cost prices them at its own model's"
+    " prices."
+)
+"""What the report says about branches, when it has any (0009)."""
 
 CSV_COLUMNS: tuple[str, ...] = (
     "run_id",
@@ -246,6 +267,15 @@ def planned_faults(result: RunResult) -> tuple[PlanEntry, ...] | None:
                 f" {_first_error(error)}"
             ) from None
     return tuple(entries)
+
+
+def configuration(run: RunSummary) -> str:
+    """A run's configuration as the tables show it: as it is, or for an experimental branch
+    (0009), with its branch point, such as `G2, branch point 4`, so that a branch never
+    counts in its parent's cell."""
+    if run.branch_point is None:
+        return run.config
+    return f"{run.config}, branch point {run.branch_point}"
 
 
 def plan_label(plan: Sequence[PlanEntry] | None, *, params: bool = True) -> str:
@@ -493,7 +523,7 @@ class Row:
         return (
             _natural(run.scenario_id),
             run.scenario_digest,
-            _natural(run.config),
+            _natural(configuration(run)),
             _natural(run.contract),
             _natural(self.fault_group),
             run.seed,
@@ -647,7 +677,8 @@ def _what_was_run(rows: Sequence[Row]) -> list[str]:
         f"- Seeds: {seed_list or 'none'}.",
         f"- Topologies: {_counted(run.topology for run in runs)}.",
         f"- Runs that name a cassette: {with_cassette} of {len(runs)}.",
-        f"- Runs branched from another run: {branched} of {len(runs)}.",
+        f"- Runs branched from another run: {branched} of {len(runs)}."
+        + (BRANCH_NOTE if branched else ""),
         "",
     ]
     return lines
@@ -664,7 +695,7 @@ def _verdict_table(rows: Sequence[Row]) -> list[str]:
         _table_rule(2 + len(VERDICTS)),
     ]
     for (config, contract), members in _groups(
-        rows, lambda row: (row.result.run.config, row.result.run.contract)
+        rows, lambda row: (configuration(row.result.run), row.result.run.contract)
     ):
         lines.append(_table_row([config, contract, *_verdict_counts(members)]))
     return [*lines, ""]
@@ -682,7 +713,7 @@ def _safety_table(rows: Sequence[Row]) -> list[str]:
         _table_rule(4),
     ]
     for (config, contract), members in _groups(
-        rows, lambda row: (row.result.run.config, row.result.run.contract)
+        rows, lambda row: (configuration(row.result.run), row.result.run.contract)
     ):
         lines.append(
             _table_row([config, contract, _holding(members, SAFETY), _holding(members, LIVENESS)])
@@ -716,7 +747,7 @@ def _failure_table(rows: Sequence[Row]) -> list[str]:
         ),
         _table_rule(1 + len(PROPERTIES)),
     ]
-    for (config,), members in _groups(rows, lambda row: (row.result.run.config,)):
+    for (config,), members in _groups(rows, lambda row: (configuration(row.result.run),)):
         cells = []
         for number in PROPERTIES:
             failed, evaluated = _property_counts(members, number)
@@ -747,7 +778,8 @@ def _fault_table(rows: Sequence[Row]) -> list[str]:
         _table_rule(4 + len(VERDICTS)),
     ]
     for (faults, config, contract), members in _groups(
-        rows, lambda row: (row.fault_group, row.result.run.config, row.result.run.contract)
+        rows,
+        lambda row: (row.fault_group, configuration(row.result.run), row.result.run.contract),
     ):
         failed = []
         for number in PROPERTIES:
@@ -763,7 +795,7 @@ def _fault_table(rows: Sequence[Row]) -> list[str]:
 
 
 def _metric_table(rows: Sequence[Row]) -> list[str]:
-    groups = _groups(rows, lambda row: (row.result.run.config,))
+    groups = _groups(rows, lambda row: (configuration(row.result.run),))
     configs = [config for (config,), _ in groups]
     lines = [
         "## Metric totals by configuration",
@@ -821,7 +853,7 @@ def _cost_table(rows: Sequence[Row], prices: PriceFile | None) -> list[str]:
     ]
     groups = _groups(
         rows,
-        lambda row: (row.result.run.model, row.result.run.config, row.result.run.contract),
+        lambda row: (row.result.run.model, configuration(row.result.run), row.result.run.contract),
     )
     for (model, config, contract), members in groups:
         total = _total_cost(members, f"the cost of {model} in {config} at {contract}")

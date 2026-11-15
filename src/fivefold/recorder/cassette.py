@@ -7,9 +7,12 @@ that it serves the same run:
 - `run`: the run it was recorded from, as `harness.run` records it: the run id, the
   scenario's id and digest, the configuration, the contract level, the seed, the
   topology, and the run's parameters (the scenario's parameters, the fault plan and the
-  workers).
+  workers). A branch's header also names its parent's run id and its branch point
+  (`parent_run_id` and `branch_point`); any other run's leaves both out, so its file is
+  the same as before branches existed.
 - `model`: the model that answered: its adapter (`scripted` or `live`), its name and its
-  parameters.
+  parameters. A branch names the model it switched to, and hashes every call with it,
+  the calls it replayed from its parent included (`fivefold.agents.branch`).
 - `calls`: every model call, in the order the run's workers made them: the worker that
   asked, the hash of the request, and the response.
 
@@ -35,8 +38,9 @@ file in any other form, so a file's SHA-256 is always its cassette's digest.
 Checked in langchain-core 1.8.0: the message fields (`messages/base.py`, `messages/ai.py`,
 `messages/tool.py`, `messages/chat.py`); `AIMessage`'s validator, which gives every tool
 call its `type` (`messages/ai.py`); `convert_to_openai_tool(tool, *, strict=None)`
-(`utils/function_calling.py`). Checked in pydantic 2.14.3: `JsonValue` (`types.py`) and
-`BaseModel.model_validate_json` (`main.py`).
+(`utils/function_calling.py`). Checked in pydantic 2.14.3: `JsonValue` (`types.py`),
+`BaseModel.model_validate_json` (`main.py`), `Field(ge=...)` (`fields.py`) and
+`model_validator(mode="after")` (`functional_validators.py`).
 """
 
 from __future__ import annotations
@@ -51,10 +55,13 @@ from typing import Any, Final, Literal
 from langchain_core.messages import AIMessage, BaseMessage, ChatMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
 FORMAT: Final = "fivefold-cassette/1"
 """The format a cassette file names, so a later format can refuse an old file clearly."""
+
+BRANCH_FIELDS: Final = ("parent_run_id", "branch_point")
+"""The header fields only a branch's cassette writes (0009, Playback and branching)."""
 
 Tool = dict[str, Any] | type | Callable[..., Any] | BaseTool
 """Anything `bind_tools` takes (langchain-core 1.8.0, `BaseChatModel.bind_tools`)."""
@@ -228,6 +235,19 @@ class RunHeader(_Part):
     topology: Literal["inproc", "split"]
     params: dict[str, JsonValue]
     """The values the run used: the scenario's parameters, the fault plan and the workers."""
+    parent_run_id: str | None = None
+    """For a branch, the run id of the run it branched from; None for any other run."""
+    branch_point: int | None = Field(default=None, ge=0)
+    """For a branch, K: how many of its parent's model calls it replayed before it
+    switched model; None for any other run."""
+
+    @model_validator(mode="after")
+    def _parent_and_point_together(self) -> RunHeader:
+        """A branch names both its parent and its branch point; any other run neither, as
+        `harness.run` requires."""
+        if (self.parent_run_id is None) != (self.branch_point is None):
+            raise ValueError("a branch names both its parent_run_id and its branch_point")
+        return self
 
 
 class ModelInfo(_Part):
@@ -256,8 +276,12 @@ class Cassette(_Part):
 
     def text(self) -> str:
         """The cassette's file: JSON with sorted keys, two-space indents, non-ASCII
-        characters as they are, and a final newline."""
+        characters as they are, and a final newline. A run that is no branch leaves out the
+        header's branch fields, so its file is the same as before branches existed."""
         data = self.model_dump(mode="json")
+        if self.run.parent_run_id is None:
+            for name in BRANCH_FIELDS:
+                del data["run"][name]
         return (
             json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
         )

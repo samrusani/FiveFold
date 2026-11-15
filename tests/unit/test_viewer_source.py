@@ -4,12 +4,15 @@ ff_viewer, and it names the same registry as the harness."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
 from fivefold.harness import migrations
+from fivefold.harness.models import Parent, branch_run_id
 from fivefold.viewer.source import (
+    BRANCH_MARK,
     CONNECT_TIMEOUT_S,
     DEFAULT_REGISTRY,
     REGISTRY_ENV,
@@ -50,6 +53,32 @@ def test_a_connect_timeout_in_the_server_string_is_kept_and_passed_once() -> Non
 def test_without_one_the_viewer_sets_its_own_connect_timeout() -> None:
     params = conninfo_to_dict(RunSource("postgresql://postgres@db.example/postgres")._conninfo("x"))
     assert params["connect_timeout"] == str(CONNECT_TIMEOUT_S)
+
+
+def test_the_branch_mark_is_what_the_harness_puts_in_a_branchs_run_id() -> None:
+    run_id = branch_run_id(Parent("dev-001-single-po.G2.C2.7", 4))
+    assert run_id == "dev-001-single-po.G2.C2.7" + BRANCH_MARK + "4"
+
+
+def test_the_run_list_reads_the_records_of_branch_shaped_runs_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {"database": "demo_1_g2", "run_id": "dev-001-single-po.G2.C2.7"},
+        {"database": "branched", "run_id": "dev-001-single-po.G2.C2.7.branch-4"},
+    ]
+    read: list[str] = []
+
+    def branch_of(self: RunSource, database: str) -> dict[str, Any]:
+        read.append(database)
+        return {"parent_run_id": "dev-001-single-po.G2.C2.7", "branch_point": 4}
+
+    monkeypatch.setattr(RunSource, "_registry_rows", lambda self, where, args: rows)
+    monkeypatch.setattr(RunSource, "branch_of", branch_of)
+    listed = RunSource("postgresql://postgres@db.example/postgres").runs()
+    assert read == ["branched"], "a run that is no branch costs no connection"
+    assert (listed[0]["parent_run_id"], listed[0]["branch_point"]) == (None, None)
+    assert (listed[1]["parent_run_id"], listed[1]["branch_point"]) == (rows[0]["run_id"], 4)
 
 
 def test_wall_clock_times_become_iso_text_and_everything_else_stays() -> None:

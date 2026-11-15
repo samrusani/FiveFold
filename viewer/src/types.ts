@@ -12,9 +12,19 @@ export interface RegistryRun {
   created_wall_at: string;
 }
 
+/**
+ * A run in the run list: its registry row, with its parent and branch point from its own
+ * `harness.run`. Both are set for an experimental branch, a new experiment of its parent
+ * (record 0009), and null for any other run.
+ */
+export interface ListedRun extends RegistryRun {
+  parent_run_id: string | null;
+  branch_point: number | null;
+}
+
 export interface RunList {
   registry: string;
-  runs: RegistryRun[];
+  runs: ListedRun[];
 }
 
 export interface Run {

@@ -8,11 +8,13 @@ replay adapter, and names the recorded model and the cassette from the start.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
+from fivefold.agents.live import Think
 from fivefold.agents.policy import Mode, scripted_policy
 from fivefold.agents.replay import ReplayError, ReplayModel
 from fivefold.agents.scripted import ScriptedModel
@@ -49,11 +51,12 @@ async def no_time() -> None:
     """These tests have no scheduler."""
 
 
-def scripted() -> BaseChatModel:
-    return ScriptedModel(lambda: scripted_policy(SCENARIO.intents, mode=Mode.GATEWAY), no_time)
+def scripted(think: Think = no_time) -> BaseChatModel:
+    """The worker's scripted model, which takes `think` before each call."""
+    return ScriptedModel(lambda: scripted_policy(SCENARIO.intents, mode=Mode.GATEWAY), think)
 
 
-def never() -> BaseChatModel:
+def never(think: Think) -> BaseChatModel:
     raise AssertionError("a replay builds no scripted model")
 
 
@@ -137,7 +140,11 @@ def test_the_cassette_names_the_run_as_its_record_does_without_the_model() -> No
         "seed": 7,
         "topology": "inproc",
         "params": {"plan": [], "workers": 1, "agent_workers": 1},
+        "parent_run_id": None,
+        "branch_point": None,
     }
+    branch = replace(RUN, run_id=f"{RUN.run_id}.branch-3", parent_run_id=RUN.run_id, branch_point=3)
+    assert (run_header(branch).parent_run_id, run_header(branch).branch_point) == (RUN.run_id, 3)
 
 
 def test_the_memory_log_records_a_cassette_once() -> None:

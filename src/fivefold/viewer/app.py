@@ -2,7 +2,10 @@
 
 Every endpoint is a GET and answers JSON:
 
-- `/api/runs`: the run list, from the run registry, newest first.
+- `/api/runs`: the run list, from the run registry, newest first. Each run also has its
+  `parent_run_id` and `branch_point` from its own `harness.run`, so the list can label
+  an experimental branch a new experiment of its parent (0009); both are null for any
+  other run.
 - `/api/runs/{database}`: one run: its registry row, `harness.run`, when it stopped, and
   its scorecard from `eval` (the verdict, each property's verdict, reason codes and
   failures, the excused intents and the judged claims), or null before it is evaluated.

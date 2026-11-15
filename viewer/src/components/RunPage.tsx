@@ -1,6 +1,7 @@
 import { useLoad } from "../load";
 import { loadRun } from "../runData";
 import type { RunSummary } from "../types";
+import { experiment } from "../views";
 import { Loaded, Verdict } from "./common";
 import { Ledger } from "./Ledger";
 import { Scorecard } from "./Scorecard";
@@ -18,9 +19,10 @@ export function RunHeader({ summary }: { summary: RunSummary }) {
         {run.model_adapter} model {run.model}, {run.topology}; stopped at vt{" "}
         {run.stopped_vt ?? "not yet"}. Database {summary.database}.
       </p>
-      {run.parent_run_id === null ? null : (
+      {experiment(run) === null ? null : (
         <p className="experiment">
-          A new experiment: a branch of {run.parent_run_id} at event {run.branch_point}.
+          {experiment(run)}. It replayed its parent's first {run.branch_point} model calls,
+          then switched model.
         </p>
       )}
     </header>

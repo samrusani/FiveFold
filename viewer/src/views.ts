@@ -1,7 +1,15 @@
 // What each page shows, worked out from the API's data. Nothing here judges a run: the
 // verdicts come from the evaluator (record 0004). These functions only select and align.
 
-import type { Effect, FactVersion, Json, Ledger, RegistryRun, TimelineEvent } from "./types";
+import type {
+  Effect,
+  FactVersion,
+  Json,
+  Ledger,
+  ListedRun,
+  RegistryRun,
+  TimelineEvent,
+} from "./types";
 
 export const HOPS = ["agent_gw", "gw_sim", "agent_sim"] as const;
 
@@ -123,6 +131,19 @@ export function alignByVt(columns: Column<unknown>[]): AlignedRow[] {
   }));
 }
 
+/**
+ * How the viewer labels an experimental branch: a new experiment of its parent, at its
+ * branch point, the number of the parent's model calls it replayed before it switched
+ * model (record 0009). Null for a run that is no branch.
+ */
+export function experiment(run: {
+  parent_run_id: string | null;
+  branch_point: number | null;
+}): string | null {
+  if (run.parent_run_id === null || run.branch_point === null) return null;
+  return `A new experiment: a branch of ${run.parent_run_id} at branch point ${run.branch_point}`;
+}
+
 export interface Pair {
   b0: RegistryRun;
   g2: RegistryRun;
@@ -132,10 +153,11 @@ export interface Pair {
  * B0 and G2 runs of one scenario, contract level and seed: the runs a demo shows side by
  * side (record 0006). When the G2 run's database is named as the B0 run's with g2 for b0,
  * as the demos name theirs, that run is the only one paired; otherwise every G2 run that
- * fits is.
+ * fits is. A branch is a new experiment, not one of a demo's runs, so it is never paired.
  */
-export function pairs(runs: RegistryRun[]): Pair[] {
+export function pairs(listed: ListedRun[]): Pair[] {
   const found: Pair[] = [];
+  const runs = listed.filter((run) => run.parent_run_id === null);
   for (const b0 of runs.filter((run) => run.config === "B0")) {
     const fits = runs.filter(
       (run) =>

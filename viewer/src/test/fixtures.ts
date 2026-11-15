@@ -2,6 +2,7 @@
 
 import type {
   Ledger,
+  ListedRun,
   Message,
   RegistryRun,
   RunSummary,
@@ -331,6 +332,23 @@ export function registryRun(database: string, config: string): RegistryRun {
     seed: 7,
     created_wall_at: "2026-11-15T09:59:32+00:00",
   };
+}
+
+/** A run as the run list shows it: no branch, unless `parent` names its parent. */
+export function listedRun(
+  database: string,
+  config: string,
+  parent?: { run_id: string; branch_point: number },
+): ListedRun {
+  const run = registryRun(database, config);
+  return parent === undefined
+    ? { ...run, parent_run_id: null, branch_point: null }
+    : {
+        ...run,
+        run_id: `${parent.run_id}.branch-${parent.branch_point}`,
+        parent_run_id: parent.run_id,
+        branch_point: parent.branch_point,
+      };
 }
 
 export function summary(database: string, config: string, card: Scorecard | null): RunSummary {
