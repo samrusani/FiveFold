@@ -41,25 +41,31 @@ shows through the gateway's admin path (`fivefold.harness.actors`, 0003).
 
 Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
 `ff_harness`, `ff_agent` and `ff_eval` (0008).
+
+Every model call of every worker goes into the harness's model-call log once the model
+answers, with its virtual times, the run's model and the reply's token usage (0004). Each
+worker has the scenario's step and token budgets (0009, `fivefold.agents.worker`).
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import psycopg
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
 from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.checkpoint import InlinePostgresSaver, connect
 from fivefold.agents.connection import GatewayConnection
+from fivefold.agents.live import refusal
 from fivefold.agents.policy import Mode, scripted_policy
 from fivefold.agents.scripted import ScriptedModel
 from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
-from fivefold.agents.worker import WorkerEnd, WorkerSpec, build_graph, run_worker
+from fivefold.agents.worker import CallLog, WorkerEnd, WorkerSpec, build_graph, run_worker
 from fivefold.domain.contracts import Capability, Contract
 from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
@@ -82,9 +88,9 @@ from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.tools import GatewayTools, ToolTiming
 from fivefold.harness.actors import PgEffectsLedger, ScriptedApprover, ScriptedResolver
-from fivefold.harness.clock import settle
+from fivefold.harness.clock import settle, wall_ms
 from fivefold.harness.fault_effects import SimulatorFaults, message_context
-from fivefold.harness.log import FaultRecord, PgHarnessLog, RunRecord
+from fivefold.harness.log import FaultRecord, ModelCallRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.models import SCRIPTED, ModelSpec, RunModels
 from fivefold.harness.reports import ReportSink, sink_endpoint
@@ -203,6 +209,7 @@ class InprocRun:
         self._closing: list[Any] = []
         self._last_write_answers: dict[tuple[str, str], int] = {}
         self.models = RunModels(spec.model)
+        self._model_calls = 0
 
     def _conninfo(self, role: str) -> str:
         return make_conninfo(self._dsn, user=role)
@@ -486,6 +493,7 @@ class InprocRun:
         model = self._chat_model(worker)
         budget = scenario.budget
         spec = WorkerSpec(worker, scenario.task, budget.max_agent_steps, budget.max_tokens)
+        on_call = self._call_log(worker)
 
         def on_step(step: int) -> None:
             self._agent_step(worker, step)
@@ -505,6 +513,7 @@ class InprocRun:
                 max_steps=spec.max_steps,
                 max_tokens=spec.max_tokens,
                 on_step=on_step,
+                on_call=on_call,
             )
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
             return
@@ -524,6 +533,7 @@ class InprocRun:
                 max_steps=spec.max_steps,
                 max_tokens=spec.max_tokens,
                 on_step=on_step,
+                on_call=on_call,
             )
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
         except asyncio.CancelledError:
@@ -674,6 +684,34 @@ class InprocRun:
         return self.models.chat_model(
             worker, scripted=scripted, think=think, hold=self.scheduler.hold
         )
+
+    def _call_log(self, worker: str) -> CallLog:
+        """Log each model call of `worker` once it is answered (0004): its number in the
+        run, its virtual times, the run's model, and the reply's token usage."""
+
+        def asked() -> Callable[[AIMessage], None]:
+            asked_vt, started = self.scheduler.now, wall_ms()
+
+            def answered(reply: AIMessage) -> None:
+                self._model_calls += 1
+                usage = reply.usage_metadata
+                self.log.model_called(
+                    ModelCallRecord(
+                        call_no=self._model_calls,
+                        worker=worker,
+                        asked_vt=asked_vt,
+                        answered_vt=self.scheduler.now,
+                        model=self.models.name,
+                        input_tokens=None if usage is None else usage["input_tokens"],
+                        output_tokens=None if usage is None else usage["output_tokens"],
+                        refused=refusal(reply),
+                        wall_ms=wall_ms() - started,
+                    )
+                )
+
+            return answered
+
+        return asked
 
     def _models_stopped(self) -> None:
         """The run has stopped: a recording's cassette is complete, and `harness.run`

@@ -6,10 +6,11 @@ database: the same scenario, configuration, contract level, seed, fault plan and
 with the replay adapter serving the cassette. The replay adapter fails the run if a
 request's hash differs from the recorded one, or if the run asks for more or fewer calls
 than the cassette holds (0009). `play` then compares the replay's records with the original
-run's, row by row, ignoring wall-clock columns, whose names end in `wall_at` (0009,
-Determinism contract):
+run's, row by row, ignoring wall-clock columns, whose names end in `wall_at` or `wall_ms`
+(0009, Determinism contract):
 
-- the harness's message log, fault log, actor log, final reports and stop time;
+- the harness's message log, fault log, actor log, final reports, stop time and model
+  calls, whose token counts a replay serves from the cassette;
 - the simulator's effects ledger and approval events;
 - the gateway's action events;
 - the evaluation JSON, without the run summary's model adapter, which a replay records as
@@ -53,6 +54,7 @@ RECORDS: Final[tuple[tuple[str, LiteralString], ...]] = (
     ("actor log", "SELECT to_jsonb(t) FROM harness.actor_log t ORDER BY seq"),
     ("final reports", "SELECT to_jsonb(t) FROM harness.final_report t ORDER BY seq"),
     ("run stop", "SELECT to_jsonb(t) FROM harness.run_stop t ORDER BY run_id"),
+    ("model calls", "SELECT to_jsonb(t) FROM harness.model_call t ORDER BY call_no"),
     ("effects ledger", "SELECT to_jsonb(t) FROM sim.effect t ORDER BY commit_seq"),
     ("approval events", "SELECT to_jsonb(t) FROM sim.approval_event t ORDER BY seq"),
     ("action events", "SELECT to_jsonb(t) FROM gw.action_event t ORDER BY seq"),
@@ -60,8 +62,8 @@ RECORDS: Final[tuple[tuple[str, LiteralString], ...]] = (
 )
 """The records a playback compares, by name, each with the query that reads it in order."""
 
-WALL_CLOCK_SUFFIX: Final = "wall_at"
-"""Wall-clock columns end in this, and are for metrics only (0009)."""
+WALL_CLOCK_SUFFIXES: Final = ("wall_at", "wall_ms")
+"""Wall-clock columns end in one of these, and are for metrics only (0009)."""
 
 
 class PlaybackError(Exception):
@@ -216,7 +218,7 @@ def _comparable(name: str, row: object) -> str:
     if not isinstance(row, dict):
         raise TypeError(f"a row of the {name} is not a JSON object: {row!r}")
     data: dict[str, Any] = {
-        column: value for column, value in row.items() if not column.endswith(WALL_CLOCK_SUFFIX)
+        column: value for column, value in row.items() if not column.endswith(WALL_CLOCK_SUFFIXES)
     }
     result = data.get("result")
     if name == "evaluation" and isinstance(result, dict) and isinstance(result.get("run"), dict):
