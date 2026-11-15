@@ -264,8 +264,8 @@ def test_required_intents_share_the_budget(dev_data: Data) -> None:
     scenario_from_data(dev_data)
 
 
-def test_feasibility_tries_every_combination_of_options(dev_data: Data) -> None:
-    """The cheapest-first choice for REQ-1 leaves too little for REQ-2; another fits."""
+def test_feasibility_takes_each_intents_cheapest_option(dev_data: Data) -> None:
+    """REQ-1's first supplier, in id order, leaves too little for REQ-2; its cheapest fits."""
     facts = dev_data["facts"]
     facts["quote/S-1/W-100"]["unit_price_minor"] = 600
     facts["quote/S-2/W-100"]["unit_price_minor"] = 500
@@ -406,3 +406,20 @@ def test_the_authority_applies_its_policy(dev_data: Data) -> None:
     assert authority.policy_decision(Operation.SUBMIT_PURCHASE_ORDER, scope) is (
         PolicyDecision.QUEUE
     )
+
+
+def test_feasibility_takes_linear_time_in_the_number_of_intents(dev_data: Data) -> None:
+    """Thirty intents with two equal options each: a search would try 2**30 choices."""
+    dev_data["facts"]["quote/S-2/W-100"]["unit_price_minor"] = 540
+    dev_data["facts"]["quote/S-2/W-100"]["min_quantity"] = 10
+    first = dev_data["intents"][0]
+    dev_data["intents"] = [
+        {**copy.deepcopy(first), "id": f"REQ-{number}"} for number in range(1, 31)
+    ]
+    dev_data["authority"]["per_order_ceiling_minor"] = 100_000
+    need = 30 * 100 * 540
+    dev_data["facts"]["budget/CC-OPS"] = {"limit_minor": need, "committed_minor": 0}
+    scenario_from_data(copy.deepcopy(dev_data))
+    dev_data["facts"]["budget/CC-OPS"]["limit_minor"] = need - 1
+    with pytest.raises(ScenarioError, match="not feasible together"):
+        scenario_from_data(dev_data)

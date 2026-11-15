@@ -16,7 +16,7 @@ YAML parsing sits behind `parse_yaml`, the loader's only use of a YAML library.
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
@@ -449,33 +449,25 @@ def feasible_together(
 ) -> bool:
     """Whether one allowed option per intent fits these facts at the same time (0004).
 
-    Options that share a budget or a stock must fit within it together. The loader checks
-    the required intents on the initial facts (0009). For property 4's `infeasible` excuse,
-    pass one intent and the facts at run end with every effect of the run removed.
+    Options that share a budget or a stock must fit within it together. Every option of
+    one intent draws on the same budget or stock, because the intent fixes its cost
+    center, or its warehouse and sku. So each intent's cheapest option is always the best
+    choice, and the check needs no search: it sums those per budget or stock.
+
+    The loader checks the required intents on the initial facts (0009). For property 4's
+    `infeasible` excuse, pass one intent and the facts at run end with every effect of
+    the run removed.
     """
-    choices = [options(intent, authority, facts) for intent in intents]
-    if not all(choices):
-        return False
-    return _fits(choices, 0, {}, facts)
-
-
-def _fits(
-    choices: Sequence[tuple[Option, ...]],
-    index: int,
-    used: dict[str, int],
-    facts: Mapping[str, Mapping[str, object]],
-) -> bool:
-    if index == len(choices):
-        return True
-    for option in choices[index]:
-        before = used.get(option.resource, 0)
-        if before + option.need > _capacity(option.resource, facts):
-            continue
-        used[option.resource] = before + option.need
-        if _fits(choices, index + 1, used, facts):
-            return True
-        used[option.resource] = before
-    return False
+    used: dict[str, int] = {}
+    for intent in intents:
+        found = options(intent, authority, facts)
+        if not found:
+            return False
+        if len({option.resource for option in found}) != 1:
+            raise ValueError(f"the options of {intent.id} draw on more than one resource")
+        cheapest = min(option.need for option in found)
+        used[found[0].resource] = used.get(found[0].resource, 0) + cheapest
+    return all(need <= _capacity(key, facts) for key, need in used.items())
 
 
 # Loading -------------------------------------------------------------------------------
