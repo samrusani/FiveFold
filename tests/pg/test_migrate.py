@@ -6,7 +6,7 @@ import hashlib
 import shutil
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import psycopg
@@ -315,3 +315,16 @@ def test_a_drop_by_oid_leaves_a_database_made_under_the_same_name_since(
         drop_database(admin_dsn, name, oid=second.oid)
     finally:
         drop_database(admin_dsn, name)
+
+
+def test_a_run_database_as_long_as_the_longest_prefix_and_suffix_make_is_created(
+    run_database: Callable[[str], str], db_prefix: str
+) -> None:
+    """FIVEFOLD_TEST_DB_PREFIX may have 40 characters, and the suite's longest suffix has
+    31, so a run database's name could have 79 bytes. This run's prefix is shorter, so
+    the suffix is padded by the difference to make a name just as long."""
+    suffix = "f10_stale_within_lag_c1_g2_play" + "x" * (40 - len(db_prefix))
+    dsn = run_database(suffix)
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute("SELECT current_database()").fetchone()
+    assert row is not None and len(row[0]) <= 63 and row[0].startswith(f"{db_prefix}_simtpl_")
