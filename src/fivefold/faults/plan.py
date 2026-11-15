@@ -5,10 +5,10 @@ event's fields and an occurrence number: the fault fires the Nth time the point 
 reached with a matching event in this run. Each entry keeps its own counter, so new
 unrelated events never shift a plan, and faults never fire on wall-clock time.
 
-Before a run starts, `check_configuration` refuses a plan that the run's configuration
-cannot carry out, and `seed_parameters` draws each seeded parameter the plan leaves
-unset, such as F4's `copy_delay_ms`, from the run's `faults` generator (0009). The run
-records the plan with the values it drew.
+Before a run starts, `check_configuration` and `check_run` refuse a plan that the run's
+configuration, contract or timing cannot carry out, and `seed_parameters` draws each
+seeded parameter the plan leaves unset, such as F4's `copy_delay_ms`, from the run's
+`faults` generator (0009). The run records the plan with the values it drew.
 """
 
 from __future__ import annotations
@@ -18,7 +18,16 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fivefold.faults.catalog import BUILT, POINTS, FaultId, FaultKind, point_exists
+from fivefold.domain.contracts import Contract
+from fivefold.domain.scenario import Params
+from fivefold.faults.catalog import (
+    BUILT,
+    F5_BEYOND_DEADLINE,
+    POINTS,
+    FaultId,
+    FaultKind,
+    point_exists,
+)
 
 
 class Trigger(BaseModel):
@@ -138,6 +147,29 @@ def seed_parameters(plan: Sequence[PlannedFault], draws: Draws) -> tuple[Planned
             planned = planned.model_copy(update={"params": {**planned.params, **drawn}})
         seeded.append(planned)
     return tuple(seeded)
+
+
+def check_run(plan: Sequence[PlannedFault], *, params: Params, contract: Contract) -> None:
+    """Refuse a plan that the run's timing or contract level cannot carry out (0005, 0006).
+
+    - F5 in contract holds a write past the caller's timeout and commits it before the
+      deadline: T < `delay_ms` < D. Beyond the deadline it commits after D: `delay_ms` > D,
+      and the plan must set it, since 0006 gives that variant no default.
+    """
+    t_ms, d_ms = params.dispatch_timeout_ms, params.commit_deadline_ms
+    wrong: list[str] = []
+    for planned in plan:
+        if planned.fault is FaultId.F5:
+            delay = planned.param("delay_ms")
+            if planned.variant == F5_BEYOND_DEADLINE:
+                if "delay_ms" not in planned.params:
+                    wrong.append(f"F5 {planned.variant} needs delay_ms set: 0006 gives no default")
+                elif delay <= d_ms:
+                    wrong.append(f"F5 {planned.variant} needs delay_ms above D ({d_ms})")
+            elif not t_ms < delay < d_ms:
+                wrong.append(f"F5 in contract needs delay_ms between T ({t_ms}) and D ({d_ms})")
+    if wrong:
+        raise ValueError(f"the plan does not fit the run: {'; '.join(wrong)} (0005, 0006)")
 
 
 class Fired:

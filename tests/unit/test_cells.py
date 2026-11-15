@@ -6,8 +6,10 @@ from __future__ import annotations
 import pytest
 
 from fivefold.domain.contracts import Contract
-from fivefold.faults.plan import check_configuration, parse_plan
+from fivefold.domain.scenario import load_scenario_file
+from fivefold.faults.plan import check_configuration, check_run, parse_plan
 from fivefold.harness.cells import Cell, cell_plan, load_expected
+from fivefold.harness.demo import DEV_001
 
 
 def cell(fault: str, variant: str | None, config: str, contract: Contract = Contract.C2) -> Cell:
@@ -26,6 +28,7 @@ def test_every_committed_cells_plan_is_one_the_catalog_and_the_run_accept(expect
     planned = parse_plan(cell_plan(expected))
     assert expected.fault in {str(entry.fault) for entry in planned}
     check_configuration(planned, gateway=expected.config != "B0")
+    check_run(planned, params=load_scenario_file(DEV_001).params, contract=expected.contract)
 
 
 @pytest.mark.parametrize(
@@ -112,3 +115,26 @@ def test_f4_cells_copy_the_order_on_the_named_hop(variant: str, config: str) -> 
 def test_an_f4_cell_on_a_hop_its_configuration_lacks_is_refused(variant: str, config: str) -> None:
     with pytest.raises(ValueError, match="F4 cannot copy the order"):
         cell_plan(cell("F4", variant, config))
+
+
+# F5 ----------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("config", ["G2", "B0"])
+def test_f5_cells_hold_the_order_where_it_reaches_the_simulator(config: str) -> None:
+    """0006 gives no default beyond the deadline; the cells use 20,000 ms, twice D."""
+    (in_contract,) = cell_plan(cell("F5", "in_contract", config))
+    (beyond,) = cell_plan(cell("F5", "beyond_deadline", config))
+    at = {"point": "sim.write.received", "match": {"api": "submit_purchase_order"}, "occurrence": 1}
+    assert in_contract == {"fault": "F5", "variant": "in_contract", "at": at, "params": {}}
+    assert beyond == {
+        "fault": "F5",
+        "variant": "beyond_deadline",
+        "at": at,
+        "params": {"delay_ms": 20_000},
+    }
+
+
+def test_an_f5_cell_names_one_of_its_variants() -> None:
+    with pytest.raises(ValueError, match="F5 has no variant 'late'"):
+        cell_plan(cell("F5", "late", "G2"))

@@ -16,7 +16,8 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
    at its points (F1, F6 and F7 early), and this module those at the agent's points (F1's
    B0 equivalent, F11). A crashed gateway restarts through startup recovery (0003), and
    each agent worker then opens a new MCP connection to it; a crashed worker restarts
-   from its last checkpoint;
+   from its last checkpoint. The simulator's endpoint fires F5 at the simulator's
+   points (`fivefold.harness.sim_points`);
 5. runs until the agents' phase ends: every worker finished, used up its step budget or
    failed;
 6. in G2, closes the run if the last report did not (0003); then keeps everything but
@@ -54,6 +55,7 @@ from fivefold.faults.plan import (
     FaultInjector,
     Fired,
     check_configuration,
+    check_run,
     parse_plan,
     seed_parameters,
 )
@@ -72,6 +74,7 @@ from fivefold.harness.mcp_link import Link
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.sim_points import SimulatorPoints
 from fivefold.harness.transport import Envelope, Outgoing, Stage, Transport
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
@@ -161,6 +164,7 @@ class InprocRun:
         self.spec = spec
         self._plan = parse_plan(spec.plan if spec.plan is not None else _plan_of(spec.scenario))
         check_configuration(self._plan, gateway=spec.config != "B0")
+        check_run(self._plan, params=spec.scenario.params, contract=spec.contract)
         self._plan = seed_parameters(self._plan, Generators(spec.seed).get("faults"))
         self._dsn = dsn
         self.scheduler = Scheduler()
@@ -235,6 +239,7 @@ class InprocRun:
                 self.scheduler,
                 poll_ms=params.approval_poll_interval_ms,
                 served=[self.approver.served],
+                points=self._simulator_points(),
             ),
         )
         intents = {intent.id: str(intent.operation) for intent in scenario.intents}
@@ -262,6 +267,10 @@ class InprocRun:
 
     def _agents_done(self) -> bool:
         return len(self.result.ends) == len(self._workers)
+
+    def _simulator_points(self) -> SimulatorPoints:
+        """F5, at the simulator's fault points (0006)."""
+        return SimulatorPoints(self.scheduler, self.faults, self.log)
 
     # The gateway --------------------------------------------------------------------------
 

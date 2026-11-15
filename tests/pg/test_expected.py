@@ -34,6 +34,9 @@ G2_LIMITS: dict[tuple[str, str | None, Contract], tuple[str, tuple[int, ...]]] =
     **{("F7", "late_price_up", level): ("fail", (3,)) for level in BELOW_C3},
     ("F2", None, Contract.C0): ("pass_unresolved", ()),
     ("F3", None, Contract.C0): ("pass_unresolved", ()),
+    ("F5", "beyond_deadline", Contract.C1): ("fail", (1, 3)),
+    ("F5", "in_contract", Contract.C0): ("pass_unresolved", ()),
+    ("F5", "beyond_deadline", Contract.C0): ("pass_unresolved", ()),
 }
 """0006's documented G2 limits, by fault, variant and contract level: the cells that fail or
 stay unresolved by design. Every other G2 cell is expected to pass."""
