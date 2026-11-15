@@ -2,7 +2,8 @@
 
 The evaluator reads other components' tables, never their code. The gateway reaches the
 simulator only through the simulator's API. Agents reach tools only through MCP or the
-baseline client.
+baseline client. The viewer, like the evaluator, reads tables and never another
+component's code, so it has no write path through one (0012).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ FORBIDDEN: dict[str, frozenset[str]] = {
     "evaluator": frozenset({"agents", "faults", "gateway", "harness", "recorder", "sim"}),
     "gateway": frozenset({"sim"}),
     "agents": frozenset({"gateway", "sim"}),
+    "viewer": frozenset({"agents", "evaluator", "faults", "gateway", "harness", "recorder", "sim"}),
 }
 """For each component, the fivefold subpackages it must never import."""
 
