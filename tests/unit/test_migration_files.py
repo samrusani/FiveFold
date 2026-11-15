@@ -22,6 +22,11 @@ def test_repository_migrations_are_well_formed() -> None:
     assert migrations[0].name == "0001_schemas.sql"
 
 
+def test_the_run_registry_s_migrations_are_well_formed() -> None:
+    migrations = discover(MIGRATIONS.parent / "registry")
+    assert [migration.name for migration in migrations][:1] == ["0001_registry.sql"]
+
+
 @pytest.mark.parametrize(
     "names",
     [

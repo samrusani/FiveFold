@@ -14,8 +14,9 @@ Each demo runs B0 and G2 on the same scenario and seed and shows them side by si
    resolver attests what happened.
 
 Every run gets its own database, recreated from scratch and migrated, as role `ff_*`
-connections need (0008). The admin connection comes from `FIVEFOLD_ADMIN_DSN`, as for
-the tests. A demo needs no API key: the model is scripted (0009).
+connections need (0008), and its row in the run registry, so the viewer lists it
+(0012). The admin connection comes from `FIVEFOLD_ADMIN_DSN`, as for the tests. A demo
+needs no API key: the model is scripted (0009).
 
 The demo reads the gateway's records only to show what the gateway did and told the
 agent; the verdict comes from the evaluator, which never reads them to decide (0004).
@@ -45,7 +46,7 @@ from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import result_json
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
-    bootstrap,
+    bootstrap_server,
     migrate,
     recreate_database,
 )
@@ -383,8 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if unknown:
         parser.error(f"no demo {', '.join(unknown)}; choose from {', '.join(DEMO_BY_KEY)}")
     chosen = [DEMO_BY_KEY[key] for key in args.demos] or list(DEMOS)
-    with psycopg.connect(args.dsn, autocommit=True) as conn:
-        bootstrap(conn, DB_DIR / "bootstrap.sql")
+    bootstrap_server(args.dsn, DB_DIR)
     for demo in chosen:
         scenario = load_scenario_file(demo.scenario)
         print(f"Demo {demo.key}: {demo.title} ({scenario.id}, {demo.contract}, seed {args.seed})")

@@ -6,7 +6,8 @@ The study runs dev-001 with no fault and with F2, at C0, in B0, G1 and G2, with 
 test run's prefix, dropped once the episode ends. Each result is saved under the name of
 its cell and seed, and the F2 cells get the verdicts `faults/expected.yaml` expects, with
 either seed. The same inputs give the same bytes. `python -m fivefold.evaluator report`
-builds the CSV and the Markdown report from the directory.
+builds the CSV and the Markdown report from the directory. The run registry lists a kept
+episode's database and none that was dropped (0012).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from psycopg.conninfo import make_conninfo
 from fivefold.evaluator.__main__ import main as report
 from fivefold.evaluator.report import load_result, planned_faults
 from fivefold.harness.cells import load_expected
-from fivefold.harness.migrations import drop_database
+from fivefold.harness.migrations import drop_database, registry_database
 from fivefold.harness.study import main as study_main
 
 pytestmark = pytest.mark.pg
@@ -42,6 +43,17 @@ def databases(admin_dsn: str, prefix: str) -> list[str]:
     with psycopg.connect(admin_dsn) as conn:
         rows = conn.execute(
             "SELECT datname FROM pg_database WHERE datname ~ %s ORDER BY datname",
+            (f"^{prefix}_[0-9]+$",),
+        ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def registered(admin_dsn: str, prefix: str) -> list[str]:
+    """The run registry's databases that a study with `prefix` names."""
+    with psycopg.connect(make_conninfo(admin_dsn, dbname=registry_database())) as conn:
+        rows = conn.execute(
+            "SELECT database_name FROM registry.run WHERE database_name ~ %s"
+            " ORDER BY database_name",
             (f"^{prefix}_[0-9]+$",),
         ).fetchall()
     return [str(row[0]) for row in rows]
@@ -72,6 +84,12 @@ def study(
     status, printed = run_study(admin_dsn, out, f"{db_prefix}_study", ARGS)
     assert status == 0, printed
     yield out, printed
+
+
+def test_the_run_registry_lists_no_episode_database_the_study_dropped(
+    study: tuple[Path, str], admin_dsn: str, db_prefix: str
+) -> None:
+    assert registered(admin_dsn, f"{db_prefix}_study") == []
 
 
 def test_the_study_saves_one_result_per_episode_named_for_its_cell_and_seed(
@@ -208,6 +226,7 @@ def test_the_study_keeps_each_episode_s_database_when_asked(
         with redirect_stdout(printed):
             assert study_main(argv) == 0
         assert databases(admin_dsn, prefix) == [f"{prefix}_0001"]
+        assert registered(admin_dsn, prefix) == [f"{prefix}_0001"]
         with psycopg.connect(make_conninfo(admin_dsn, dbname=f"{prefix}_0001")) as conn:
             runs = conn.execute("SELECT run_id, config, contract, seed FROM harness.run").fetchall()
         assert runs == [("dev-001-single-po.G2.C2.7", "G2", "C2", 7)]

@@ -5,9 +5,10 @@ build runs B0, G1 and G2 with the scripted model, recorded into a cassette or no
 cassette's replay, or with a live model, always recorded (`fivefold.harness.models`).
 `InprocRun.execute`:
 
-1. records the run, sets up the simulator for the contract with the configuration's
-   credentials (only the gateway in G1 and G2, the agent workers in B0; 0008), and serves the
-   simulator's API and, in B0, the report sink on the transport;
+1. records the run, in its run database and in the run registry (0012,
+   `fivefold.harness.registry`), sets up the simulator for the contract with the
+   configuration's credentials (only the gateway in G1 and G2, the agent workers in B0;
+   0008), and serves the simulator's API and, in B0, the report sink on the transport;
 2. in G1 and G2, starts the gateway: its store, its dispatcher after startup recovery, and
    its tools, one MCP server per agent connection. G1's store has action identity off,
    which makes the gateway authorization only (0008);
@@ -40,7 +41,8 @@ tells it when an action is left to a human, and it attests what the simulator's 
 shows through the gateway's admin path (`fivefold.harness.actors`, 0003).
 
 Each component connects to the run database as its own role: `ff_sim`, `ff_gw`,
-`ff_harness`, `ff_agent` and `ff_eval` (0008).
+`ff_harness`, `ff_agent` and `ff_eval` (0008). The registry's row is written as
+`ff_registry`, in the registry's own database on the same server.
 
 Every model call of every worker goes into the harness's model-call log once the model
 answers, with its virtual times, the run's model and the reply's token usage (0004). Each
@@ -93,6 +95,7 @@ from fivefold.harness.fault_effects import SimulatorFaults, message_context
 from fivefold.harness.log import FaultRecord, ModelCallRecord, PgHarnessLog, RunRecord
 from fivefold.harness.mcp_link import Link
 from fivefold.harness.models import SCRIPTED, ModelSpec, RunModels
+from fivefold.harness.registry import RegistryEntry, database_of, register
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
@@ -240,6 +243,17 @@ class InprocRun:
                     "agent_workers": self._agent_workers,
                 },
             )
+        )
+        register(
+            self._dsn,
+            RegistryEntry(
+                database=database_of(self._dsn),
+                run_id=spec.run_id,
+                scenario_id=scenario.id,
+                config=spec.config,
+                contract=str(spec.contract),
+                seed=spec.seed,
+            ),
         )
         self.faults = FaultInjector(plan)
         generators = Generators(spec.seed)

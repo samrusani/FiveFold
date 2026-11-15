@@ -27,8 +27,10 @@ EXPECTED: dict[str, dict[str, frozenset[str]]] = {
     "ff_agent": {"sim": NONE, "gw": NONE, "harness": NONE, "agent": WRITES, "eval": NONE},
     "ff_eval": {"sim": READS, "gw": READS, "harness": READS, "agent": NONE, "eval": WRITES},
     "ff_viewer": {"sim": READS, "gw": READS, "harness": READS, "agent": NONE, "eval": READS},
+    "ff_registry": {"sim": NONE, "gw": NONE, "harness": NONE, "agent": NONE, "eval": NONE},
 }
-"""The privilege table in 0008, by role and schema."""
+"""The privilege table in 0008, by role and schema, and `ff_registry`, which writes the run
+registry and has no privilege in a run database (0012)."""
 
 
 def _privilege(conn: psycopg.Connection[TupleRow], query: LiteralString, *args: str) -> bool:

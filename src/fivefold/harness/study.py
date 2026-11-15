@@ -30,8 +30,9 @@ Its inputs:
   another's files.
 - `--database-prefix` and `--keep-databases`: episode N runs in a fresh, migrated
   database named `PREFIX_NNNN` (default prefix `fivefold_study`), dropped once the
-  episode ends unless `--keep-databases` is given. The admin connection comes from
-  `--dsn`, or `FIVEFOLD_ADMIN_DSN`.
+  episode ends unless `--keep-databases` is given. A kept database stays in the run
+  registry, so the viewer lists it (0012); a dropped one leaves it. The admin connection
+  comes from `--dsn`, or `FIVEFOLD_ADMIN_DSN`.
 
 Episodes run in a fixed order: by seed, then by cell. Cells go by fault (no fault first,
 then F1 to F12), variant, contract level and configuration. So a study that stops partway
@@ -94,13 +95,14 @@ from fivefold.harness.live_options import add_live_options, check_live_options, 
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
     MigrationError,
-    bootstrap,
+    bootstrap_server,
     check_database_name,
     drop_database,
     migrate,
     recreate_database,
 )
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
+from fivefold.harness.registry import forget
 from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS, Config, InprocRun, RunSpec
 from fivefold.recorder.cassette import Cassette, response_message
 
@@ -398,7 +400,7 @@ def run_episode(
 ) -> Outcome:
     """Run `episode` in a fresh, migrated database `database`, and save its result, and
     its cassette when the model is live, in `out`. The database is dropped once the run
-    ends, unless `keep`."""
+    ends, unless `keep`; a dropped database leaves the run registry too."""
     spec = episode.spec(study.scenario, study.model)
     dsn = recreate_database(admin_dsn, database)
     try:
@@ -409,6 +411,7 @@ def run_episode(
     finally:
         if not keep:
             drop_database(admin_dsn, database)
+            forget(admin_dsn, database)
     evaluation = run.result.evaluation
     if evaluation is None:
         raise RuntimeError(f"episode {episode.name} was not evaluated")
@@ -571,8 +574,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         study = plan_study(args, SCRIPTED if live is None else live)
         check_out(out)
         check_databases_free(args.dsn, study, args.database_prefix)
-        with psycopg.connect(args.dsn, autocommit=True) as conn:
-            bootstrap(conn, DB_DIR / "bootstrap.sql")
+        bootstrap_server(args.dsn, DB_DIR)
         print(study.describe(), flush=True)
         ran = 0
         try:

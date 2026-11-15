@@ -1,4 +1,4 @@
-"""Database bootstrap and migrations (0007, 0008).
+"""Database bootstrap and migrations (0007, 0008, 0012).
 
 `db/bootstrap.sql` creates the component roles. Roles belong to the whole PostgreSQL
 server, so the script runs once per server, as a superuser, and is safe to run again.
@@ -11,6 +11,12 @@ changed or disappeared. Migrations only go forward: run databases are disposable
 Run every migration as the same role. The default privileges in `0001_schemas.sql` apply
 to objects created later by the role that ran it.
 
+The run registry (0009, 0012) is one more database on the server, `fivefold_registry`
+unless FIVEFOLD_REGISTRY_DB names another. It lists the run databases for the viewer, and
+has migrations of its own, in `db/registry/`, applied by the same runner.
+`bootstrap_server` creates the roles and the registry, and leaves an existing registry's
+rows alone. `fivefold.harness.registry` writes the rows.
+
 Command line, from the repository root:
 
     python -m fivefold.harness.migrations bootstrap
@@ -21,10 +27,11 @@ Command line, from the repository root:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +55,13 @@ DATABASE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 PostgreSQL truncates longer identifiers to 63 bytes (NAMEDATALEN - 1) without an error,
 so dropping an overlong name would drop whichever database has its first 63 bytes.
 """
+
+REGISTRY_DATABASE = "fivefold_registry"
+"""The run registry's database (0012), unless FIVEFOLD_REGISTRY_DB names another."""
+
+REGISTRY_ENV = "FIVEFOLD_REGISTRY_DB"
+"""The environment variable that names another registry database. Tests set it, so a test
+run never writes to the registry a person's runs are in."""
 
 Connection = psycopg.Connection[TupleRow]
 
@@ -160,12 +174,64 @@ def recreate_database(admin_dsn: str, name: str) -> str:
     check_database_name(name)
     drop_database(admin_dsn, name)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        conn.execute(
-            sql.SQL(
-                "CREATE DATABASE {} ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
-            ).format(sql.Identifier(name))
-        )
+        _create_database(conn, name)
     return make_conninfo(admin_dsn, dbname=name)
+
+
+def _create_database(conn: Connection, name: str) -> None:
+    conn.execute(
+        sql.SQL(
+            "CREATE DATABASE {} ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
+        ).format(sql.Identifier(name))
+    )
+
+
+def registry_database(environ: Mapping[str, str] | None = None) -> str:
+    """The run registry's database name: FIVEFOLD_REGISTRY_DB if set, else `fivefold_registry`.
+
+    `environ` defaults to the process environment.
+    """
+    env = os.environ if environ is None else environ
+    name = env.get(REGISTRY_ENV) or REGISTRY_DATABASE
+    check_database_name(name)
+    return name
+
+
+def prepare_registry(admin_dsn: str, directory: Path, name: str | None = None) -> str:
+    """Create the run registry's database unless it exists, apply its migrations from
+    `directory`, and return its DSN.
+
+    `name` defaults to `registry_database()`. The rows of an existing registry stay. Two
+    processes can prepare the same registry at once: the one that loses the race to
+    create it finds it created.
+    """
+    name = registry_database() if name is None else name
+    check_database_name(name)
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        found = conn.execute(
+            "SELECT 1 FROM pg_catalog.pg_database WHERE datname = %s", (name,)
+        ).fetchone()
+        if found is None:
+            # Another process may create it first; then it exists, which is the point.
+            with contextlib.suppress(psycopg.errors.DuplicateDatabase):
+                _create_database(conn, name)
+    dsn = make_conninfo(admin_dsn, dbname=name)
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        migrate(conn, directory)
+    return dsn
+
+
+def bootstrap_server(admin_dsn: str, db_dir: Path) -> str:
+    """Create the component roles from `db_dir/bootstrap.sql` and the run registry from
+    `db_dir/registry/`, and return the registry's database name.
+
+    Runs as a superuser, and is safe to run again: what exists stays.
+    """
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        bootstrap(conn, db_dir / "bootstrap.sql")
+    name = registry_database()
+    prepare_registry(admin_dsn, db_dir / "registry", name)
+    return name
 
 
 def drop_database(admin_dsn: str, name: str) -> None:
@@ -200,8 +266,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "command",
         choices=["bootstrap", "migrate", "reset"],
-        help="bootstrap: create roles. migrate: apply pending migrations. "
-        "reset: recreate the database, then bootstrap and migrate.",
+        help="bootstrap: create roles and the run registry. migrate: apply pending "
+        "migrations. reset: recreate the database, then bootstrap and migrate.",
     )
     parser.add_argument(
         "--dsn",
@@ -221,15 +287,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     db_dir: Path = args.db_dir
 
     if args.command == "bootstrap":
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            bootstrap(conn, db_dir / "bootstrap.sql")
-        print("bootstrap: roles are in place")
+        registry = bootstrap_server(admin_dsn, db_dir)
+        print(f"bootstrap: roles and the run registry {registry} are in place")
         return 0
 
     if args.command == "reset":
         target = recreate_database(admin_dsn, database)
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            bootstrap(conn, db_dir / "bootstrap.sql")
+        bootstrap_server(admin_dsn, db_dir)
     else:
         target = make_conninfo(admin_dsn, dbname=database)
     with psycopg.connect(target, autocommit=True) as conn:

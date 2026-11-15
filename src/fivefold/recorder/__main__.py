@@ -50,7 +50,12 @@ from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
-from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, bootstrap, migrate, recreate_database
+from fivefold.harness.migrations import (
+    DEFAULT_ADMIN_DSN,
+    bootstrap_server,
+    migrate,
+    recreate_database,
+)
 from fivefold.harness.models import Live
 from fivefold.harness.run import CONFIGS, RunSpec
 from fivefold.recorder.cassette import Cassette
@@ -166,8 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         check_live_options(parser, args)
     try:
         live = live_from_args(args, os.environ) if args.command == "record" else None
-        with psycopg.connect(args.dsn, autocommit=True) as conn:
-            bootstrap(conn, DB_DIR / "bootstrap.sql")
+        bootstrap_server(args.dsn, DB_DIR)
         return _record(args, live) if args.command == "record" else _play(args)
     except (OSError, PlaybackError, ReplayError, ValueError) as error:
         print(f"{args.command} failed: {error}", file=sys.stderr)

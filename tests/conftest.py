@@ -9,7 +9,9 @@ database (`make db-up`).
 
 Every database the tests create starts with FIVEFOLD_TEST_DB_PREFIX (default
 `fivefold_test`). Test runs that share one server at the same time need different
-prefixes, or they drop each other's databases.
+prefixes, or they drop each other's databases. That includes the run registry (0012):
+the tests' runs register in `PREFIX_registry`, never in the registry a person's runs are
+in.
 """
 
 from __future__ import annotations
@@ -35,11 +37,14 @@ from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.twin import TwinStore
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
+    REGISTRY_ENV,
     bootstrap,
     drop_database,
     migrate,
+    prepare_registry,
     recreate_database,
 )
+from fivefold.harness.registry import forget
 from fivefold.sim import SimConfig, Simulator
 
 settings.register_profile("ci", derandomize=True, deadline=None, print_blob=True)
@@ -50,6 +55,8 @@ DB_DIR = Path(__file__).resolve().parents[1] / "db"
 DB_PREFIX = os.environ.get("FIVEFOLD_TEST_DB_PREFIX", "fivefold_test")
 if not re.fullmatch(r"[a-z_][a-z0-9_]{0,39}", DB_PREFIX):
     raise ValueError("FIVEFOLD_TEST_DB_PREFIX must be at most 40 lowercase letters, digits or _")
+REGISTRY = f"{DB_PREFIX}_registry"
+"""The run registry the tests' runs register in (0012)."""
 
 
 @pytest.fixture(scope="session")
@@ -59,12 +66,18 @@ def db_prefix() -> str:
 
 
 @pytest.fixture(scope="session")
-def admin_dsn() -> str:
-    """The admin connection string, after the component roles are in place."""
+def admin_dsn() -> Iterator[str]:
+    """The admin connection string, after the component roles and a fresh run registry are
+    in place. While the session lasts, FIVEFOLD_REGISTRY_DB names the tests' registry."""
     dsn = os.environ.get("FIVEFOLD_ADMIN_DSN", DEFAULT_ADMIN_DSN)
     with psycopg.connect(dsn, autocommit=True) as conn:
         bootstrap(conn, DB_DIR / "bootstrap.sql")
-    return dsn
+    drop_database(dsn, REGISTRY)
+    prepare_registry(dsn, DB_DIR / "registry", REGISTRY)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(REGISTRY_ENV, REGISTRY)
+        yield dsn
+    drop_database(dsn, REGISTRY)
 
 
 @pytest.fixture
@@ -330,3 +343,4 @@ def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], 
     yield make
     for name in made:
         drop_database(admin_dsn, name)
+        forget(admin_dsn, name)
