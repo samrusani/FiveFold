@@ -17,7 +17,13 @@ import pytest
 
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.scenario import Resolver
-from fivefold.gateway.admin import GatewayAdmin, OpenEscalation, UnknownEscalation
+from fivefold.gateway.admin import (
+    BeforeSettleTime,
+    EscalationResolved,
+    GatewayAdmin,
+    OpenEscalation,
+    UnknownEscalation,
+)
 from fivefold.gateway.destination import ApprovalNow, FactNow
 from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.memory import MemoryStore
@@ -278,6 +284,7 @@ def test_the_admin_path_lists_an_open_escalation_with_what_a_human_needs() -> No
             approval_id="APR-0001",
             opened_vt=360,
             last_sent_vt=160,
+            not_committed_from_vt=160 + SETTLE,
         ),
     )
 
@@ -316,8 +323,10 @@ def test_not_committed_is_refused_before_the_settle_time_and_accepted_at_it() ->
     refusals: list[str] = []
 
     def too_early() -> None:
-        with pytest.raises(StepRefused, match=f"before vt {sent + SETTLE}") as refused:
+        with pytest.raises(BeforeSettleTime, match=f"before vt {sent + SETTLE}") as refused:
             gateway.up().resolve("ESC-0001", Resolution.NOT_COMMITTED, actor="resolver")
+        assert isinstance(refused.value, StepRefused), "the store refused it"
+        assert refused.value.not_committed_from_vt == sent + SETTLE
         refusals.append(str(refused.value))
 
     _at(gateway, sent + SETTLE - 1, too_early)
@@ -362,8 +371,15 @@ def test_an_unknown_or_resolved_escalation_and_a_bad_attestation_are_refused() -
         admin.resolve("ESC-0001", Resolution.COMMITTED, "PO-0001", actor="")
     assert gateway.store.view(action_id).action.state is S.OUTCOME_UNKNOWN
     admin.resolve("ESC-0001", Resolution.COMMITTED, "PO-0001", actor="resolver")
-    with pytest.raises(StepRefused):
-        admin.resolve("ESC-0001", Resolution.COMMITTED, "PO-0001", actor="resolver")
+    with pytest.raises(EscalationResolved, match="resolved already: committed") as refused:
+        admin.resolve("ESC-0001", Resolution.NOT_COMMITTED, actor="someone else")
+    assert isinstance(refused.value, StepRefused), "the store refused it"
+    resolved = refused.value.escalation
+    assert (resolved.resolution, resolved.effect_id, resolved.actor) == (
+        Resolution.COMMITTED,
+        "PO-0001",
+        "resolver",
+    )
 
 
 def test_the_admin_path_never_contacts_the_simulator() -> None:
