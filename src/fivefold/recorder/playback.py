@@ -1,14 +1,14 @@
-"""Recorded playback (0009, Playback and branching): re-execute a run from its cassette.
+"""Recorded playback and experimental branches (0009, Playback and branching).
 
-`record` runs a run with the scripted adapter, wrapped by the recorder, or with the live
-adapter, which always records, and returns the run and its cassette. `play` re-executes
-the run a cassette was recorded from, in a fresh run database: the same scenario,
-configuration, contract level, seed, fault plan and workers, with the replay adapter
-serving the cassette, so it needs no network. The replay adapter fails the run if a
-request's hash differs from the recorded one, or if the run asks for more or fewer calls
-than the cassette holds (0009). `play` then compares the replay's records with the original
-run's, row by row, ignoring wall-clock columns, whose names end in `wall_at` or `wall_ms`
-(0009, Determinism contract):
+`record` runs a run with the scripted adapter, wrapped by the recorder, with the live
+adapter, which always records, or as an experimental branch, which always records too, and
+returns the run and its cassette. `play` re-executes the run a cassette was recorded from,
+in a fresh run database: the same scenario, configuration, contract level, seed, fault plan
+and workers, with the replay adapter serving the cassette, so it needs no network. The
+replay adapter fails the run if a request's hash differs from the recorded one, or if the
+run asks for more or fewer calls than the cassette holds (0009). `play` then compares the
+replay's records with the original run's, row by row, ignoring wall-clock columns, whose
+names end in `wall_at` or `wall_ms` (0009, Determinism contract):
 
 - the harness's message log, fault log, actor log, final reports, stop time and model
   calls, whose token counts a replay serves from the cassette;
@@ -23,6 +23,12 @@ database holds no run yet. It reads both databases only as `ff_viewer`, which ca
 select (0008), in read-only transactions, so it never writes to the original run's
 database. The replay itself writes only to its own database, through the run's components,
 each with its own role.
+
+`branch_spec` is an experimental branch of the run a cassette was recorded from: the run
+`replay_spec` gives, whose first K model calls the branch adapter replays before it hands
+every later call to the scripted model or a live one (`fivefold.agents.branch`). The branch
+is a new run, with its own run id, and its own cassette, which `play` replays as any other:
+its header names the parent's run id and the branch point, and the replay records them too.
 
 The command line is `python -m fivefold.recorder` (`fivefold.recorder.__main__`).
 
@@ -42,7 +48,7 @@ from pydantic import ValidationError
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, scenario_digest
-from fivefold.harness.models import Live, Replay, Scripted
+from fivefold.harness.models import SCRIPTED, Branch, Live, Replay, Scripted
 from fivefold.harness.run import Config, InprocRun, RunSpec
 from fivefold.recorder.cassette import Cassette, RunHeader, canonical_json, sha256
 
@@ -109,9 +115,9 @@ class Playback:
 
 def record(spec: RunSpec, dsn: str) -> tuple[InprocRun, Cassette]:
     """Run `spec`, recording every model call, in the fresh, migrated run database `dsn`;
-    return the run and its cassette. A live model records as it runs; any other spec runs
-    with the scripted adapter, wrapped by the recorder."""
-    model = spec.model if isinstance(spec.model, Live) else Scripted(record=True)
+    return the run and its cassette. A live model and a branch record as they run; any
+    other spec runs with the scripted adapter, wrapped by the recorder."""
+    model = spec.model if isinstance(spec.model, Live | Branch) else Scripted(record=True)
     run = InprocRun(replace(spec, model=model), dsn)
     asyncio.run(run.execute())
     if run.models.cassette is None:
@@ -152,6 +158,19 @@ def replay_spec(cassette: Cassette, scenario: Scenario) -> RunSpec:
     if spec.run_id != run.run_id:
         raise PlaybackError(f"the cassette names run {run.run_id}, but it would be {spec.run_id}")
     return spec
+
+
+def branch_spec(
+    parent: Cassette, scenario: Scenario, point: int, model: Scripted | Live = SCRIPTED
+) -> RunSpec:
+    """An experimental branch (0009) of the run `parent` was recorded from, on `scenario`:
+    the parent's first `point` model calls replayed from `parent`, then `model`.
+
+    Raises `PlaybackError` if `scenario` is not the one the parent was recorded on, and
+    `BranchError` if `point` is not from 0 to the number of calls `parent` holds.
+    """
+    spec = replay_spec(parent, scenario)
+    return replace(spec, model=Branch(parent, point, model))
 
 
 def play(cassette: Cassette, scenario: Scenario, *, original: str, replay: str) -> Playback:
@@ -242,7 +261,8 @@ def _check_original(dsn: str, cassette: Cassette) -> None:
     with _viewer(dsn) as conn:
         rows = conn.execute(
             "SELECT run_id, scenario_id, scenario_digest, config, contract, seed, topology,"
-            " params, model_adapter, model, cassette_digest FROM harness.run"
+            " params, model_adapter, model, cassette_digest, parent_run_id, branch_point"
+            " FROM harness.run"
         ).fetchall()
     if len(rows) != 1:
         raise PlaybackError("the original run's database holds no run")
@@ -262,6 +282,8 @@ def _check_original(dsn: str, cassette: Cassette) -> None:
             seed=row[5],
             topology=row[6],
             params=row[7],
+            parent_run_id=row[11],
+            branch_point=row[12],
         )
     except ValidationError as error:
         raise PlaybackError(f"the original run's record does not read as a run: {error}") from None
