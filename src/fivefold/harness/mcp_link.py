@@ -207,6 +207,7 @@ class Link:
         self.client_read = Inbox()
         self.server_read = Inbox()
         agent_requests, gateway_requests = _Requests(), _Requests()
+        self._agent_requests = agent_requests
         self.client_write = Outbox(
             self,
             transport,
@@ -226,6 +227,15 @@ class Link:
             theirs=agent_requests,
         )
         scheduler.on_crash(self._crashed)
+
+    def request_seq(self, request_id: object) -> int | None:
+        """The message seq of the agent's request with this JSON-RPC id, if it was sent.
+
+        The gateway names the message that carried a final report this way, so the
+        evaluator can find when the report reached it (0004, property 5).
+        """
+        sent = self._agent_requests.sent.get(request_id)
+        return None if sent is None else sent[0]
 
     def answer_wanted(self) -> DropReason | None:
         """Drop answers sent to an agent that has crashed since it opened this link."""
