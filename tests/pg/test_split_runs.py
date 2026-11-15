@@ -32,6 +32,7 @@ import psycopg
 import pytest
 import uvicorn
 import yaml
+from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.remote import HttpGatewayConnection, RemoteAgent, RunOver, run_remote_agent
@@ -52,7 +53,7 @@ from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.gateway import AdminFactory, GatewayService, admin_api
-from fivefold.harness.split.lifecycle import end_run, score_run, start_run
+from fivefold.harness.split.lifecycle import default_database, end_run, score_run, start_run
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.service import open_run
 from fivefold.harness.split.simulator import SimulatorService
@@ -129,12 +130,16 @@ class Split:
     database: str
     root: Path
 
-    def scenario(self, **params: int) -> Path:
-        """dev-001 with fast timings, written to a file."""
+    def scenario(self, scenario_id: str | None = None, **params: int) -> Path:
+        """dev-001 with fast timings, written to a file; under another id if given."""
         data = yaml.safe_load(DEV_001.read_text(encoding="utf-8"))
         data["params"] = {**FAST, **params}
         data["faults"] = []
-        path = self.root / "scenario.yaml"
+        name = "scenario.yaml"
+        if scenario_id is not None:
+            data["id"] = scenario_id
+            name = f"scenario-{scenario_id}.yaml"
+        path = self.root / name
         path.write_text(yaml.safe_dump(data), encoding="utf-8")
         return path
 
@@ -647,11 +652,16 @@ def test_once_the_agents_phase_is_over_the_scripted_agent_is_told_so(split: Spli
 
 
 def _start(
-    split: Split, run_dir: Path, *, replace: bool = False, admin: str | None = None
+    split: Split,
+    run_dir: Path,
+    *,
+    replace: bool = False,
+    admin: str | None = None,
+    scenario_id: str | None = None,
 ) -> SplitRun:
     return start_run(
         admin_dsn=split.admin if admin is None else admin,
-        scenario_path=split.scenario(),
+        scenario_path=split.scenario(scenario_id),
         config="B0",
         contract=Contract.C2,
         seed=7,
@@ -672,18 +682,61 @@ def _database_oid(split: Split) -> int | None:
     return None if row is None else int(row[0])
 
 
-def test_start_refuses_a_database_of_the_same_name_unless_asked_to_replace_it(
+def test_start_refuses_a_database_of_the_same_name_unless_it_may_replace_it(
     split: Split,
 ) -> None:
     """A database that already has the run's name is left as it was, unless the person
-    asks to replace it."""
+    asks to replace it and it is this run's. A database that is no run database stays,
+    and so does the template; a copy of the template that holds no run yet, as a start
+    that failed before recording its run leaves it, is replaced."""
     other = create_database(split.admin, split.database)
     with pytest.raises(RunDirError, match="already exists: replace it, or name another"):
         _start(split, split.root / "refused")
+    with pytest.raises(RunDirError, match="is not a run database"):
+        _start(split, split.root / "refused", replace=True)
     assert _database_oid(split) == other.oid
+    drop_database(split.admin, split.database)
+    with psycopg.connect(split.admin, autocommit=True) as conn:
+        conn.execute(
+            sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                sql.Identifier(split.database), sql.Identifier(split.template)
+            )
+        )
+    unrecorded = _database_oid(split)
     _start(split, split.root / "replaced", replace=True)
     replaced = _database_oid(split)
-    assert replaced is not None and replaced != other.oid
+    assert replaced is not None and replaced != unrecorded
+    template = Split(split.admin, split.template, split.template, split.root)
+    with pytest.raises(RunDirError, match="is the template"):
+        _start(template, split.root / "template", replace=True)
+
+
+def test_replace_drops_only_a_database_that_holds_this_run(
+    split: Split, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Scenario ids `sample-a` and `sample_a` give one default database name, and a
+    person can name one database for two runs. `start` with replace dropped whatever
+    database had the name, another run's too. It now drops one only when it holds this
+    run, and refuses in one line otherwise, keeping the database."""
+    assert default_database("sample-a.B0.C2.7") == default_database("sample_a.B0.C2.7")
+    first = _start(split, split.root / "first", scenario_id="sample-a")
+    kept = _database_oid(split)
+    capsys.readouterr()
+    argv = ["--run-dir", str(split.root / "second"), "--dsn", split.admin, "start"]
+    argv += ["--scenario", str(split.scenario("sample_a")), "--config", "B0"]
+    argv += ["--contract", "C2", "--plan", "none", "--database", split.database]
+    argv += ["--template", split.template, "--replace"]
+    assert main(argv) == 1
+    error = capsys.readouterr().err
+    assert error.count("\n") == 1, error
+    assert f"holds run {first.run_id}" in error
+    assert _database_oid(split) == kept
+    with split.connect() as conn:
+        assert conn.execute("SELECT run_id FROM harness.run").fetchall() == [(first.run_id,)]
+    assert not (split.root / "second" / "run.json").exists()
+    # The run that the database holds may replace it.
+    _start(split, split.root / "first", scenario_id="sample-a", replace=True)
+    assert _database_oid(split) not in (None, kept)
 
 
 def test_start_copies_the_run_database_under_the_database_lock(
