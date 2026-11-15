@@ -97,13 +97,13 @@ class GatewayDatabase:
             conn.execute("ALTER TABLE gw.action_event DISABLE TRIGGER USER")
             conn.execute("ALTER TABLE gw.run_state DISABLE TRIGGER USER")
             conn.execute(
-                "TRUNCATE gw.report, gw.tool_call, gw.action_event, gw.escalation, gw.attempt,"
-                ' gw."grant", gw.action, gw.intent'
+                "TRUNCATE gw.proposal, gw.read, gw.report, gw.tool_call, gw.action_event,"
+                ' gw.escalation, gw.attempt, gw."grant", gw.action, gw.intent'
             )
             conn.execute("ALTER TABLE gw.action_event ENABLE TRIGGER USER")
             conn.execute(
                 "UPDATE gw.run_state SET run_closed = false, last_action_no = 0, last_seq = 0,"
-                " last_call_no = 0"
+                " last_call_no = 0, last_read_no = 0, last_proposal_no = 0"
             )
             conn.execute("ALTER TABLE gw.run_state ENABLE TRIGGER USER")
 

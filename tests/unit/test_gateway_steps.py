@@ -31,6 +31,7 @@ from fivefold.gateway.records import (
     ReportAccepted,
     Resolution,
     StaleFact,
+    WriteCall,
 )
 from fivefold.gateway.state_machine import (
     ActionState,
@@ -63,11 +64,6 @@ QUOTE_STALE = StaleFact("quote/S-1/W-100", 1, 2, ("unit_price_minor",))
 TIMEOUT = Answer(AnswerClass.UNKNOWN, Reason.TIMEOUT)
 FAR = 10**9
 """An approval expiry far beyond any test's virtual time."""
-
-
-def proposal(intent: str = "REQ-1", key: str = "k1", quote_version: int = 1) -> Proposal:
-    basis = {"quote/S-1/W-100": quote_version, "budget/CC-OPS": 1}
-    return Proposal(intent, "submit_purchase_order", "supplier/S-1", {"quantity": 100}, key, basis)
 
 
 @pytest.fixture(autouse=True)
@@ -104,8 +100,28 @@ class Run:
         """The seq a check starting now would see."""
         return self.store.view(action_id).last_seq
 
+    def write(
+        self, intent: str = "REQ-1", key: str = "k1", quote_version: int = 1
+    ) -> ActionResult | Refusal:
+        """A write call that cites fresh reads of the order's two dependencies."""
+        vt = self.at(1)
+        quote = self.store.record_read("quote/S-1/W-100", quote_version, {}, vt)
+        budget = self.store.record_read("budget/CC-OPS", 1, {}, vt)
+        return self.store.propose(
+            WriteCall(
+                intent,
+                "submit_purchase_order",
+                "supplier/S-1",
+                {"quantity": 100},
+                key,
+                (quote.read_id, budget.read_id),
+                ("quote/S-1/W-100", "budget/CC-OPS"),
+            ),
+            vt,
+        )
+
     def propose(self, intent: str = "REQ-1", key: str = "k1") -> str:
-        result = self.store.propose(proposal(intent, key), self.at(1))
+        result = self.write(intent, key)
         assert isinstance(result, ActionResult)
         return result.action_id
 
@@ -262,7 +278,7 @@ def test_a_check_overtaken_by_a_newer_event_commits_nothing() -> None:
     run = Run(Contract.C2)
     action_id = run.authorized()
     ticket = run.store.begin_check(action_id)
-    run.store.propose(proposal(quote_version=2), run.at(1))
+    run.write(quote_version=2)
     assert run.store.snapshot().events[-1].reason is Note.BASIS_UPDATED
     check = ticket.record(
         approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=run.at(1), expires_at=FAR
@@ -579,18 +595,18 @@ def test_restart_moves_an_open_attempt_to_outcome_unknown(contract: Contract) ->
 def test_the_matching_rule() -> None:
     run = Run(Contract.C2)
     action_id = run.sent()
-    attached = run.store.propose(proposal(), run.at(1))
+    attached = run.write()
     assert isinstance(attached, ActionResult) and attached.action_id == action_id
-    busy = run.store.propose(proposal(key="k2"), run.at(1))
+    busy = run.write(key="k2")
     assert isinstance(busy, Refusal) and busy.reason is RefusalReason.INTENT_BUSY
     assert (busy.action_id, busy.state) == (action_id, S.DISPATCHED)
     run.store.answer(
         action_id, 1, Answer(AnswerClass.COMMITTED, Reason.COMMITTED, "PO-0001"), run.at(1)
     )
-    done = run.store.propose(proposal(key="k2"), run.at(1))
+    done = run.write(key="k2")
     assert isinstance(done, Refusal) and done.reason is RefusalReason.INTENT_DONE
     assert done.effect_id == "PO-0001"
-    again = run.store.propose(proposal(), run.at(1))
+    again = run.write()
     assert isinstance(again, ActionResult) and again.state is S.CONFIRMED
     assert len(run.store.snapshot().actions) == 1
 
@@ -609,23 +625,23 @@ def test_a_new_action_follows_a_failed_one_with_a_new_key_and_grant() -> None:
 def test_attaching_takes_only_a_newer_basis_and_only_before_dispatch() -> None:
     run = Run(Contract.C2)
     action_id = run.authorized()
-    run.store.propose(proposal(quote_version=2), run.at(1))
-    run.store.propose(proposal(quote_version=1), run.at(1))
+    run.write(quote_version=2)
+    run.write(quote_version=1)
     assert run.store.snapshot().actions[action_id].basis["quote/S-1/W-100"] == 2
     ticket = run.store.begin_check(action_id)
     check = ticket.record(
         approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=run.at(1), expires_at=FAR
     )
     run.store.dispatch(action_id, check, run.at(1))
-    run.store.propose(proposal(quote_version=3), run.at(1))
+    run.write(quote_version=3)
     assert run.store.snapshot().actions[action_id].basis["quote/S-1/W-100"] == 2
 
 
 def test_unknown_intent_and_wrong_operation_are_refused() -> None:
     run = Run(Contract.C2)
-    unknown = run.store.propose(proposal(intent="REQ-9"), run.at(1))
+    unknown = run.write(intent="REQ-9")
     wrong = run.store.propose(
-        Proposal("REQ-1", "reserve_inventory", "inventory/W-1/W-100", {}, "k", {}), run.at(1)
+        WriteCall("REQ-1", "reserve_inventory", "inventory/W-1/W-100", {}, "k", (), ()), run.at(1)
     )
     assert isinstance(unknown, Refusal) and unknown.reason is RefusalReason.UNKNOWN_INTENT
     assert isinstance(wrong, Refusal) and wrong.reason is RefusalReason.WRONG_OPERATION
@@ -656,7 +672,7 @@ def test_a_basis_check_overtaken_by_a_newer_basis_writes_nothing() -> None:
     run = Run(Contract.C2)
     action_id = run.pending()
     seen = run.seq(action_id)
-    run.store.propose(proposal(quote_version=2), run.at(1))
+    run.write(quote_version=2)
     stale = BasisCheck(exact_ok=False, sufficient_ok=True, stale=(QUOTE_STALE,))
     before = run.store.snapshot()
     run.store.poll_approval(action_id, ApprovalStatus.APPROVED, stale, run.at(1), seen_seq=seen)
@@ -714,7 +730,7 @@ def test_reconcile_says_in_words_what_may_exist() -> None:
 def test_only_answers_the_agent_receives_are_logged() -> None:
     run = Run(Contract.C2)
     action_id = run.propose()
-    run.store.propose(proposal(key="k2"), run.at(1))
+    run.write(key="k2")
     run.store.status(action_id, run.at(1), tool="submit_purchase_order")
     logged = [(call.tool, type(call.result).__name__) for call in run.store.snapshot().tool_calls]
     assert logged == [
@@ -734,7 +750,7 @@ def test_closing_rejects_what_was_never_sent_and_keeps_reconciling() -> None:
     snapshot = run.store.snapshot()
     assert snapshot.actions[waiting].state is S.REJECTED
     assert snapshot.grants["G-0001"].state is GrantState.RELEASED
-    refused = run.store.propose(proposal(), run.at(1))
+    refused = run.write()
     assert isinstance(refused, Refusal) and refused.reason is RefusalReason.RUN_CLOSED
     assert run.retry(action_id)
     assert run.state(action_id) is S.DISPATCHED
@@ -787,7 +803,7 @@ def test_an_accepted_not_done_closes_its_intent_at_once() -> None:
     assert run.state(waiting) is S.REJECTED
     assert run.store.view(waiting).events[-1].reason is Reason.RUN_CLOSED
     assert snapshot.grants["G-0001"].state is GrantState.RELEASED
-    refused = run.store.propose(proposal("REQ-1", "k2"), run.at(1))
+    refused = run.write("REQ-1", "k2")
     assert isinstance(refused, Refusal) and refused.reason is RefusalReason.RUN_CLOSED
     assert run.retry(sent), "the other intent's recovery goes on"
 
@@ -809,7 +825,7 @@ def test_the_last_expected_report_closes_the_run_with_it() -> None:
     assert snapshot.run_closed
     assert run.state(sent) is S.OUTCOME_UNKNOWN, "reconciliation continues after the close"
     assert snapshot.tool_calls[-1].as_of_seq == snapshot.events[-1].seq
-    refused = run.store.propose(proposal("REQ-2", "k3"), run.at(1))
+    refused = run.write("REQ-2", "k3")
     assert isinstance(refused, Refusal) and refused.reason is RefusalReason.RUN_CLOSED
 
 

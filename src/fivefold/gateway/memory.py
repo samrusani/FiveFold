@@ -12,23 +12,28 @@ produce the same records.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 
 from fivefold.domain.contracts import Contract
+from fivefold.gateway.codec import plain_from_json
 from fivefold.gateway.records import (
     Action,
     ActionEvent,
     ActionResult,
+    Admission,
+    ProposalRecord,
+    ReadRecord,
     Refusal,
+    RefusalReason,
     ReportAccepted,
     Snapshot,
     ToolCall,
     frozen,
 )
 from fivefold.gateway.state_machine import HOLDING_STATES, GatewaySettings
-from fivefold.gateway.steps import ActionView, Change
+from fivefold.gateway.steps import ActionView, Change, proposal_id_for, read_id_for
 from fivefold.gateway.store import (
     ActionStore,
     Transaction,
@@ -132,6 +137,51 @@ class _MemoryTransaction(Transaction):
     def next_action_number(self) -> int:
         return len(self._working.actions) + 1
 
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
+        snapshot = self._working
+        number = len(snapshot.reads) + 1
+        read = ReadRecord(read_id_for(number), key, version, _object(plain_from_json(data)), vt)
+        self._working = replace(snapshot, reads=frozen({**snapshot.reads, read.read_id: read}))
+        return read
+
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        found = [r for r in self._working.reads.values() if (r.key, r.version) == (key, version)]
+        return min(found, key=lambda r: int(r.read_id[2:])) if found else None
+
+    def reads(self, read_ids: Iterable[str]) -> Mapping[str, ReadRecord]:
+        known = self._working.reads
+        return frozen({r: known[r] for r in read_ids if r in known})
+
+    def record_proposal(
+        self,
+        *,
+        operation: str,
+        intent_id: str | None,
+        args: Mapping[str, object],
+        based_on: tuple[str, ...],
+        admission: Admission,
+        reason: RefusalReason | None,
+        action_id: str | None,
+        vt: int,
+    ) -> str:
+        snapshot = self._working
+        proposal_id = proposal_id_for(len(snapshot.proposals) + 1)
+        record = ProposalRecord(
+            proposal_id,
+            operation,
+            intent_id,
+            _object(plain_from_json(args)),
+            based_on,
+            admission,
+            reason,
+            action_id,
+            vt,
+        )
+        self._working = replace(snapshot, proposals=(*snapshot.proposals, record))
+        return proposal_id
+
     def apply(self, change: Change, vt: int) -> None:
         snapshot = self._working
         action = change.action
@@ -194,3 +244,9 @@ class _MemoryTransaction(Transaction):
 
 def _last_seq(snapshot: Snapshot) -> int:
     return snapshot.events[-1].seq if snapshot.events else 0
+
+
+def _object(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError("a write call's arguments are a JSON object")
+    return value

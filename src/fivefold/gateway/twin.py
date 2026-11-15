@@ -9,7 +9,7 @@ the Postgres store. It belongs to the tests, not to a running gateway.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from fivefold.gateway.memory import MemoryStore
@@ -24,11 +24,12 @@ from fivefold.gateway.records import (
     CheckTicket,
     Claim,
     ProbeAnswer,
-    Proposal,
+    ReadRecord,
     Refusal,
     ReportAccepted,
     Resolution,
     Snapshot,
+    WriteCall,
 )
 from fivefold.gateway.state_machine import GatewaySettings
 from fivefold.gateway.steps import ActionView
@@ -70,7 +71,7 @@ class TwinStore:
         """Raise `StoreMismatch` unless both stores hold the same records."""
         pg, oracle = self.pg.snapshot(), self.oracle.snapshot()
         parts = ("intents", "actions", "grants", "attempts", "events", "escalations")
-        for part in (*parts, "closed_intents", "reports"):
+        for part in (*parts, "closed_intents", "reports", "reads", "proposals"):
             if getattr(pg, part) != getattr(oracle, part):
                 raise StoreMismatch(f"{part} differ")
         if pg.tool_calls != oracle.tool_calls:
@@ -78,7 +79,13 @@ class TwinStore:
         if pg.run_closed != oracle.run_closed:
             raise StoreMismatch("run_closed differs")
         last_seq = oracle.events[-1].seq if oracle.events else 0
-        expected = (len(oracle.actions), last_seq, len(oracle.tool_calls))
+        expected = (
+            len(oracle.actions),
+            last_seq,
+            len(oracle.tool_calls),
+            len(oracle.reads),
+            len(oracle.proposals),
+        )
         if self.pg.counters() != expected:
             raise StoreMismatch(f"counters {self.pg.counters()} differ from {expected}")
 
@@ -98,8 +105,24 @@ class TwinStore:
     def begin_check(self, action_id: str) -> CheckTicket:
         return cast(CheckTicket, self._both("begin_check", action_id))
 
-    def propose(self, proposal: Proposal, vt: int) -> ActionResult | Refusal:
-        return cast(ActionResult | Refusal, self._both("propose", proposal, vt))
+    def record_read(
+        self, key: str, version: int, data: Mapping[str, object], vt: int
+    ) -> ReadRecord:
+        return cast(ReadRecord, self._both("record_read", key, version, data, vt))
+
+    def read_of(self, key: str, version: int) -> ReadRecord | None:
+        expected = self.oracle.read_of(key, version)
+        if self.pg.read_of(key, version) != expected:
+            raise StoreMismatch(f"reads of {key} at {version} differ")
+        return expected
+
+    def propose(self, call: WriteCall, vt: int) -> ActionResult | Refusal:
+        return cast(ActionResult | Refusal, self._both("propose", call, vt))
+
+    def refuse_invalid(
+        self, operation: str, args: Mapping[str, object], message: str, vt: int
+    ) -> Refusal:
+        return cast(Refusal, self._both("refuse_invalid", operation, args, message, vt))
 
     def status(self, action_id: str, vt: int, *, tool: str = "get_action_status") -> ActionResult:
         return cast(ActionResult, self._both("status", action_id, vt, tool=tool))

@@ -47,7 +47,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [x] Maintainer: choose the name and license (Fivefold, Apache-2.0)
 - [x] T1: gw schema with migrations; action and grant tables with unique constraints, and the Postgres store tested against the in-memory one
 - [x] T1: state machine module with the transition table and I1 to I7 as assertions, tested by Hypothesis in memory and against PostgreSQL
-- [ ] T2: purchase-order service with the idempotency_key capability (C2), the effects ledger and fact history, plus policy approvals in the approvals service
+- [x] T2: purchase-order service with the idempotency_key capability (C2), the effects ledger and fact history, plus policy approvals in the approvals service
 - [x] T2: deterministic scheduler with the virtual clock and in-process transports, tested for ordering, timers, crash and restart
 - [x] T2: fault scheduler that fires F2 on an event counter
 - [ ] T3: evaluator that reads the sim ledger and the harness message log, and scores properties 1 and 5 to JSON

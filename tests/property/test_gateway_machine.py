@@ -66,13 +66,13 @@ from fivefold.gateway.records import (
     Claim,
     ClaimStatus,
     ProbeAnswer,
-    Proposal,
     Refusal,
     RefusalReason,
     ReportAccepted,
     Resolution,
     Snapshot,
     StaleFact,
+    WriteCall,
 )
 from fivefold.gateway.state_machine import (
     ActionState,
@@ -588,21 +588,45 @@ class GatewayMachine(RuleBasedStateMachine):
         variant=st.sampled_from(["a", "b"]),
         quote_version=st.integers(1, 3),
         budget_version=st.integers(1, 2),
+        citing=st.sampled_from(["both", "both", "twice", "missing", "unknown"]),
     )
-    def propose(self, intent: str, variant: str, quote_version: int, budget_version: int) -> None:
+    def propose(
+        self, intent: str, variant: str, quote_version: int, budget_version: int, citing: str
+    ) -> None:
         key = f"{intent}-{variant}"
         # Two keys each, in an order that PostgreSQL's jsonb does not keep, so the Postgres
         # machines show that key order never changes a result.
         args: dict[str, str | int] = {"quantity": 2, "variant": variant}
+        quote = self.store.record_read("quote", quote_version, {}, self.vt)
+        budget = self.store.record_read("budget", budget_version, {}, self.vt)
+        based_on: tuple[str, ...] = (quote.read_id, budget.read_id)
+        if citing == "twice":
+            # An older read of the same quote, cited first: the newest version counts.
+            older = self.store.record_read("quote", quote_version - 1, {}, self.vt)
+            based_on = (older.read_id, *based_on)
+        elif citing == "missing":
+            based_on = (quote.read_id,)
+        elif citing == "unknown":
+            based_on = (*based_on, "R-99999")
+        call = WriteCall(
+            intent, INTENTS[intent], "target", args, key, based_on, ("budget", "quote")
+        )
+        result = self.store.propose(call, self.vt)
         basis = {"budget": budget_version, "quote": quote_version}
-        proposal = Proposal(intent, INTENTS[intent], "target", args, key, basis)
-        result = self.store.propose(proposal, self.vt)
         holders = [
             a for a, e in self.expected.items() if e.intent_id == intent and e.state in HOLDING
         ]
         assert len(holders) <= 1
         if self.closed or intent in self.closed_intents:
             assert isinstance(result, Refusal) and result.reason is RefusalReason.RUN_CLOSED
+            return
+        if citing == "unknown":
+            assert isinstance(result, Refusal) and result.reason is RefusalReason.UNKNOWN_READ
+            assert result.unknown_reads == ("R-99999",)
+            return
+        if citing == "missing":
+            assert isinstance(result, Refusal) and result.reason is RefusalReason.MISSING_BASIS
+            assert result.missing_keys == ("budget",)
             return
         if not holders:
             action_id = f"A-{len(self.expected) + 1:04d}"
@@ -772,7 +796,7 @@ class GatewayMachine(RuleBasedStateMachine):
     @initialize()
     def one_proposal_per_intent(self) -> None:
         for intent in sorted(INTENTS):
-            self.propose(intent, "a", 1, 1)
+            self.propose(intent, "a", 1, 1, "both")
 
     @precondition(lambda self: self.ids(*LIVE))
     @rule(data=st.data(), steps=st.integers(1, 8))
