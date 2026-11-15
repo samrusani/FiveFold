@@ -135,6 +135,7 @@ def make_result(
     adapter: str = "scripted",
     cassette: str | None = None,
     parent: str | None = None,
+    point: int = 12,
 ) -> RunResult:
     """A run's result as the evaluator writes it. The plan is demo 1's unless given; with
     `params` given, the run records those params instead, plan or not."""
@@ -176,7 +177,7 @@ def make_result(
             model=model,
             cassette_digest=cassette,
             parent_run_id=parent,
-            branch_point=None if parent is None else 12,
+            branch_point=None if parent is None else point,
             params=params,
             end_vt=58_200,
         ),
@@ -422,7 +423,11 @@ def test_the_report_says_what_was_run() -> None:
         "- Seeds: 7 (2 runs), 8 (1 run), 10 (1 run).",
         "- Topologies: inproc (4 runs).",
         "- Runs that name a cassette: 1 of 4.",
-        "- Runs branched from another run: 1 of 4.",
+        "- Runs branched from another run: 1 of 4. A branch repeats its parent's first model"
+        " calls, so the tables never count it in its parent's cell: they show it in rows of"
+        " its own, by configuration and branch point, the number of its parent's model calls"
+        " it replayed, such as `G2, branch point 4`. Its tokens include those of the calls it"
+        " replayed, and its cost prices them at its own model's prices.",
         "",
     ]
 
@@ -871,6 +876,91 @@ def test_the_example_price_file_prices_its_models_at_zero() -> None:
     run = make_result(model="ollama:qwen3:8b", adapter="live", metrics=tokens(9_000, 900))
     assert run_cost(run, example) == 0
     assert TOKEN_METRICS == ("tokens_in", "tokens_out")
+
+
+# Experimental branches (0009) --------------------------------------------------------------
+
+PARENT = "dev-001-single-po.G2.C2.7"
+BRANCH_RESULTS = [
+    g2_demo_1(seed=7),
+    g2_demo_1(seed=8),
+    live(seed=7, parent=PARENT, point=4, metrics=tokens(2_000, 100, approval_requests=1)),
+    live(
+        seed=7,
+        parent=PARENT,
+        point=4,
+        failing={4: (ReasonCode.MISSING_EFFECT,)},
+        metrics=tokens(1_000, 50, missing_effects=1),
+    ),
+    make_result(seed=7, parent=PARENT, point=10, metrics={"approval_requests": 1}),
+]
+"""Demo 1 in G2 with seeds 7 and 8, and three branches of the first: two to the fake
+model `m` at branch point 4, one of which fails, and one to the scripted model at 10."""
+
+
+def test_a_branch_never_counts_in_its_parent_s_cell() -> None:
+    """A branch has its parent's configuration, contract level, seed and fault plan, so
+    each table shows it in rows of its own, by its branch point; the parent's cell keeps
+    only the runs that are no branch."""
+    report = markdown_report(BRANCH_RESULTS, PRICES)
+    assert table(report, "Verdicts by configuration and contract level")[1:] == [
+        ["G2", "C2", "2/2", "0/2", "0/2"],
+        ["G2, branch point 4", "C2", "1/2", "0/2", "1/2"],
+        ["G2, branch point 10", "C2", "1/1", "0/1", "0/1"],
+    ]
+    assert table(report, "Safety and liveness")[1:] == [
+        ["G2", "C2", "2/2", "2/2"],
+        ["G2, branch point 4", "C2", "2/2", "1/2"],
+        ["G2, branch point 10", "C2", "1/1", "1/1"],
+    ]
+    assert [row[:5] for row in table(report, "Failures by property and configuration")[1:]] == [
+        ["G2", "0/2", "0/2", "0/2", "0/2"],
+        ["G2, branch point 4", "0/2", "0/2", "0/2", "1/2"],
+        ["G2, branch point 10", "0/1", "0/1", "0/1", "0/1"],
+    ]
+    faults = table(report, "Verdicts by fault plan")[1:]
+    assert [row[1:] for row in faults] == [
+        ["G2", "C2", "2/2", "0/2", "0/2", "none"],
+        ["G2, branch point 4", "C2", "1/2", "0/2", "1/2", "4 (1/2)"],
+        ["G2, branch point 10", "C2", "1/1", "0/1", "0/1", "none"],
+    ]
+    assert len({row[0] for row in faults}) == 1, "the same fault plan in every row"
+    metrics = table(report, "Metric totals by configuration")
+    assert metrics[:2] == [
+        ["Metric", "G2", "G2, branch point 4", "G2, branch point 10"],
+        ["runs", "2", "2", "1"],
+    ]
+    assert ["tokens_in", "0", "3000", "0"] in metrics
+    assert table(report, "Cost")[1:] == [
+        ["fake:m", "G2, branch point 4", "C2", "2", "1", "3000", "150", "0.00054", "0.00054"],
+        ["scripted", "G2", "C2", "2", "2", "0", "0", "0", "0"],
+        ["scripted", "G2, branch point 10", "C2", "1", "1", "0", "0", "0", "0"],
+    ]
+    assert section(report, "What was run")[-2] == (
+        "- Runs branched from another run: 3 of 5. A branch repeats its parent's first model"
+        " calls, so the tables never count it in its parent's cell: they show it in rows of"
+        " its own, by configuration and branch point, the number of its parent's model calls"
+        " it replayed, such as `G2, branch point 4`. Its tokens include those of the calls it"
+        " replayed, and its cost prices them at its own model's prices."
+    )
+
+
+def test_the_csv_lists_a_branch_after_the_runs_of_its_configuration() -> None:
+    """One row per run, with its own configuration, parent and branch point."""
+    rows = csv_rows(runs_csv(reversed(BRANCH_RESULTS)))
+    assert [(r["config"], r["seed"], r["parent_run_id"], r["branch_point"]) for r in rows] == [
+        ("G2", "7", "", ""),
+        ("G2", "8", "", ""),
+        ("G2", "7", PARENT, "4"),
+        ("G2", "7", PARENT, "4"),
+        ("G2", "7", PARENT, "10"),
+    ]
+
+
+def test_a_report_without_branches_does_not_mention_branch_points() -> None:
+    report = markdown_report([g2_demo_1(seed=7), b0_demo_1()])
+    assert "branch point" not in report
+    assert "- Runs branched from another run: 0 of 2." in report.splitlines()
 
 
 # A fixed order ---------------------------------------------------------------------------
