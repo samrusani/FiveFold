@@ -97,7 +97,7 @@ _ESCALATION: LiteralString = (
     " FROM gw.escalation"
 )
 _TOOL_CALL: LiteralString = (
-    "SELECT call_no, tool, action_id, result, as_of_seq, vt FROM gw.tool_call"
+    "SELECT call_no, tool, args, action_id, result, as_of_seq, vt FROM gw.tool_call"
 )
 _READ: LiteralString = "SELECT read_id, key, version, data, vt FROM gw.read"
 _PROPOSAL: LiteralString = (
@@ -494,6 +494,7 @@ class _PgTransaction(Transaction):
     def log(
         self,
         tool: str,
+        args: Mapping[str, object],
         action_id: str | None,
         result: ActionResult | Refusal | ReportAccepted,
         vt: int,
@@ -505,9 +506,17 @@ class _PgTransaction(Transaction):
         )
         call_no = int(row[0])
         self._conn.execute(
-            "INSERT INTO gw.tool_call (call_no, tool, action_id, result, as_of_seq, vt)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
-            (call_no, tool, action_id, Jsonb(result_to_json(result)), int(row[1]), vt),
+            "INSERT INTO gw.tool_call (call_no, tool, args, action_id, result, as_of_seq, vt)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (
+                call_no,
+                tool,
+                Jsonb(dict(args)),
+                action_id,
+                Jsonb(result_to_json(result)),
+                int(row[1]),
+                vt,
+            ),
         )
         return call_no
 
@@ -618,7 +627,10 @@ def _escalation(row: Row) -> Escalation:
 
 
 def _tool_call(row: Row) -> ToolCall:
-    return ToolCall(row[0], row[1], row[2], result_from_json(row[3]), row[4], row[5])
+    args = plain_from_json(row[2])
+    if not isinstance(args, Mapping):
+        raise ValueError(f"call {row[0]} has arguments that are not an object")
+    return ToolCall(row[0], row[1], args, row[3], result_from_json(row[4]), row[5], row[6])
 
 
 def _read(row: Row) -> ReadRecord:

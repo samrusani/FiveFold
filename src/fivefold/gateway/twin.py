@@ -15,6 +15,7 @@ from typing import Any, cast
 from fivefold.gateway.memory import MemoryStore
 from fivefold.gateway.pg_store import PgStore
 from fivefold.gateway.records import (
+    NO_ARGS,
     ActionResult,
     Answer,
     ApprovalStatus,
@@ -116,21 +117,35 @@ class TwinStore:
             raise StoreMismatch(f"reads of {key} at {version} differ")
         return expected
 
-    def propose(self, call: WriteCall, vt: int) -> ActionResult | Refusal:
-        return cast(ActionResult | Refusal, self._both("propose", call, vt))
+    def propose(
+        self, call: WriteCall, vt: int, *, args: Mapping[str, object] = NO_ARGS
+    ) -> ActionResult | Refusal:
+        return cast(ActionResult | Refusal, self._both("propose", call, vt, args=args))
 
     def refuse_invalid(
         self, operation: str, args: Mapping[str, object], message: str, vt: int
     ) -> Refusal:
         return cast(Refusal, self._both("refuse_invalid", operation, args, message, vt))
 
-    def status(self, action_id: str, vt: int, *, tool: str = "get_action_status") -> ActionResult:
-        return cast(ActionResult, self._both("status", action_id, vt, tool=tool))
+    def status(
+        self,
+        action_id: str,
+        vt: int,
+        *,
+        tool: str = "get_action_status",
+        args: Mapping[str, object] = NO_ARGS,
+    ) -> ActionResult:
+        return cast(ActionResult, self._both("status", action_id, vt, tool=tool, args=args))
 
     def submit_report(
-        self, claims: Sequence[Claim], vt: int, *, worker: str
+        self,
+        claims: Sequence[Claim],
+        vt: int,
+        *,
+        worker: str,
+        args: Mapping[str, object] = NO_ARGS,
     ) -> ReportAccepted | Refusal:
-        outcome = self._both("submit_report", claims, vt, worker=worker)
+        outcome = self._both("submit_report", claims, vt, worker=worker, args=args)
         return cast(ReportAccepted | Refusal, outcome)
 
     def file_approval(

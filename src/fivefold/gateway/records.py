@@ -39,6 +39,8 @@ def frozen[K, V](mapping: Mapping[K, V]) -> Mapping[K, V]:
 
 NO_VERSIONS: Mapping[str, int] = MappingProxyType({})
 NO_DETAILS: Mapping[str, object] = MappingProxyType({})
+NO_ARGS: Mapping[str, object] = MappingProxyType({})
+"""The arguments of a call that has none."""
 
 # Records -------------------------------------------------------------------------------
 
@@ -545,10 +547,16 @@ class ReportAccepted:
 
 @dataclass(frozen=True)
 class ToolCall:
-    """One agent-facing response, logged for I5. `as_of_seq` is the event seq it reflects."""
+    """One agent-facing response, logged for I5. `as_of_seq` is the event seq it reflects.
+
+    `args` are the arguments of the call it answers, as the gateway received them, kept as
+    `fivefold.gateway.codec.storable` makes them: arrays as tuples, objects as read-only
+    mappings.
+    """
 
     call_no: int
     tool: str
+    args: Mapping[str, object]
     action_id: str | None
     result: ActionResult | Refusal | ReportAccepted
     as_of_seq: int

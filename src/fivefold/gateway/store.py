@@ -11,10 +11,12 @@ operations live here, the two stores differ only in how they read and write reco
 the in-memory store can serve as the oracle for the Postgres one.
 
 The store also logs every response the agent receives, as the `tool_call` table does, so
-I5 can be checked. It does not wait: `tool_wait_ms` and `get_action_status(wait_ms)`
-belong to the tool layer, which calls `status` when its wait ends, with the name of the
-tool that answers. A refused proposal is answered at once, so `propose` logs refusals; an
-admitted one is answered later, by that `status` call.
+I5 can be checked, with the arguments of the call it answers as the tool layer received
+them (`args`). It does not wait: `tool_wait_ms` and `get_action_status(wait_ms)` belong
+to the tool layer, which calls `status` when its wait ends, with the name of the tool
+that answers and that call's arguments. A refused proposal is answered at once, so
+`propose` logs refusals; an admitted one is answered later, by that `status` call. A
+caller that is not answering an agent's call, such as a test, logs no arguments.
 
 Admission runs in one transaction, in the order of 0001, item 17: the tool layer checks
 the schema, then `propose` checks the intent, resolves the cited reads against the
@@ -45,6 +47,7 @@ from fivefold.gateway import steps
 from fivefold.gateway.codec import storable
 from fivefold.gateway.invariants import InvariantViolation, check_invariants
 from fivefold.gateway.records import (
+    NO_ARGS,
     Action,
     ActionEvent,
     ActionResult,
@@ -178,11 +181,13 @@ class Transaction(ABC):
     def log(
         self,
         tool: str,
+        args: Mapping[str, object],
         action_id: str | None,
         result: ActionResult | Refusal | ReportAccepted,
         vt: int,
     ) -> int:
-        """Log a response the agent receives, with the event seq it reflects.
+        """Log a response the agent receives, with the event seq it reflects and the
+        arguments of the call it answers, as `storable` keeps them.
 
         Returns the response's call number.
         """
@@ -294,12 +299,16 @@ class ActionStore(ABC):
         with self._reading() as tx:
             return tx.read_of(key, version)
 
-    def propose(self, call: WriteCall, vt: int) -> ActionResult | Refusal:
+    def propose(
+        self, call: WriteCall, vt: int, *, args: Mapping[str, object] = NO_ARGS
+    ) -> ActionResult | Refusal:
         """A write tool call that passed the schema check: admission and matching (0001).
 
         Returns the action's result as admission left it, or a refusal. Only a refusal is
-        logged as the tool's response; see the module docstring.
+        logged as the tool's response, with `args`, the call's arguments as the agent sent
+        them; see the module docstring.
         """
+        kept = _call_args(args)
         self._clock(vt)
         with self._transaction() as tx:
             outcome, action_id, admission = self._propose(tx, call, vt)
@@ -314,7 +323,7 @@ class ActionStore(ABC):
                 vt=vt,
             )
             if isinstance(outcome, Refusal):
-                tx.log(call.operation, action_id, outcome, vt)
+                tx.log(call.operation, kept, action_id, outcome, vt)
             self._check(tx)
         self._vt = vt
         return outcome
@@ -324,12 +333,11 @@ class ActionStore(ABC):
     ) -> Refusal:
         """Record a write call that broke the schema, and refuse it (`invalid_args`).
 
-        `args` are the arguments as the agent sent them, decoded from JSON. Text cannot
-        hold a NUL character in PostgreSQL, so each one is recorded as U+FFFD.
+        `args` are the arguments as the agent sent them, decoded from JSON. The proposal
+        record and the logged response both keep them. Text cannot hold a NUL character
+        in PostgreSQL, so each one is recorded as U+FFFD.
         """
-        kept = storable(args)
-        if not isinstance(kept, dict):
-            raise ValueError("a write call's arguments are a JSON object")
+        kept = _call_args(args)
         intent_id = kept.get("intent_id")
         cited = kept.get("based_on")
         based_on = (
@@ -350,7 +358,7 @@ class ActionStore(ABC):
                 action_id=None,
                 vt=vt,
             )
-            tx.log(str(storable(operation)), None, refusal, vt)
+            tx.log(str(storable(operation)), kept, None, refusal, vt)
             self._check(tx)
         self._vt = vt
         return refusal
@@ -392,18 +400,32 @@ class ActionStore(ABC):
             refusal = Refusal(RefusalReason.INTENT_DONE, action_id, holder.state, holder.effect_id)
         return refusal, action_id, refused
 
-    def status(self, action_id: str, vt: int, *, tool: str = "get_action_status") -> ActionResult:
-        """The action's result now, as `tool` answers once its wait ends (0003); logged."""
+    def status(
+        self,
+        action_id: str,
+        vt: int,
+        *,
+        tool: str = "get_action_status",
+        args: Mapping[str, object] = NO_ARGS,
+    ) -> ActionResult:
+        """The action's result now, as `tool` answers once its wait ends (0003); logged
+        with `args`, the arguments of the call it answers, as the agent sent them."""
+        kept = _call_args(args)
         self._clock(vt)
         with self._transaction() as tx:
             result = steps.result_for(tx.view(action_id))
-            tx.log(tool, action_id, result, vt)
+            tx.log(tool, kept, action_id, result, vt)
             self._check(tx)
         self._vt = vt
         return result
 
     def submit_report(
-        self, claims: Sequence[Claim], vt: int, *, worker: str
+        self,
+        claims: Sequence[Claim],
+        vt: int,
+        *,
+        worker: str,
+        args: Mapping[str, object] = NO_ARGS,
     ) -> ReportAccepted | Refusal:
         """Check a worker's final report against the records (0003); refuse contradictions.
 
@@ -414,13 +436,15 @@ class ActionStore(ABC):
         `worker` names the agent worker the report comes from: the name the harness gave
         the worker, which its connection carries and which stays the same when the
         worker resumes from its checkpoint (0009). Only G2 checks reports (0008), so a
-        store with action identity off refuses this call.
+        store with action identity off refuses this call. The response is logged with
+        `args`, the call's arguments as the agent sent them.
         """
         if not self._identity:
             raise ValueError("G1 has no report check and no run closing (0008)")
         if not worker:
             raise ValueError("a report names the worker it comes from")
         check_text(worker, "worker")
+        kept = _call_args(args)
         self._clock(vt)
         with self._transaction() as tx:
             tx.lock_intents()
@@ -432,13 +456,13 @@ class ActionStore(ABC):
             outcome: ReportAccepted | Refusal
             if conflicts:
                 outcome = Refusal(RefusalReason.REPORT_INCONSISTENT, conflicts=conflicts)
-                tx.log("submit_final_report", None, outcome, vt)
+                tx.log("submit_final_report", kept, None, outcome, vt)
             else:
                 outcome = ReportAccepted(tuple(claims))
                 reported = tx.reports()
                 intents, last = steps.report_closes(claims, reported, worker, self._settings)
                 self._close(tx, intents, whole_run=last, vt=vt)
-                call_no = tx.log("submit_final_report", None, outcome, vt)
+                call_no = tx.log("submit_final_report", kept, None, outcome, vt)
                 if worker not in reported:
                     tx.record_report(worker, call_no)
             self._check(tx)
@@ -601,3 +625,11 @@ def view_of(snapshot: Snapshot, action_id: str) -> ActionView:
 def in_action_order(action_ids: Iterable[str]) -> list[str]:
     """Action ids in the order their numbers were given."""
     return sorted(action_ids, key=steps.action_number)
+
+
+def _call_args(args: Mapping[str, object]) -> dict[str, object]:
+    """A call's arguments as every store keeps them (`storable`)."""
+    kept = storable(args)
+    if not isinstance(kept, dict):
+        raise ValueError("a call's arguments are a JSON object")
+    return kept

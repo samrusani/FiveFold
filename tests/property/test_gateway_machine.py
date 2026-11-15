@@ -37,7 +37,7 @@ second worker's first accepted report (0010, item 6).
 from __future__ import annotations
 
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol, cast
 
@@ -53,6 +53,7 @@ from hypothesis.stateful import (
 )
 
 from fivefold.domain.contracts import Capability, Contract, ContractParams
+from fivefold.gateway.codec import plain_from_json
 from fivefold.gateway.invariants import check_invariants
 from fivefold.gateway.memory import MemoryStore
 from fivefold.gateway.pg_store import PgStore
@@ -203,6 +204,12 @@ class GatewayMachine(RuleBasedStateMachine):
 
     def ids(self, *states: ActionState) -> list[str]:
         return sorted(a for a, e in self.expected.items() if e.state in states)
+
+    def check_logged(self, tool: str, sent: Mapping[str, object]) -> None:
+        """The last logged response answers `tool`, with the arguments the call carried.
+        The Postgres machines compare them with what the database gives back."""
+        call = self.store.snapshot().tool_calls[-1]
+        assert (call.tool, call.args) == (tool, plain_from_json(sent))
 
     def retryable(self) -> list[str]:
         if not self.contract.has(Capability.IDEMPOTENCY_KEY):
@@ -611,7 +618,11 @@ class GatewayMachine(RuleBasedStateMachine):
         call = WriteCall(
             intent, INTENTS[intent], "target", args, key, based_on, ("budget", "quote")
         )
-        result = self.store.propose(call, self.vt)
+        # The call as the agent sent it; the store logs its response with these.
+        sent = {"intent_id": intent, **args, "based_on": list(based_on), "note": citing}
+        result = self.store.propose(call, self.vt, args=sent)
+        if isinstance(result, Refusal):
+            self.check_logged(INTENTS[intent], sent)
         basis = {"budget": budget_version, "quote": quote_version}
         holders = [
             a for a, e in self.expected.items() if e.intent_id == intent and e.state in HOLDING
@@ -634,7 +645,7 @@ class GatewayMachine(RuleBasedStateMachine):
             assert (result.action_id, result.state) == (action_id, S.PROPOSED)
             self.expected[action_id] = Expected(intent, key, basis)
             self.world[action_id] = World()
-            self.check_status(action_id, tool=INTENTS[intent])
+            self.check_status(action_id, tool=INTENTS[intent], args=sent)
             return
         holder = self.expected[holders[0]]
         if key != holder.key:
@@ -649,16 +660,24 @@ class GatewayMachine(RuleBasedStateMachine):
         if holder.state in UNDISPATCHED and newer:
             holder.basis = basis
             holder.events += 1
-        self.check_status(holders[0], tool=INTENTS[intent])
+        self.check_status(holders[0], tool=INTENTS[intent], args=sent)
 
     @precondition(lambda self: self.expected)
     @rule(data=st.data())
     def status(self, data: st.DataObject) -> None:
         self.check_status(data.draw(st.sampled_from(sorted(self.expected))))
 
-    def check_status(self, action_id: str, tool: str = "get_action_status") -> None:
-        """A tool's answer once its wait ends: the result must match the model (0003, I5)."""
-        result = self.store.status(action_id, self.vt, tool=tool)
+    def check_status(
+        self,
+        action_id: str,
+        tool: str = "get_action_status",
+        args: Mapping[str, object] | None = None,
+    ) -> None:
+        """A tool's answer once its wait ends: the result must match the model (0003, I5),
+        and it is logged with the call's arguments."""
+        sent = {"action_id": action_id, "wait_ms": 0} if args is None else args
+        result = self.store.status(action_id, self.vt, tool=tool, args=sent)
+        self.check_logged(tool, sent)
         expected = self.expected[action_id]
         assert (result.state, result.reason) == (expected.state, expected.reason)
         rejected_stale = expected.state is S.REJECTED and expected.reason is Reason.STALE_INPUT
@@ -711,7 +730,14 @@ class GatewayMachine(RuleBasedStateMachine):
                 else:
                     accept &= bool(states & {S.DISPATCHED, S.OUTCOME_UNKNOWN})
         worker = data.draw(st.sampled_from(WORKERS))
-        result = self.store.submit_report(claims, self.vt, worker=worker)
+        sent = {
+            "claims": [
+                {"intent_id": c.intent_id, "status": str(c.status), "effect_ids": c.effect_ids}
+                for c in claims
+            ]
+        }
+        result = self.store.submit_report(claims, self.vt, worker=worker, args=sent)
+        self.check_logged("submit_final_report", sent)
         assert isinstance(result, ReportAccepted) == accept
         if accept:
             self.reports.setdefault(worker, len(self.store.snapshot().tool_calls))

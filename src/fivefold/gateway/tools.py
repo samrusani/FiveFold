@@ -30,6 +30,10 @@ G1 and G2 expose the same tools with the same schemas; only their behaviour diff
 What has no refusal reason in 0003 is a tool error, as MCP reports one: a read the
 simulator refused or did not answer in time (`gateway_timeout`, as a proxy's 504), a
 status call for an action that does not exist, and an unknown tool.
+
+The store logs the response to each write, status call and G2 report with the call's
+arguments as they arrived (`gw.tool_call`, 0003). Reads are recorded as reads; tool
+errors, G1's reports and a report that breaks the schema are not logged.
 """
 
 from __future__ import annotations
@@ -327,7 +331,7 @@ class GatewayTools:
                 based_on=tuple(args.based_on),
                 dependencies=tuple(d.key for d in dependencies(operation, normal)),
             )
-            outcome = self._store.propose(call, self._now)
+            outcome = self._store.propose(call, self._now, args=arguments)
             if isinstance(outcome, Refusal):
                 return wire.refusal(outcome)
             self._dispatcher.drive(outcome.action_id)
@@ -336,7 +340,9 @@ class GatewayTools:
             )
             if self._store.authorization_only:
                 self._fail_unknown_outcome(outcome.action_id)
-            result = self._store.status(outcome.action_id, self._now, tool=str(operation))
+            result = self._store.status(
+                outcome.action_id, self._now, tool=str(operation), args=arguments
+            )
             return wire.action(result)
 
         return write
@@ -376,7 +382,7 @@ class GatewayTools:
         except UnknownAction:
             raise ToolError("unknown_action", f"no action {args.action_id}") from None
         await self._dispatcher.wait(args.action_id, FINAL_STATES.__contains__, args.wait_ms)
-        result: ActionResult = self._store.status(args.action_id, self._now)
+        result: ActionResult = self._store.status(args.action_id, self._now, args=arguments)
         return wire.action(result)
 
     # The final report --------------------------------------------------------------------------
@@ -393,7 +399,7 @@ class GatewayTools:
             Claim(c.intent_id, ClaimStatus(str(c.status)), tuple(c.effect_ids), c.note)
             for c in report.claims
         ]
-        outcome = self._store.submit_report(claims, self._now, worker=call.worker)
+        outcome = self._store.submit_report(claims, self._now, worker=call.worker, args=arguments)
         if isinstance(outcome, ReportAccepted):
             self._reports.submit(
                 call.worker,
