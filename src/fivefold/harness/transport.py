@@ -30,6 +30,8 @@ copy, so nothing done to a body later changes what was sent.
 `call` is a request and its answer, like an HTTP call: the agent's tools in baselines and
 the gateway's calls to the simulator use it. `post` sends one message and runs a callback
 when it arrives; stream transports, such as MCP's in-process connection, build on it.
+`Calls` names what `call` does, so the split topology's HTTP clients can stand in for it
+(`fivefold.harness.split`).
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, Protocol
 
 from fivefold.faults.catalog import HOPS, Action
 from fivefold.faults.plan import FaultInjector, Fired
@@ -95,6 +97,28 @@ class Reply:
 
 
 Handler = Callable[[Envelope], Awaitable[Reply]]
+
+
+class Calls(Protocol):
+    """Sends a request and waits for its answer, as `Transport.call` does: what the
+    gateway's simulator client and the baseline's tools need from a transport."""
+
+    async def call(
+        self,
+        *,
+        hop: Hop,
+        sender: str,
+        receiver: str,
+        api: str,
+        body: JsonValue,
+        timeout_ms: int,
+        intent_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Reply:
+        """Send a request and return its answer. Raises `TransportTimeout` when no answer
+        arrives within `timeout_ms`."""
+        ...
+
 
 Effect = Callable[[Fired, "Envelope"], None]
 """Applies a fault that fired on a message and does more than drop it (F6, F7)."""

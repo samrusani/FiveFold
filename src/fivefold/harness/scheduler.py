@@ -24,21 +24,30 @@ A component that waits on the real world, as the live model adapter waits on its
 provider, awaits it through `hold`. Until the wait ends, the scheduler fires no event: it
 waits in wall time, with virtual time held still. So every timer fires at the virtual time
 it would have without the wait, and a model call takes exactly its `think_ms` (0009).
+
+`HostScheduler` is the split topology's scheduler. It has the same interface, so the
+gateway, the simulator and the fault points run on it unchanged, but its virtual time
+follows the host's monotonic clock (`HostClock`, 0009): its events are the event loop's
+timers, its components' tasks run as the event loop schedules them, and nothing it does
+is deterministic.
 """
 
 from __future__ import annotations
 
 import asyncio
 import heapq
+import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar
 
-from fivefold.harness.clock import RealWaits, VirtualClock, settle
+from fivefold.harness.clock import HostClock, RealWaits, VirtualClock, settle
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 class SchedulerTimeout(Exception):
@@ -318,3 +327,115 @@ class Scheduler:
         if self._failures:
             name, error = self._failures[0]
             raise ComponentFailed(f"task {name} failed: {error!r}") from error
+
+
+class SchedulerStopped(RuntimeError):
+    """A timer was asked for after the split topology's scheduler stopped."""
+
+
+class _HostTimer(Timer):
+    """A host timer: cancelling it also takes it off the event loop, and forgets it."""
+
+    def __init__(
+        self,
+        event: _Event,
+        handles: dict[int, asyncio.TimerHandle],
+        live: dict[int, _Event],
+    ) -> None:
+        super().__init__(event)
+        self._handles = handles
+        self._live = live
+
+    def cancel(self) -> None:
+        super().cancel()
+        self._live.pop(self._event.seq, None)
+        handle = self._handles.pop(self._event.seq, None)
+        if handle is not None:
+            handle.cancel()
+
+
+class HostScheduler(Scheduler):
+    """The scheduler of the split topology, whose virtual time follows the host's clock.
+
+    Each event is a timer of the running event loop, which fires it in wall time once the
+    host's clock reaches its virtual time; an event due in the past fires at once, since
+    the host's clock moves on while a caller computes a time. Components spawn tasks and
+    crash as they do on the deterministic scheduler. A task or event that raises is logged
+    and kept in `failures`, since nothing runs the scheduler to raise it. `run` is refused:
+    the services' event loops run everything. `stop` ends the run's timers and tasks.
+    """
+
+    def __init__(self, clock: HostClock) -> None:
+        super().__init__(clock)
+        self._host = clock
+        self._handles: dict[int, asyncio.TimerHandle] = {}
+        self._live: dict[int, _Event] = {}
+        self._stopped = False
+
+    @property
+    def stopped(self) -> bool:
+        """Whether `stop` has run."""
+        return self._stopped
+
+    @property
+    def failures(self) -> list[tuple[str, BaseException]]:
+        """The tasks and events that raised, with their errors, oldest first."""
+        return list(self._failures)
+
+    def call_at(self, at: int, callback: Callable[[], None], *, label: str = "") -> Timer:
+        """Fire `callback` once the host's clock reaches virtual time `at`, or at once if it
+        has passed. Raises `SchedulerStopped` after `stop`."""
+        if self._stopped:
+            raise SchedulerStopped(f"cannot schedule {label!r}: the scheduler has stopped")
+        event = _Event(max(at, self.now), self._next_seq, callback, label)
+        self._next_seq += 1
+        self._live[event.seq] = event
+
+        def fire() -> None:
+            self._handles.pop(event.seq, None)
+            self._live.pop(event.seq, None)
+            if event.cancelled:
+                return
+            try:
+                callback()
+            except Exception as error:
+                self._failed(f"event {label or event.seq}", error)
+
+        self._handles[event.seq] = self._host.call_at(event.at, fire)
+        return _HostTimer(event, self._handles, self._live)
+
+    def pending(self) -> list[Timer]:
+        """The timers still due to fire, in firing order. A timer is forgotten once it
+        fires or is cancelled."""
+        return [
+            _HostTimer(event, self._handles, self._live) for event in sorted(self._live.values())
+        ]
+
+    async def run(
+        self, *, until: Callable[[], bool] | None = None, deadline_ms: int | None = None
+    ) -> RunEnd:
+        """Refused: the split topology's services run their own event loops."""
+        raise TypeError("a HostScheduler has no run loop: the event loop runs its components")
+
+    def stop(self) -> None:
+        """End the run here: cancel every timer, crash every component, refuse new timers."""
+        self._stopped = True
+        for handle in self._handles.values():
+            handle.cancel()
+        self._handles.clear()
+        self._live.clear()
+        for component in sorted(self._tasks):
+            if self.is_up(component):
+                self.crash(component)
+
+    def _task_finished(self, component: str, task: asyncio.Task[Any]) -> None:
+        self._tasks.get(component, {}).pop(task, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self._failed(task.get_name(), error)
+
+    def _failed(self, name: str, error: BaseException) -> None:
+        self._failures.append((name, error))
+        logger.error("%s failed", name, exc_info=error)

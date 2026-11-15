@@ -17,6 +17,11 @@ inside a real wait (`RealWaits.hold`). Network I/O registers nothing that `settl
 see: an HTTP client with no timeout leaves no timer in the heap. So while a real wait is
 in flight, `settle` waits for it to end, in wall time, and does not return. Virtual time
 stands still meanwhile, and the call takes no virtual time of its own (0009).
+
+In the split topology, virtual time follows the host's monotonic clock (0009).
+`HostClock` reads it, counting milliseconds from the run's origin, and its timers are the
+event loop's, in wall time. Every process of one split run reads the same origin, so on
+one host they all read the same virtual time.
 """
 
 from __future__ import annotations
@@ -24,10 +29,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar, cast
 
 T = TypeVar("T")
+
+TIMER_SLACK_S = 0.000_5
+"""How much later than due a host timer fires, in seconds, so that the clock reads at least
+its due time when it fires, whatever the rounding to whole milliseconds."""
 
 
 class VirtualClock:
@@ -48,6 +57,55 @@ class VirtualClock:
         if at_ms < self._now:
             raise ValueError(f"virtual time cannot go back from {self._now} to {at_ms}")
         self._now = at_ms
+
+
+class ClockBehind(RuntimeError):
+    """The host's clock reads earlier than the run's origin: the process is on another host."""
+
+
+class HostClock(VirtualClock):
+    """The split topology's clock: virtual time follows the host's monotonic clock (0009).
+
+    Virtual milliseconds are the host's monotonic milliseconds since `origin_ms`, so the
+    processes of a run on one host, which share its origin, read the same time. The host
+    moves it; nothing else can. It has no events of its own: `call_at` hands a callback to
+    the running event loop, which calls it in wall time.
+    """
+
+    def __init__(self, origin_ms: int) -> None:
+        super().__init__(0)
+        self._origin = origin_ms
+
+    @staticmethod
+    def host_ms() -> int:
+        """The host's monotonic clock, in whole milliseconds."""
+        return time.monotonic_ns() // 1_000_000
+
+    @property
+    def origin_ms(self) -> int:
+        """The host's monotonic milliseconds at virtual time 0."""
+        return self._origin
+
+    @property
+    def now(self) -> int:
+        """Milliseconds since the origin. Raises `ClockBehind` before the origin."""
+        elapsed = self.host_ms() - self._origin
+        if elapsed < 0:
+            raise ClockBehind(
+                f"the host's clock reads {-elapsed} ms before the run's origin: every process"
+                " of a split run must run on one host"
+            )
+        return elapsed
+
+    def advance_to(self, at_ms: int) -> None:
+        """Refused: only the host moves this clock."""
+        raise RuntimeError("virtual time follows the host's clock here; nothing can move it")
+
+    def call_at(self, at_ms: int, callback: Callable[[], None]) -> asyncio.TimerHandle:
+        """Call `callback` on the running event loop once virtual time reaches `at_ms`."""
+        due_ns = (self._origin + at_ms) * 1_000_000
+        delay_s = max(0.0, (due_ns - time.monotonic_ns()) / 1e9) + TIMER_SLACK_S
+        return asyncio.get_running_loop().call_later(delay_s, callback)
 
 
 def wall_ms() -> float:
