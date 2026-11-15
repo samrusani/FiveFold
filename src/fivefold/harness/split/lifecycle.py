@@ -3,9 +3,10 @@
 `start_run` makes the run, before its services start:
 
 1. It loads the scenario and checks the fault plan: the scenario's own, or one given. The
-   plan must fit the configuration and the run's timing (`fivefold.faults.plan`), and the
-   split topology must be able to run it (`fivefold.harness.split.faults`). Seeded
-   parameters are drawn from the run's seed, as in the inproc topology.
+   plan must be a fixed list, not a random plan, must fit the configuration and the run's
+   timing (`fivefold.faults.plan`), and the split topology must be able to run it
+   (`fivefold.harness.split.faults`). Seeded parameters are drawn from the run's seed, as
+   in the inproc topology.
 2. It makes the run's database from the migrated template database (0009), first
    migrating the template, or making it if it does not exist yet, as every run database
    is made (`fivefold.harness.migrations.create_run_database`). The template is
@@ -74,7 +75,7 @@ from fivefold.harness.rng import Generators
 from fivefold.harness.run import drain_window_ms
 from fivefold.harness.scheduler import HostScheduler
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, issue
-from fivefold.harness.split.faults import check_split
+from fivefold.harness.split.faults import SplitRefused, check_split
 from fivefold.harness.split.rundir import (
     RUN_FILE,
     Config,
@@ -210,9 +211,12 @@ def start_run(
 
 
 def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:
-    """The scenario's fault list; a random plan is not built yet (0006)."""
+    """The scenario's fault list. A random plan is refused (`fivefold.harness.split.faults`)."""
     if isinstance(scenario.faults, dict):
-        raise ValueError("random fault plans are not built yet (0006)")
+        raise SplitRefused(
+            "the split topology runs a fixed fault plan only: give the scenario a list of"
+            " faults, or a plan file; a random plan runs in the inproc topology (0006)"
+        )
     return list(scenario.faults)
 
 

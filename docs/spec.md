@@ -348,7 +348,7 @@ Detail: 0009.
 
 ## Testing
 
-- **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, and Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7.
+- **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every fault variant, contract level and configuration on the standard development scenario, and deterministic tests assert each cell (0006).
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.

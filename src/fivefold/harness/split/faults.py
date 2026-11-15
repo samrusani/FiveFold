@@ -25,6 +25,11 @@ The rest cannot run here, and a plan that names one is refused before the run st
 Each point fires in one service only, so each plan entry counts its events in one place.
 A split run also has no scripted resolver: a human resolves an escalation through the
 gateway's admin API.
+
+A split run takes a fixed plan only, and refuses a random one (0006, Plans) before it
+starts. A random plan draws faults at every point of the configuration, F1, F3, F9, F11
+and, in G1 and G2, F6 and F7 early among them, which the split topology cannot fire. It
+serves the Hypothesis suites, whose runs only the inproc topology reproduces from a seed.
 """
 
 from __future__ import annotations
