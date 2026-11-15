@@ -21,6 +21,7 @@ from typing import Literal
 from fivefold.domain.report import InvalidReport, parse_report
 from fivefold.harness.log import HarnessLog, JsonValue, ReportRecord
 from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.transport import Envelope, Handler, Reply
 
 TEXT_KEY = "json_text"
 """The one key of a report recorded as JSON text."""
@@ -78,3 +79,22 @@ def storable(value: JsonValue) -> bool:
     if isinstance(value, list):
         return all(storable(item) for item in value)
     return True
+
+
+def sink_endpoint(sink: ReportSink) -> Handler:
+    """The report sink on the transport, for baselines' `submit_final_report` (0008).
+
+    The sink records every report, valid or not. Like the gateway's tool, it refuses a
+    report that breaks the schema, so the agent can fix it and resubmit.
+    """
+
+    async def handle(request: Envelope) -> Reply:
+        errors = sink.submit(
+            request.sender, request.body, accepted_by="sink", message_seq=request.seq
+        )
+        if errors:
+            details = {"message": "; ".join(errors)}
+            return Reply({"result": "refused", "reason": "invalid_args", "details": details})
+        return Reply({"result": "accepted"})
+
+    return handle

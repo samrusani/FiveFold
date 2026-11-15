@@ -135,7 +135,7 @@ def test_a_crashed_agent_loses_its_answers_and_its_connection() -> None:
     assert rig.results == []
     (answer,) = [m for m in rig.log.messages if m.kind == "answer" and m.api == "propose"]
     assert (answer.fate, answer.drop_reason) == ("dropped", "receiver_down")
-    assert rig.server_ended == [1_000], "the gateway's end reads end-of-stream at the crash"
+    assert rig.server_ended == [1_051], "the gateway's end ends once nothing is in flight"
 
 
 def test_an_answer_in_flight_at_a_crash_is_dropped_after_the_restart() -> None:
@@ -147,3 +147,33 @@ def test_an_answer_in_flight_at_a_crash_is_dropped_after_the_restart() -> None:
     (answer,) = [m for m in rig.log.messages if m.kind == "answer" and m.api == "propose"]
     assert (answer.fate, answer.drop_reason) == ("dropped", "caller_crashed")
     assert answer.delivered_vt is None
+
+
+def test_a_request_in_flight_at_a_crash_is_still_served() -> None:
+    """The agent dies right after sending: the gateway serves the call; its answer is lost."""
+    rig = Rig()
+    served: list[int] = []
+    sent: list[int] = []
+
+    def start() -> None:
+        link = rig.connect(calls=1)
+
+        def on_sent(envelope: Any, stage: str) -> None:
+            if stage == "sent" and envelope.kind == "request" and envelope.api == "propose":
+                sent.append(envelope.seq)
+                rig.scheduler.call_later(0, lambda: rig.scheduler.crash("agent-1"))
+            if stage == "delivered" and envelope.api == "propose" and envelope.kind == "request":
+                served.append(envelope.seq)
+
+        rig.transport.observe(on_sent)
+        assert link.agent == "agent-1"
+
+    rig.go(start)
+    request, answer = [m for m in rig.log.messages if m.api == "propose"]
+    assert served == sent == [request.seq]
+    assert (request.fate, answer.fate, answer.drop_reason) == (
+        "delivered",
+        "dropped",
+        "receiver_down",
+    ), "the gateway answered; the dead agent never got it"
+    assert rig.results == []
