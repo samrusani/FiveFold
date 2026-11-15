@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -433,12 +434,20 @@ def test_f5_fires_with_and_without_a_gateway() -> None:
 
 # F10: status answer delayed or stale -----------------------------------------------------
 
+F10_AT_ITS_POINT = [
+    {"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}},
+    {"fault": "F10", "variant": "stale_within_lag", "at": {"point": "sim.status.answer"}},
+    {"fault": "F10", "variant": "stale_beyond_lag", "at": {"point": "sim.write.received"}},
+]
+"""Each F10 variant at its own point: delayed and stale within L where a status answer is
+produced, stale beyond L where a write reaches the destination (0013)."""
 
-@pytest.mark.parametrize("variant", ["delayed", "stale_within_lag", "stale_beyond_lag"])
-def test_f10_is_built_where_status_answers_are_produced(variant: str) -> None:
-    point = "sim.status.answer"
-    (planned,) = parse_plan([{"fault": "F10", "variant": variant, "at": {"point": point}}])
-    assert point in planned.kind.points
+
+@pytest.mark.parametrize("entry", F10_AT_ITS_POINT, ids=lambda entry: str(entry["variant"]))
+def test_each_f10_variant_is_built_at_its_own_point(entry: dict[str, Any]) -> None:
+    (planned,) = parse_plan([entry])
+    assert planned.at.point in planned.kind.points
+    assert BUILT[FaultId.F10].points == {"sim.status.answer", "sim.write.received"}
 
 
 @pytest.mark.parametrize(
@@ -450,8 +459,22 @@ def test_f10_is_built_where_status_answers_are_produced(variant: str) -> None:
             "no variant 'stale'",
         ),
         (
-            {"fault": "F10", "variant": "delayed", "at": {"point": "sim.write.received"}},
+            {"fault": "F10", "variant": "delayed", "at": {"point": "net.gw_sim.answer"}},
             "F10 does not fire at",
+        ),
+        (
+            {"fault": "F10", "variant": "delayed", "at": {"point": "sim.write.received"}},
+            re.escape("F10 delayed fires at ['sim.status.answer'], not sim.write.received"),
+        ),
+        (
+            {"fault": "F10", "variant": "stale_within_lag", "at": {"point": "sim.write.received"}},
+            re.escape("F10 stale_within_lag fires at ['sim.status.answer']"),
+        ),
+        (
+            {"fault": "F10", "variant": "stale_beyond_lag", "at": {"point": "sim.status.answer"}},
+            re.escape(
+                "F10 stale_beyond_lag fires at ['sim.write.received'], not sim.status.answer"
+            ),
         ),
         (
             {
@@ -467,12 +490,14 @@ def test_f10_is_built_where_status_answers_are_produced(variant: str) -> None:
 def test_f10_where_or_how_the_catalog_does_not_allow_is_refused(
     entry: dict[str, object], message: str
 ) -> None:
+    """Before record 0013, stale beyond L fired at a status answer, so it froze a state
+    that already listed the order. It now fires only where a write arrives."""
     with pytest.raises(ValidationError, match=message):
         parse_plan([entry])
 
 
 def test_f10_shapes_20_answers_unless_the_plan_says_otherwise() -> None:
-    default, chosen = parse_plan(
+    default, chosen, stale = parse_plan(
         [
             {"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}},
             {
@@ -481,19 +506,22 @@ def test_f10_shapes_20_answers_unless_the_plan_says_otherwise() -> None:
                 "at": {"point": "sim.status.answer"},
                 "params": {"count": 3},
             },
+            {"fault": "F10", "variant": "stale_beyond_lag", "at": {"point": "sim.write.received"}},
         ]
     )
-    assert (default.param("count"), chosen.param("count")) == (20, 3)
+    assert (default.param("count"), chosen.param("count"), stale.param("count")) == (20, 3, 20)
 
 
+@pytest.mark.parametrize("entry", F10_AT_ITS_POINT, ids=lambda entry: str(entry["variant"]))
 @pytest.mark.parametrize("contract", [Contract.C0, Contract.C2, Contract.C3])
-def test_f10_runs_only_where_the_destination_answers_status(contract: Contract) -> None:
-    plan = parse_plan(
-        [{"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}}]
-    )
-    check_run(plan, params=params(), contract=Contract.C1)
+def test_f10_runs_only_where_the_destination_answers_status(
+    contract: Contract, entry: dict[str, Any]
+) -> None:
+    """Every variant acts on status answers, wherever it fires."""
+    plan = parse_plan([entry])
+    check_run(plan, params=params(status_lag_ms=3_000), contract=Contract.C1)
     with pytest.raises(ValueError, match=f"F10 needs a status lookup, which {contract}"):
-        check_run(plan, params=params(), contract=contract)
+        check_run(plan, params=params(status_lag_ms=3_000), contract=contract)
 
 
 def test_f10_stale_within_the_lag_needs_a_lag() -> None:
@@ -506,9 +534,14 @@ def test_f10_stale_within_the_lag_needs_a_lag() -> None:
     check_run(plan, params=params(status_lag_ms=3_000), contract=Contract.C1)
 
 
-def test_f10_fires_with_and_without_a_gateway() -> None:
-    plan = parse_plan(
-        [{"fault": "F10", "variant": "delayed", "at": {"point": "sim.status.answer"}}]
-    )
+@pytest.mark.parametrize("variant", ["delayed", "stale_beyond_lag"])
+def test_f10_beyond_the_lag_or_delayed_needs_no_lag(variant: str) -> None:
+    (entry,) = [entry for entry in F10_AT_ITS_POINT if entry["variant"] == variant]
+    check_run(parse_plan([entry]), params=params(), contract=Contract.C1)
+
+
+@pytest.mark.parametrize("entry", F10_AT_ITS_POINT, ids=lambda entry: str(entry["variant"]))
+def test_f10_fires_with_and_without_a_gateway(entry: dict[str, Any]) -> None:
+    plan = parse_plan([entry])
     check_configuration(plan, gateway=True)
     check_configuration(plan, gateway=False)

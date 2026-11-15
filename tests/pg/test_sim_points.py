@@ -117,10 +117,25 @@ def f5(variant: str, delay_ms: int) -> dict[str, Any]:
 
 
 def f10(variant: str, count: int) -> dict[str, Any]:
+    """F10 `delayed` or `stale_within_lag`, at the first status answer."""
     return {
         "fault": "F10",
         "variant": variant,
         "at": {"point": "sim.status.answer"},
+        "params": {"count": count},
+    }
+
+
+def f10_beyond(count: int, occurrence: int = 1) -> dict[str, Any]:
+    """F10 `stale_beyond_lag`, where the order reaches the simulator (0013)."""
+    return {
+        "fault": "F10",
+        "variant": "stale_beyond_lag",
+        "at": {
+            "point": "sim.write.received",
+            "match": {"api": "submit_purchase_order"},
+            "occurrence": occurrence,
+        },
         "params": {"count": count},
     }
 
@@ -227,76 +242,92 @@ def test_f10_stale_within_the_lag_is_accurate_to_l_before_it_is_produced(
         assert answer.body["as_of_vt"] == produced - 3_000
 
 
-def test_f10_stale_beyond_the_lag_lists_the_state_when_it_fired_but_claims_now(
-    make_sim: SimFactory,
+def test_f10_stale_beyond_the_lag_lists_the_state_before_the_order_but_claims_now(
+    make_sim: SimFactory, sim_database: str
 ) -> None:
-    """A contract violation (0006): F10 fires before the order commits, so its answers
-    keep listing nothing while claiming to be accurate to the moment each is produced."""
-    caller = Caller(make_sim(Contract.C1), [f10("stale_beyond_lag", 2)])
-    caller.at(0, "first", "get_order_status", STATUS)
+    """A contract violation (0006, 0013): F10 fires as the order arrives, and the order
+    commits at once, but the next two answers keep listing nothing while claiming to be
+    accurate to the moment each is produced. The third is fresh again."""
+    caller = Caller(make_sim(Contract.C1), [f10_beyond(2)])
     caller.at(1_000, "order", "submit_purchase_order", ORDER)
     caller.at(3_000, "stale", "get_order_status", STATUS)
-    caller.at(6_000, "fresh", "get_order_status", STATUS)
+    caller.at(6_000, "stale again", "get_order_status", STATUS)
+    caller.at(9_000, "fresh", "get_order_status", STATUS)
     caller.run()
-    bodies: dict[str, Any] = {}
-    for label in ("first", "stale", "fresh"):
-        reply = caller.outcomes[label]
-        assert reply is not None
-        bodies[label] = reply.body
-    requests = {m.seq: m for m in caller.log.messages if m.kind == "request"}
-    stale_request = next(
-        requests[m.correlation]
-        for m in caller.answers("get_order_status")
-        if m.correlation is not None and m.body == bodies["stale"]
+    ((arrived, state, outcome_vt, _, _, effect_id),) = rows(sim_database, WRITES)
+    assert (state, outcome_vt, effect_id) == ("committed", arrived, "PO-0001")
+    (fault,) = caller.log.faults
+    order = next(m for m in caller.log.messages if m.api == "submit_purchase_order")
+    assert (fault.variant, fault.point, fault.vt, fault.target_seq, fault.params) == (
+        "stale_beyond_lag",
+        "sim.write.received",
+        arrived,
+        order.seq,
+        {"count": 2},
     )
-    assert bodies["stale"]["effects"] == []
-    assert bodies["stale"]["as_of_vt"] == stale_request.delivered_vt
-    assert [e["effect_id"] for e in bodies["fresh"]["effects"]] == ["PO-0001"]
+    requests = {m.seq: m for m in caller.log.messages if m.kind == "request"}
+    listed: dict[str, list[str]] = {}
+    for label in ("stale", "stale again", "fresh"):
+        reply = caller.outcomes[label]
+        assert reply is not None and isinstance(reply.body, dict)
+        answer = next(m for m in caller.answers("get_order_status") if m.body == reply.body)
+        assert answer.correlation is not None
+        assert reply.body["as_of_vt"] == requests[answer.correlation].delivered_vt
+        listed[label] = [e["effect_id"] for e in reply.body["effects"]]
+    assert listed == {"stale": [], "stale again": [], "fresh": ["PO-0001"]}
 
 
-def test_f10_stale_beyond_the_lag_answers_alike_when_an_order_commits_in_its_millisecond(
+def test_f10_stale_beyond_the_lag_lists_what_committed_before_the_write_and_never_the_write(
     make_sim: SimFactory,
 ) -> None:
-    """Every answer F10 shapes lists the same effects, those committed before the virtual
-    millisecond in which it fired. An order that commits later in that millisecond is in
-    none of them, though each answer claims to be current (0006)."""
+    """Every answer F10 shapes lists the same effects: those committed before the virtual
+    millisecond in which the write it fired at arrived. That write commits in the same
+    millisecond, and is in none of them; an order committed earlier is in all of them."""
     sim = make_sim(Contract.C1)
     scheduler = Scheduler()
-    faults = FaultInjector(parse_plan([f10("stale_beyond_lag", 2)]))
+    faults = FaultInjector(parse_plan([f10_beyond(2, occurrence=2)]))
     points = SimulatorPoints(
         scheduler, faults, MemoryHarnessLog(), dispatch_timeout_ms=T_MS, status_lag_ms=0
     )
+    seq = iter(range(1, 100))
 
-    def status(vt: int, seq: int) -> list[str]:
+    def envelope(api: str, vt: int, body: dict[str, Any]) -> Envelope:
         scheduler.clock.advance_to(vt)
-        request = Envelope(
-            seq=seq,
+        return Envelope(
+            seq=next(seq),
             hop="gw_sim",
             kind="request",
             sender="gateway",
             receiver="simulator",
-            api="get_order_status",
+            api=api,
             correlation=None,
             intent_id="REQ-1",
             idempotency_key=None,
             answer_class=None,
-            body=STATUS,
+            body=body,
             sent_vt=vt,
         )
-        shape = points.status_answer(request)
-        assert shape is not None and shape.contract_violation
-        answer = sim.get_order_status(
-            GetOrderStatus(**STATUS),
-            caller="gateway",
-            vt=vt,
-            as_of_vt=shape.as_of_vt,
-            reflect_vt=shape.reflect_vt,
-            contract_violation=True,
-        )
-        assert isinstance(answer, StatusAnswer)
+
+    def order(vt: int) -> str:
+        assert points.write_received(envelope("submit_purchase_order", vt, ORDER)) is None
+        answer = sim.submit_purchase_order(SubmitPurchaseOrder(**ORDER), caller="gateway", vt=vt)
+        assert isinstance(answer, WriteCommitted)
+        return answer.effect_id
+
+    def status(vt: int) -> list[str]:
+        shape = points.status_answer(envelope("get_order_status", vt, STATUS))
+        options: dict[str, Any] = {}
+        if shape is not None:
+            options = {
+                "as_of_vt": shape.as_of_vt,
+                "reflect_vt": shape.reflect_vt,
+                "contract_violation": shape.contract_violation,
+            }
+        answer = sim.get_order_status(GetOrderStatus(**STATUS), caller="gateway", vt=vt, **options)
+        assert isinstance(answer, StatusAnswer) and answer.as_of_vt == vt
         return [effect.effect_id for effect in answer.effects]
 
-    first = status(5_000, 1)
-    order = sim.submit_purchase_order(SubmitPurchaseOrder(**ORDER), caller="gateway", vt=5_000)
-    assert isinstance(order, WriteCommitted) and order.effect_id == "PO-0001"
-    assert status(6_000, 2) == first == [], "the order committed in F10's millisecond"
+    assert order(2_000) == "PO-0001", "the first order: F10 waits for the second"
+    assert order(5_000) == "PO-0002", "C1 has no keys, so the second order commits too"
+    assert [status(vt) for vt in (6_000, 7_000)] == [["PO-0001"], ["PO-0001"]]
+    assert status(8_000) == ["PO-0001", "PO-0002"], "F10 shaped two answers"

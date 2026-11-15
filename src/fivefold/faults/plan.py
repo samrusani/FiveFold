@@ -158,8 +158,12 @@ def check_run(plan: Sequence[PlannedFault], *, params: Params, contract: Contrac
     - F5 in contract holds a write past the caller's timeout and commits it before the
       deadline: T < `delay_ms` < D. Beyond the deadline it commits after D: `delay_ms` > D,
       and the plan must set it, since 0006 gives that variant no default.
-    - F10 acts on status answers, which only C1 gives. Its `stale_within_lag` variant needs
-      a status lag L above 0, or it changes nothing (0006, notes).
+    - F10 acts on status answers, which only C1 gives, wherever it fires: at a status
+      answer, or where a write arrives for `stale_beyond_lag` (0013). Its
+      `stale_within_lag` variant needs a status lag L above 0, or it changes nothing
+      (0006, notes).
+
+    Which point each F10 variant fires at is the catalog's (`PlannedFault`).
     """
     t_ms, d_ms = params.dispatch_timeout_ms, params.commit_deadline_ms
     wrong: list[str] = []

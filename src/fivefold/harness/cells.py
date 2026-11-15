@@ -31,10 +31,13 @@ The variants of a cell:
   `beyond_deadline` (20,000 ms: twice dev-001's D, a contract violation that still lands
   inside the drain window, so the late commit happens before the run ends).
 - F10 is `delayed`, `stale_within_lag` or `stale_beyond_lag`, at C1. It needs a status
-  probe, so its cells pair it with F2 on the order's committed answer (0006, notes), and
-  it fires at the first status answer. The `stale_within_lag` cells set `status_lag_ms` to
-  3,000 (`cell_scenario`). B0 has no F10 cells: its scripted agent never calls the status
-  tool (0008), so F10's B0 equivalent never fires. G1 has none either: its gateway never
+  probe, so its cells pair it with F2 on the order's committed answer (0006, notes).
+  `delayed` and `stale_within_lag` fire at the first status answer. The `delayed` cells
+  set `count` to 5, below `max_probes` (0013), and the `stale_within_lag` cells set
+  `status_lag_ms` to 3,000 (`cell_scenario`). `stale_beyond_lag` fires as the order
+  reaches the simulator, and the status answers after it list the state just before
+  (0013). B0 has no F10 cells: its scripted agent never calls the status tool (0008), so
+  no status answer is produced for F10 to change. G1 has none either: its gateway never
   probes, and its agent has no status tool (0008), so nothing asks for a status answer.
 """
 
@@ -88,7 +91,19 @@ F5_DELAYS: dict[str, dict[str, int]] = {"in_contract": {}, "beyond_deadline": {"
 """F5's parameters by variant: the catalog's 5,000 ms in contract; twice dev-001's commit
 deadline D beyond it, since 0006 gives that variant no default."""
 
-F10_VARIANTS = frozenset({"delayed", "stale_within_lag", "stale_beyond_lag"})
+DELAYED_COUNT = 5
+"""The `count` of the `delayed` cells (0013): below C1's `max_probes` of 20, so the first
+five probes go unanswered and the sixth is answered in time. The catalog's default stays
+20, which `stale_beyond_lag` needs to last past the settle time."""
+
+F10_PLANS: dict[str, tuple[str, str, dict[str, int]]] = {
+    "delayed": ("sim.status.answer", ORDER_STATUS, {"count": DELAYED_COUNT}),
+    "stale_within_lag": ("sim.status.answer", ORDER_STATUS, {}),
+    "stale_beyond_lag": ("sim.write.received", ORDER, {}),
+}
+"""Where each F10 cell fires, on which call, and the parameters it sets (0006, 0013):
+the first status answer, or, for `stale_beyond_lag`, the order's arrival at the
+simulator."""
 
 STALE_WITHIN_LAG_MS = 3_000
 """The status lag L of the `stale_within_lag` cells (0006, notes): dev-001's L is 0."""
@@ -245,27 +260,27 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             }
         ]
     if cell.fault == "F10":
-        if cell.variant not in F10_VARIANTS:
+        plan = F10_PLANS.get(str(cell.variant))
+        if plan is None:
             raise ValueError(f"F10 has no variant {cell.variant!r}")
         if cell.config == "B0":
-            raise ValueError("B0's scripted agent never calls the status tool, so F10 never fires")
+            raise ValueError(
+                "B0's scripted agent never calls the status tool, so F10 has no answer to change"
+            )
         if cell.config == "G1":
             raise ValueError(
-                "G1 never asks for the destination's status (0008), so F10 never fires"
+                "G1 never asks for the destination's status (0008), so F10 has no answer to change"
             )
+        point, api, params = plan
         lost_reply = cell_plan(cell.model_copy(update={"fault": "F2", "variant": None}))
-        return [
-            *lost_reply,
-            {
-                "fault": "F10",
-                "variant": cell.variant,
-                "at": {
-                    "point": "sim.status.answer",
-                    "match": {"api": ORDER_STATUS},
-                    "occurrence": 1,
-                },
-            },
-        ]
+        status: dict[str, Any] = {
+            "fault": "F10",
+            "variant": cell.variant,
+            "at": {"point": point, "match": {"api": api}, "occurrence": 1},
+        }
+        if params:
+            status["params"] = dict(params)
+        return [*lost_reply, status]
     raise ValueError(f"no plan for {cell.fault} yet")
 
 
