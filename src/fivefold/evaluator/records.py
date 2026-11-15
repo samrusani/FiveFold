@@ -118,6 +118,9 @@ class RunInfo:
     branch_point: int | None = None
     params: JsonValue = None
     """The values the run used (0009), as the harness recorded them."""
+    stopped_vt: int | None = None
+    """When the harness stopped the run, at the end of the drain window (0009). A run read
+    from its database always has one; records built in memory may leave it out."""
 
 
 @dataclass(frozen=True)
@@ -352,12 +355,23 @@ class RunRecords:
     reads: tuple[Read, ...] = ()
 
     def end_vt(self) -> int:
-        """The virtual time of the run's end, as far as the records show it.
+        """The virtual time of the run's end: when the harness stopped it (0009).
 
-        The harness does not record the stop itself, so this is the latest virtual time
-        on record: the simulator's last event, and every message, fault, actor action and
-        report. Nothing in the run changed after it, except the passage of time.
+        Time passes in a quiet drain window without any record, so the latest record can
+        come well before the end; an approval can expire in between. Records built in
+        memory without a stop time end at the latest virtual time on record: the
+        simulator's last event, and every message, fault, actor action, report and
+        effect. A stop before any of those is refused.
         """
+        latest = self._latest_vt()
+        stopped = self.run.stopped_vt
+        if stopped is None:
+            return latest
+        if stopped < latest:
+            raise RecordsError(f"the run stopped at vt {stopped}, before its record at vt {latest}")
+        return stopped
+
+    def _latest_vt(self) -> int:
         times = [self.destination.last_vt]
         for message in self.messages:
             times.append(message.sent_vt)

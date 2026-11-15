@@ -128,6 +128,10 @@ class HarnessLog(ABC):
         """Record the run itself, once, before anything happens in it."""
 
     @abstractmethod
+    def run_stopped(self, vt: int) -> None:
+        """Record when the run stopped, once, at the end of the drain window (0009)."""
+
+    @abstractmethod
     def next_seq(self) -> int:
         """Reserve the next event number."""
 
@@ -178,11 +182,17 @@ class MemoryHarnessLog(HarnessLog):
         self.reports: list[ReportRecord] = []
         self.actors: list[ActorRecord] = []
         self.run: RunRecord | None = None
+        self.stopped_vt: int | None = None
 
     def run_recorded(self, record: RunRecord) -> None:
         if self.run is not None:
             raise ValueError("the run is already recorded")
         self.run = record
+
+    def run_stopped(self, vt: int) -> None:
+        if self.stopped_vt is not None:
+            raise ValueError("the run has already stopped")
+        self.stopped_vt = vt
 
     @property
     def messages(self) -> list[MessageRecord]:
@@ -271,6 +281,12 @@ class PgHarnessLog(HarnessLog):
                 record.model,
                 Jsonb(dict(record.params)),
             ),
+        )
+
+    def run_stopped(self, vt: int) -> None:
+        self._conn.execute(
+            "INSERT INTO harness.run_stop (run_id, stopped_vt) SELECT run_id, %s FROM harness.run",
+            (vt,),
         )
 
     def next_seq(self) -> int:

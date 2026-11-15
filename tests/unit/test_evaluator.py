@@ -1584,6 +1584,48 @@ def test_only_a_valid_unused_approval_at_the_end_blocks_the_withdrawal_excuse(
     assert bool(result.excused_intents) == excused
 
 
+@pytest.mark.parametrize(("stopped_vt", "excused"), [(None, False), (60_000, True)])
+def test_an_approval_that_expires_in_the_quiet_drain_window_no_longer_blocks_the_excuse(
+    stopped_vt: int | None, excused: bool
+) -> None:
+    """The run stops after the drain window, with no record in between: the end is the
+    stop, and the unused approval has expired by then (0004, property 4; 0009)."""
+    world = World(scenario=scenario_with(approval_ttl_ms=10_000))
+    world.revoke(world.approval().approval_id, vt=500)
+    world.approval(vt=45_000)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING}, vt=50_000)
+    records = world.records()
+    records = dataclasses.replace(
+        records, run=dataclasses.replace(records.run, stopped_vt=stopped_vt)
+    )
+    result = evaluate(records)
+    assert bool(result.excused_intents) == excused
+    assert result.run.end_vt == (stopped_vt or records.end_vt())
+
+
+def test_a_stop_before_the_last_record_is_refused() -> None:
+    world = World()
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING}, vt=50_000)
+    records = world.records()
+    early = dataclasses.replace(records, run=dataclasses.replace(records.run, stopped_vt=1))
+    with pytest.raises(RecordsError, match="stopped at vt 1, before its record"):
+        evaluate(early)
+
+
+def test_two_withdrawn_approvals_are_listed_in_order_whatever_the_record_order() -> None:
+    world = World()
+    world.revoke(world.approval().approval_id, vt=500)
+    world.revoke(world.approval().approval_id, vt=600)
+    world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    records = world.records()
+    flipped = dataclasses.replace(records, approvals=tuple(reversed(records.approvals)))
+    for each in (records, flipped):
+        assert _excused(evaluate(each)) == [
+            ("REQ-1", Excuse.AUTHORITY_WITHDRAWN, ("APR-0001", "APR-0002"))
+        ]
+    assert result_json(evaluate(records)) == result_json(evaluate(flipped))
+
+
 @pytest.mark.parametrize(
     "scope",
     [

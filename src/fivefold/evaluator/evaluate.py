@@ -91,6 +91,7 @@ def evaluate(records: RunRecords) -> RunResult:
             parent_run_id=run.parent_run_id,
             branch_point=run.branch_point,
             params=run.params,
+            end_vt=records.end_vt(),
         ),
         verdict=run_verdict(properties, report),
         evaluated=tuple(result.property for result in properties),

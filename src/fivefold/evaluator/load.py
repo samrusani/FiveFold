@@ -96,6 +96,9 @@ def _run(conn: Connection) -> RunInfo:
     if len(rows) != 1:
         raise RecordsError(f"harness.run holds {len(rows)} rows; a run database holds one")
     row = rows[0]
+    stops = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchall()
+    if len(stops) != 1:
+        raise RecordsError("harness.run_stop is empty: score a run only after the harness stops it")
     return RunInfo(
         run_id=str(row[0]),
         scenario_id=str(row[1]),
@@ -110,6 +113,7 @@ def _run(conn: Connection) -> RunInfo:
         parent_run_id=_text(row[10]),
         branch_point=_integer(row[11]),
         params=row[12],
+        stopped_vt=int(stops[0][0]),
     )
 
 

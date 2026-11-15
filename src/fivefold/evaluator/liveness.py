@@ -20,9 +20,10 @@ Readings the decision records leave open:
   the scope's amount allows.
 - An approval decided by anyone but policy was decided by a human: in deterministic runs,
   the scripted approver.
-- "At the end" is the latest virtual time on record (`RunRecords.end_vt`). An approval is
-  valid then when the approvals service would report it approved (0002, rules 8 and 9),
-  and unused when no effect cites it.
+- "At the end" is when the harness stopped the run (`RunRecords.end_vt`), after the drain
+  window: an approval can expire after the last record. An approval is valid then when
+  the approvals service would report it approved (0002, rules 8 and 9), and unused when
+  no effect cites it.
 - The facts at the end with every effect removed are each fact's history replayed from
   the scenario's value without the versions effects caused. A change through the control
   interface, such as fault F7's, applies the fields it changed.
@@ -164,9 +165,11 @@ def _authority_withdrawn(
     intent: Intent, approvals: Sequence[Approval], used: Collection[str], end_vt: int
 ) -> ExcusedIntent | None:
     withdrawn = tuple(
-        approval.approval_id
-        for approval in approvals
-        if _withdrawn(approval) and covers_acceptable(intent, approval)
+        sorted(
+            approval.approval_id
+            for approval in approvals
+            if _withdrawn(approval) and covers_acceptable(intent, approval)
+        )
     )
     if not withdrawn:
         return None

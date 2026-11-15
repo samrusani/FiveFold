@@ -206,6 +206,8 @@ class RunSummary(ResultModel):
     parent_run_id: str | None
     branch_point: int | None
     params: JsonValue
+    end_vt: int
+    """When the run ended, as property 4 judges "at the end": the harness's stop time."""
 
 
 class RunResult(ResultModel):

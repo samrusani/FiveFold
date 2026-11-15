@@ -398,7 +398,25 @@ class Recorder:
         )
         return seq
 
-    def evaluate(self) -> RunResult:
+    def evaluate(self, *, stopped_vt: int | None = None) -> RunResult:
+        """Stop the run, as the harness does, then score it.
+
+        The run stops at `stopped_vt`, or by default at its latest record. Stopping again
+        keeps the first stop time, so a run can be scored twice.
+        """
+        self.harness.execute(
+            "INSERT INTO harness.run_stop (run_id, stopped_vt)"
+            " SELECT run_id, coalesce(%s, greatest("
+            "   (SELECT last_vt FROM sim.run),"
+            "   (SELECT max(greatest(sent_vt, coalesce(delivered_vt, 0)))"
+            "    FROM harness.message_log),"
+            "   (SELECT max(vt) FROM harness.fault_log),"
+            "   (SELECT max(vt) FROM harness.actor_log),"
+            "   (SELECT max(vt) FROM harness.final_report),"
+            "   (SELECT max(committed_vt) FROM sim.effect)))"
+            " FROM harness.run ON CONFLICT DO NOTHING",
+            (stopped_vt,),
+        )
         return evaluate_run(make_conninfo(self.dsn, user="ff_eval"), self.scenario)
 
 
@@ -1052,7 +1070,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
     """The whole JSON of one result, which pins its shape."""
     run = make_run(Config.G2, Contract.C2)
     g2_demo_1(run)
-    data = json.loads(result_json(run.evaluate()))
+    data = json.loads(result_json(run.evaluate(stopped_vt=100_000)))
     claim = {
         "claimed_effects": ["PO-0001"],
         "intent_id": "REQ-1",
@@ -1157,6 +1175,7 @@ def test_the_g2_demo_1_result_in_full(make_run: Callable[..., Recorder]) -> None
             "cassette_digest": None,
             "config": "G2",
             "contract": "C2",
+            "end_vt": 100_000,
             "model": "scripted-policy",
             "model_adapter": "scripted",
             "params": run.scenario.params.model_dump(),
