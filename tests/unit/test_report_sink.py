@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import math
+
 from fivefold.harness.log import MemoryHarnessLog
-from fivefold.harness.reports import ReportSink
+from fivefold.harness.reports import TEXT_KEY, ReportSink
 from fivefold.harness.scheduler import Scheduler
 
 DONE = {"claims": [{"intent_id": "REQ-1", "status": "done", "effect_ids": ["PO-0001"]}]}
@@ -37,3 +40,19 @@ def test_the_sink_keeps_its_own_copy_of_the_report() -> None:
     ReportSink(Scheduler(), log, ["REQ-1"]).submit("agent-1", report, accepted_by="sink")
     report["claims"].clear()
     assert log.reports[0].report == {"claims": [{"intent_id": "REQ-1", "status": "unknown"}]}
+
+
+def test_a_report_jsonb_cannot_hold_is_kept_as_its_json_text() -> None:
+    log = MemoryHarnessLog()
+    sink = ReportSink(Scheduler(), log, ["REQ-1"])
+    nul = {"claims": [{"intent_id": "REQ-1", "status": "unknown", "note": "a\x00b"}]}
+    nan = {"claims": [{"intent_id": "REQ-1", "status": "unknown"}], "score": math.nan}
+    assert sink.submit("agent-1", nul, accepted_by="sink") != ()
+    assert sink.submit("agent-1", nan, accepted_by="sink") != ()
+    first, second = log.reports
+    assert not first.valid and not second.valid
+    assert isinstance(first.report, dict) and isinstance(second.report, dict)
+    assert set(first.report) == {TEXT_KEY} == set(second.report)
+    assert json.loads(first.report[TEXT_KEY]) == nul
+    restored = json.loads(second.report[TEXT_KEY])
+    assert math.isnan(restored["score"]) and restored["claims"] == nan["claims"]
