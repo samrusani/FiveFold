@@ -16,8 +16,9 @@ always be enforced (`fivefold.agents.live`). A price file is YAML:
   million output tokens. A price is an exact decimal, at least 0. Quote model names: YAML
   reads some unquoted names, such as `1:30`, as numbers.
 
-`prices/example.yaml` is the example the repository ships. The evaluator will compute
-record 0004's cost metrics from the same format, so this module reads only plain data.
+`prices/example.yaml` is the example the repository ships. The evaluator's report computes
+record 0004's cost metrics from the same format (`fivefold.evaluator.report`), so this
+module reads only plain data.
 
 Checked in pydantic 2.14.3: `Field` takes `ge` and `allow_inf_nan` (`fields.py`), and a
 `Decimal` field passes them to `decimal_schema` (`pydantic_core/core_schema.py`). Observed
@@ -97,15 +98,21 @@ class PriceFile(_PriceModel):
 
 
 def price_file_from_text(text: str, where: str = "the price file") -> PriceFile:
-    """Read a price file from its YAML text. Raises `PriceFileError` on any problem."""
+    """Read a price file from its YAML text. Raises `PriceFileError` on any problem, with
+    its message on one line, as the commands that read a price file refuse in one line."""
     try:
         data: object = yaml.safe_load(text)
     except yaml.YAMLError as error:
-        raise PriceFileError(f"{where} is not valid YAML: {error}") from None
+        raise PriceFileError(f"{where} is not valid YAML: {_one_line(error)}") from None
     try:
         return PriceFile.model_validate(data)
     except ValidationError as error:
-        raise PriceFileError(f"{where} is not a price file: {error}") from None
+        raise PriceFileError(f"{where} is not a price file: {_one_line(error)}") from None
+
+
+def _one_line(error: Exception) -> str:
+    """`error`'s message with every run of whitespace, line breaks included, as one space."""
+    return " ".join(str(error).split())
 
 
 def load_price_file(path: Path) -> PriceFile:

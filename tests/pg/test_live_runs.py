@@ -10,12 +10,15 @@ byte with no provider at all. The token budget and the spend cap end a worker as
 and their replays end it at the same call. The record command refuses a live run without
 the flag, the spend cap and the price file, before it touches any database. A live study
 saves each episode's result and cassette, and the cassettes play back; the spend cap stops
-a study partway, and the study keeps what it ran.
+a study partway, and the study keeps what it ran. The evaluator counts a live run's tokens,
+and its report prices them as the spend cap charged them (0004).
 """
 
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import socket
 import threading
@@ -43,6 +46,8 @@ from fivefold.agents.policy import Mode, Result, scripted_policy
 from fivefold.agents.worker import SPEND_CAP_TEXT, TOKEN_BUDGET_TEXT, WorkerEnd
 from fivefold.domain.prices import PriceFile, price_file_from_text
 from fivefold.domain.scenario import load_scenario_file
+from fivefold.evaluator import COST_COLUMN, TOKEN_METRICS, result_json, run_cost
+from fivefold.evaluator.__main__ import main as report
 from fivefold.evaluator.report import load_result, load_results
 from fivefold.harness.cells import load_expected
 from fivefold.harness.demo import DEV_001, demo_1_spec
@@ -224,11 +229,20 @@ def rows(dsn: str, query: LiteralString, role: str | None = None) -> list[tuple[
 
 def without_model(evaluation: str) -> dict[str, Any]:
     """An evaluation row, as `records` reads it, which leaves out the model adapter,
-    without the model's name and the cassette's digest too."""
+    without the model's name, the cassette's digest and the tokens too."""
     data = json.loads(evaluation)
     for key in ("model", "cassette_digest"):
         data["result"]["run"].pop(key)
+    for name in TOKEN_METRICS:
+        data["metrics"].pop(name)
+        data["result"]["metrics"].pop(name)
     return dict(data)
+
+
+def token_counts(evaluation: str) -> tuple[int, int]:
+    """The tokens in and out of an evaluation row, as `records` reads it."""
+    metrics = json.loads(evaluation)["metrics"]
+    return metrics["tokens_in"], metrics["tokens_out"]
 
 
 def timing(model_calls: list[str]) -> list[tuple[Any, ...]]:
@@ -266,6 +280,7 @@ def test_a_live_run_does_what_the_scripted_run_does_and_plays_back_byte_for_byte
         without_model(row) for row in scripted["evaluation"]
     ]
     assert timing(recorded["model calls"]) == timing(scripted["model calls"])
+    assert [token_counts(row) for row in scripted["evaluation"]] == [(0, 0)]
 
     assert (cassette.model.adapter, cassette.model.name) == ("live", "fake:m")
     assert cassette.model.params == {"temperature": 0}
@@ -280,6 +295,9 @@ def test_a_live_run_does_what_the_scripted_run_does_and_plays_back_byte_for_byte
         (n, "agent-1", row[2], row[2] + THINK_MS, "fake:m") for n, row in enumerate(logged, 1)
     ]
     assert all(row[5] is not None and row[6] == 25 and row[7] is None for row in logged)
+    assert [token_counts(row) for row in recorded["evaluation"]] == [
+        (sum(row[5] for row in logged), 7 * 25)
+    ]
     spent = sum(Decimal(row[5]) + 2 * Decimal(row[6]) for row in logged) / 1_000_000
     assert (meter.spent_usd, meter.calls) == (spent, 7)
     assert rows(live_dsn, "SELECT model_adapter, model, cassette_digest FROM harness.run") == [
@@ -362,6 +380,75 @@ def test_the_spend_cap_holds_across_a_command_s_runs(
     assert second.result.ends["agent-1"] == (WorkerEnd.BUDGET, SPEND_CAP_TEXT)
     assert [call.response["content"] for call in cassette.calls] == [SPEND_CAP_TEXT]
     assert (meter.spent_usd, meter.calls) == (Decimal("0.2"), 2)
+
+
+# Tokens and cost -----------------------------------------------------------------------------
+
+
+def test_the_evaluator_counts_a_live_run_s_tokens_and_the_report_prices_them(
+    run_database: Callable[[str], str],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Demo 1 in G2, live with the fake provider at 1,000 input and 50 output tokens a
+    call, and scripted. Each run's result sums its logged tokens; the report prices them at
+    0.15 and 0.6 USD per million, to the spend meter's last digit, and the replay of the
+    live run gets the same metrics. The scripted run uses none and costs nothing."""
+    provider(fixed_usage(1_000, 50))
+    scripted_dsn, live_dsn = run_database("cost_scripted"), run_database("cost_live")
+    scripted = InprocRun(demo_1_spec("G2", 7), scripted_dsn)
+    asyncio.run(scripted.execute())
+    meter = SpendMeter(Decimal(1), price_file("0.15", "0.6"))
+    run, cassette = record(live(demo_1_spec("G2", 7), meter), live_dsn)
+
+    logged = rows(live_dsn, "SELECT input_tokens, output_tokens FROM harness.model_call")
+    assert logged == [(1_000, 50)] * 7
+    scripted_result, live_result = scripted.result.evaluation, run.result.evaluation
+    assert scripted_result is not None and live_result is not None
+    assert [
+        (result.verdict, result.metrics["tokens_in"], result.metrics["tokens_out"])
+        for result in (scripted_result, live_result)
+    ] == [("pass", 0, 0), ("pass", 7_000, 350)]
+    stored = rows(live_dsn, "SELECT metrics FROM eval.run_result", role="ff_viewer")
+    assert stored == [(live_result.metrics,)]
+    assert run_cost(live_result, meter.prices) == meter.spent_usd == Decimal("0.00126")
+
+    no_provider(monkeypatch)
+    replay_dsn = run_database("cost_replay")
+    playback = play(cassette, SCENARIO, original=live_dsn, replay=replay_dsn)
+    assert playback.matches
+    replayed = rows(replay_dsn, "SELECT metrics FROM eval.run_result", role="ff_viewer")
+    assert replayed == [(live_result.metrics,)], "the replay's tokens are the original's"
+
+    saved = tmp_path / "results"
+    saved.mkdir()
+    for name, result in (("scripted", scripted_result), ("live", live_result)):
+        (saved / f"{name}.json").write_text(result_json(result), encoding="utf-8")
+    prices = tmp_path / "prices.yaml"
+    prices.write_text(
+        "price_date: 2026-11-15\nprices:\n  fake:\n    m:\n"
+        "      input_usd_per_million_tokens: 0.15\n      output_usd_per_million_tokens: 0.6\n",
+        encoding="utf-8",
+    )
+    csv_path, markdown_path = tmp_path / "runs.csv", tmp_path / "report.md"
+    outputs = ["--csv", str(csv_path), "--markdown", str(markdown_path)]
+    assert report(["report", str(saved), *outputs, "--prices", str(prices)]) == 0
+    costs = csv.DictReader(io.StringIO(csv_path.read_text(encoding="utf-8")))
+    assert [(r["model"], r["tokens_in"], r["tokens_out"], r[COST_COLUMN]) for r in costs] == [
+        ("fake:m", "7000", "350", "0.00126"),
+        ("scripted", "0", "0", "0"),
+    ], "the same run but for its model: the live adapter sorts first"
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "Prices come from the price file dated 2026-11-15" in markdown
+    assert "| fake:m | G2 | C2 | 1 | 1 | 7000 | 350 | 0.00126 | 0.00126 |" in markdown
+    assert "| scripted | G2 | C2 | 1 | 1 | 0 | 0 | 0 | 0 |" in markdown
+    assert "| tokens_in | 7000 |" in markdown
+
+    assert report(["report", str(saved), "--markdown", str(markdown_path)]) == 0
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "Cost is not computed, because no price file was given." in markdown
+    assert "0.00126" not in markdown and "| scripted |" not in markdown
 
 
 # The command ---------------------------------------------------------------------------------

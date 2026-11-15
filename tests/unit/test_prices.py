@@ -93,9 +93,10 @@ def test_a_price_file_holds_exact_prices_and_costs_calls_exactly() -> None:
         ("price_date: [unclosed\n", "not valid YAML"),
     ],
 )
-def test_a_file_that_is_not_a_price_file_is_refused(text: str, problem: str) -> None:
-    with pytest.raises(PriceFileError, match=problem):
+def test_a_file_that_is_not_a_price_file_is_refused_in_one_line(text: str, problem: str) -> None:
+    with pytest.raises(PriceFileError, match=problem) as refused:
         price_file_from_text(text)
+    assert "\n" not in str(refused.value), "a command prints the refusal as one line"
 
 
 def test_a_model_missing_from_the_price_file_is_refused() -> None:

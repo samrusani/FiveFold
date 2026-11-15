@@ -3,7 +3,7 @@
 Every model call of every worker gets a row once it is answered, numbered in the run in
 the order of the run's cassette. Scripted replies report no usage, so their tokens are
 null, and each call takes exactly `think_ms` of virtual time. The evaluator's role can
-read the rows, as it will for record 0004's token and cost metrics.
+read the rows, as it does for record 0004's token metrics.
 """
 
 from __future__ import annotations

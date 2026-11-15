@@ -1,8 +1,9 @@
 """The evaluator's outputs across runs, from hand-built results (0004, Metrics; 0009).
 
 A CSV with one row per run and a Markdown report: their columns, tables and
-denominators, a fixed order whatever order the results come in, the files they refuse,
-and the metrics that are not computed yet. `python -m fivefold.evaluator report` writes
+denominators, tokens and, with a price file, each run's exact cost and the cost per
+passing run, a fixed order whatever order the results come in, the files they refuse,
+and the metric that is not computed yet. `python -m fivefold.evaluator report` writes
 both.
 """
 
@@ -15,16 +16,26 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+from langchain_core.messages.ai import UsageMetadata
 from pydantic import JsonValue
 
+from fivefold.agents.live import SpendMeter, live_name, parse_live_name
 from fivefold.domain.contracts import Contract, ContractParams
+from fivefold.domain.prices import ModelPrice, PriceFile, price_file_from_text
 from fivefold.domain.scenario import load_scenario_file, scenario_digest
 from fivefold.evaluator import (
+    COST_COLUMN,
     CSV_COLUMNS,
     METRICS,
+    TOKEN_METRICS,
     Config,
     Destination,
     FactVersion,
@@ -32,13 +43,25 @@ from fivefold.evaluator import (
     RunInfo,
     RunRecords,
     evaluate,
+    load_prices,
     load_results,
     markdown_report,
     result_json,
+    run_cost,
     runs_csv,
 )
 from fivefold.evaluator.__main__ import main
-from fivefold.evaluator.report import PlanEntry, load_result, plan_label, planned_faults
+from fivefold.evaluator.report import (
+    EXACT,
+    SCRIPTED_MODEL,
+    PlanEntry,
+    cost_per_passing_run,
+    load_result,
+    model_price,
+    plan_label,
+    planned_faults,
+    usd,
+)
 from fivefold.evaluator.result import (
     PROPERTY_NAMES,
     Failure,
@@ -49,6 +72,7 @@ from fivefold.evaluator.result import (
     RunSummary,
     Verdict,
 )
+from fivefold.harness.models import SCRIPTED_MODEL as HARNESS_SCRIPTED_MODEL
 
 ROOT = Path(__file__).resolve().parents[2]
 ORDER = "submit_purchase_order"
@@ -251,6 +275,8 @@ def test_the_csv_has_a_header_and_one_row_per_run() -> None:
         "0",
         "1",
         "0",
+        "0",
+        "0",
     ]
     assert (g2["config"], g2["verdict"], g2["reason_codes"]) == ("G2", "pass", "")
     assert g2["planned_faults"].startswith("F2 at net.gw_sim.answer when")
@@ -307,6 +333,8 @@ def test_the_csv_columns_are_fixed_and_name_every_metric_in_record_0004s_order()
         "human_interventions",
         "approval_requests",
         "approvals_decided_by_human",
+        "tokens_in",
+        "tokens_out",
     )
 
 
@@ -348,7 +376,7 @@ def test_the_metrics_are_the_ones_the_evaluator_computes() -> None:
     )
     result = evaluate(records)
     assert set(result.metrics) == set(METRICS)
-    assert len(METRICS) == 14
+    assert len(METRICS) == 16
     assert runs_csv([result]).count("\n") == 2
 
 
@@ -573,19 +601,276 @@ def test_metric_totals_are_summed_by_configuration_with_the_number_of_runs() -> 
 
 
 def test_the_report_says_what_is_not_computed_and_shows_no_value_for_it() -> None:
+    """Only recovery latency is left, and without a price file, cost: neither shows a
+    value, not even a zero."""
     results = [b0_demo_1(), g2_demo_1()]
     report = markdown_report(results)
-    lines = section(report, "Not computed yet")
-    assert lines[1] == (
-        "Record 0004 also lists these metrics, which the evaluator does not compute yet:"
-        " recovery latency per affected action, in virtual and wall milliseconds; tokens in"
-        " and out; cost, from a price file that records its price date; cost per passing"
-        " run. No result holds a value for them, so this report shows none, not zeros."
-    )
-    elsewhere = report.split("## Not computed yet")[0].lower()
-    assert not any(word in elsewhere for word in ("latency", "token", "cost"))
+    assert section(report, "Not computed yet") == [
+        "",
+        "Record 0004 also lists recovery latency per affected action, in virtual and wall"
+        " milliseconds. The evaluator does not compute it yet: it waits for record 0014. No"
+        " result holds a value for it, so this report shows none, not zeros.",
+    ]
+    assert report.endswith("not zeros.\n")
+    assert section(report, "Cost") == [
+        "",
+        "Cost is not computed, because no price file was given. Give one with `--prices`, in"
+        " the format of `prices/example.yaml`. The tokens each run used are in the metric"
+        " totals and in the CSV.",
+        "",
+    ]
+    assert "latency" not in report.split("## Not computed yet")[0].lower()
+    assert "USD" not in report and "passing run" not in report
     header = runs_csv(results).splitlines()[0]
-    assert not any(word in header for word in ("latency", "token", "cost"))
+    assert "tokens_in,tokens_out" in header
+    assert not any(word in header for word in ("latency", "cost"))
+
+
+# Tokens and cost ---------------------------------------------------------------------------
+
+PRICE_TEXT = (
+    "price_date: 2026-11-15\n"
+    "prices:\n"
+    "  fake:\n"
+    "    m:\n"
+    "      input_usd_per_million_tokens: 0.15\n"
+    "      output_usd_per_million_tokens: 0.6\n"
+    "    n:\n"
+    "      input_usd_per_million_tokens: 1\n"
+    "      output_usd_per_million_tokens: 2\n"
+    "  ollama:\n"
+    '    "llama3.1:8b":\n'
+    "      input_usd_per_million_tokens: 0\n"
+    "      output_usd_per_million_tokens: 0\n"
+)
+PRICES = price_file_from_text(PRICE_TEXT)
+"""Two priced fake models, at 0.15 and 0.6 USD, and at 1 and 2 USD, per million input
+and output tokens, and a free local model."""
+
+
+def tokens(tokens_in: int, tokens_out: int, **metrics: int) -> dict[str, int]:
+    return {"tokens_in": tokens_in, "tokens_out": tokens_out, **metrics}
+
+
+def live(model: str = "fake:m", **result: Any) -> RunResult:
+    """A result of a live run of `model`, by default the fake provider's model `m`."""
+    return make_result(model=model, adapter="live", **result)
+
+
+COST_RESULTS = [
+    live(config="G2", seed=7, metrics=tokens(7_000, 350)),
+    live(config="G2", seed=8, unknown=True, metrics=tokens(3_000, 100)),
+    live(config="G2", seed=9, failing={4: (ReasonCode.MISSING_EFFECT,)}, metrics=tokens(1_000, 0)),
+    live(config="B0", seed=7, failing=B0_FAILURES, metrics=tokens(2_000, 100)),
+    live("fake:n", config="G1", seed=7, metrics=tokens(1, 0)),
+    live("fake:n", config="G1", seed=8),
+    live("fake:n", config="G1", seed=9),
+    make_result(
+        config="G2",
+        seed=7,
+        model="ollama:llama3.1:8b",
+        adapter="replay",
+        cassette="cd" * 32,
+        metrics=tokens(5_000, 500),
+    ),
+    make_result(config="G2", contract="C0", seed=7),
+]
+"""Runs of four models: passing, passing unresolved and failing, with a group whose cost
+per passing run ends, one with no passing run, and one whose division does not end."""
+
+
+def test_the_tokens_are_in_the_csv_and_summed_by_configuration() -> None:
+    results = [
+        live(config="G2", seed=7, metrics=tokens(7_000, 350)),
+        live(config="G2", seed=8, metrics=tokens(3_000, 100)),
+        b0_demo_1(),
+    ]
+    rows = csv_rows(runs_csv(results))
+    assert [(row["config"], row["tokens_in"], row["tokens_out"]) for row in rows] == [
+        ("B0", "0", "0"),
+        ("G2", "7000", "350"),
+        ("G2", "3000", "100"),
+    ]
+    totals = table(markdown_report(results), "Metric totals by configuration")
+    assert totals[-2:] == [["tokens_in", "0", "10000"], ["tokens_out", "0", "450"]]
+
+
+def test_a_run_s_cost_is_its_tokens_at_its_model_s_prices_exactly() -> None:
+    """7,000 input tokens at 0.15 USD and 350 output tokens at 0.6 USD per million cost
+    1,050 plus 210 millionths of a USD."""
+    assert run_cost(live(metrics=tokens(7_000, 350)), PRICES) == Decimal("0.00126")
+    assert run_cost(live(metrics=tokens(1, 0)), PRICES) == Decimal("0.00000015")
+    assert run_cost(live(metrics=tokens(10**15, 10**15)), PRICES) == Decimal("750000000")
+    assert run_cost(live("fake:n", metrics=tokens(3, 0)), PRICES) == Decimal("0.000003")
+    assert run_cost(live("ollama:llama3.1:8b", metrics=tokens(5_000, 500)), PRICES) == 0
+    assert run_cost(make_result(), PRICES) == 0, "the scripted model needs no price"
+    assert usd(Decimal("0.00000015")) == "0.00000015", "plain notation, never 1.5E-7"
+    assert usd(Decimal("750000000.000000")) == "750000000"
+    assert usd(Decimal("0E-7")) == "0"
+
+
+@given(
+    calls=st.lists(st.tuples(st.integers(0, 10_000_000), st.integers(0, 10_000_000)), max_size=30),
+    input_price=st.decimals(min_value=0, max_value=1_000, places=4),
+    output_price=st.decimals(min_value=0, max_value=1_000, places=4),
+)
+def test_a_run_s_cost_is_what_the_spend_meter_charged_call_by_call(
+    calls: list[tuple[int, int]], input_price: Decimal, output_price: Decimal
+) -> None:
+    """The report prices a run's summed tokens; the live adapter's spend meter charged each
+    call as it was answered. Both are exact, so they agree to the last digit."""
+    price = ModelPrice(
+        input_usd_per_million_tokens=input_price, output_usd_per_million_tokens=output_price
+    )
+    prices = PriceFile(price_date=date(2026, 11, 15), prices={"fake": {"m": price}})
+    meter = SpendMeter(Decimal(10**12), prices)
+    for tokens_in, tokens_out in calls:
+        usage = UsageMetadata(
+            input_tokens=tokens_in, output_tokens=tokens_out, total_tokens=tokens_in + tokens_out
+        )
+        meter.charge("fake:m", price, usage)
+    summed = tokens(sum(call[0] for call in calls), sum(call[1] for call in calls))
+    assert run_cost(live(metrics=summed), prices) == meter.spent_usd
+
+
+def test_a_cost_that_needs_more_digits_than_exact_has_is_refused_not_rounded() -> None:
+    """A price with 55 significant digits gives a cost that 50 digits cannot hold."""
+    digits = "1." + "1" * 54
+    price = ModelPrice(
+        input_usd_per_million_tokens=Decimal(digits), output_usd_per_million_tokens=Decimal(0)
+    )
+    prices = PriceFile(price_date=date(2026, 11, 15), prices={"fake": {"m": price}})
+    assert EXACT.prec == 50
+    with pytest.raises(ReportError, match="needs more than 50 significant digits"):
+        run_cost(live(metrics=tokens(3, 0)), prices)
+    assert run_cost(live(metrics=tokens(0, 9)), prices) == 0
+
+
+def test_the_cost_per_passing_run_is_exact_when_the_division_ends_and_about_otherwise() -> None:
+    """Rounded to 6 significant digits when the division does not end; never a zero or an
+    infinity when no run passed."""
+    assert cost_per_passing_run(Decimal("0.00192"), 2) == "0.00096"
+    assert cost_per_passing_run(Decimal(0), 4) == "0"
+    assert cost_per_passing_run(Decimal(1), 1024) == "0.0009765625"
+    assert cost_per_passing_run(Decimal("0.000001"), 3) == "about 0.000000333333"
+    assert cost_per_passing_run(Decimal(2), 3) == "about 0.666667"
+    assert cost_per_passing_run(Decimal(1000), 7) == "about 142.857"
+    assert cost_per_passing_run(Decimal("0.00036"), 0) == "no passing run"
+    assert cost_per_passing_run(Decimal(0), 0) == "no passing run"
+
+
+def test_with_a_price_file_the_csv_ends_with_each_run_s_exact_cost() -> None:
+    text = runs_csv(COST_RESULTS, PRICES)
+    assert text.splitlines()[0] == ",".join((*CSV_COLUMNS, COST_COLUMN))
+    rows = csv_rows(text)
+    assert [(row["model"], row["config"], row["seed"], row[COST_COLUMN]) for row in rows] == [
+        ("fake:m", "B0", "7", "0.00036"),
+        ("fake:n", "G1", "7", "0.000001"),
+        ("fake:n", "G1", "8", "0"),
+        ("fake:n", "G1", "9", "0"),
+        ("scripted", "G2", "7", "0"),
+        ("fake:m", "G2", "7", "0.00126"),
+        ("ollama:llama3.1:8b", "G2", "7", "0"),
+        ("fake:m", "G2", "8", "0.00051"),
+        ("fake:m", "G2", "9", "0.00015"),
+    ]
+    before_cost = [line.rpartition(",")[0] for line in text.splitlines()]
+    assert before_cost == runs_csv(COST_RESULTS).splitlines(), "one more column, no other change"
+
+
+def test_the_cost_table_counts_runs_passing_runs_tokens_and_cost_by_model() -> None:
+    report = markdown_report(COST_RESULTS, PRICES)
+    lines = section(report, "Cost")
+    assert lines[1] == (
+        "Prices come from the price file dated 2026-11-15, in USD per million input tokens"
+        " and per million output tokens (record 0004). A run's cost is its input tokens at"
+        " its model's input price plus its output tokens at its output price, exactly. The"
+        " scripted model costs nothing. A reply that reported no usage counts no tokens; a"
+        " call the spend cap refused was never sent, so it counts none either. A passing run"
+        " is one whose verdict is pass or pass_unresolved: all five properties hold. Cost per"
+        " passing run is the cost of all the row's runs, passing or not, over its passing"
+        " runs. It is exact when the division ends, and otherwise rounded to 6 significant"
+        ' digits and marked "about".'
+    )
+    assert table(report, "Cost") == [
+        [
+            "Model",
+            "Configuration",
+            "Contract",
+            "runs",
+            "passing runs",
+            "tokens in",
+            "tokens out",
+            "cost (USD)",
+            "cost per passing run (USD)",
+        ],
+        ["fake:m", "B0", "C2", "1", "0", "2000", "100", "0.00036", "no passing run"],
+        ["fake:m", "G2", "C2", "3", "2", "11000", "450", "0.00192", "0.00096"],
+        ["fake:n", "G1", "C2", "3", "3", "1", "0", "0.000001", "about 0.000000333333"],
+        ["ollama:llama3.1:8b", "G2", "C2", "1", "1", "5000", "500", "0", "0"],
+        ["scripted", "G2", "C0", "1", "1", "0", "0", "0", "0"],
+    ]
+    assert "Not computed yet" in report and "Cost is not computed" not in report
+    assert markdown_report(COST_RESULTS).split("## Cost")[0] == report.split("## Cost")[0]
+
+
+def test_a_run_whose_model_has_no_price_is_refused_in_one_line() -> None:
+    """The first such run in the fixed order is named, whatever order the runs come in."""
+    unpriced = [
+        live("fake:other", config="G2", seed=8),
+        live("fake:other", config="B0", seed=7),
+        live("nocolon", config="G2", seed=9),
+    ]
+    for order in itertools.permutations([*unpriced, g2_demo_1()]):
+        for build in (runs_csv, markdown_report):
+            with pytest.raises(ReportError) as refused:
+                build(order, PRICES)
+            assert str(refused.value) == (
+                "run dev-001-single-po.B0.C2.7: the price file dated 2026-11-15 has no price"
+                " for its model fake:other"
+            )
+    with pytest.raises(ReportError, match="has no price for its model nocolon"):
+        run_cost(unpriced[2], PRICES)
+    assert runs_csv(unpriced) and markdown_report(unpriced), "without prices, no price is needed"
+
+
+def test_a_scripted_run_that_used_tokens_is_refused() -> None:
+    with pytest.raises(ReportError, match="the scripted model reports no tokens, but the run"):
+        runs_csv([make_result(metrics=tokens(5, 0))], PRICES)
+
+
+def test_the_report_names_models_as_the_harness_does() -> None:
+    """The evaluator cannot import the harness or the agents, so it keeps its own copy of
+    the scripted model's name and of the `provider:model` rule; they must agree."""
+    assert HARNESS_SCRIPTED_MODEL.name == SCRIPTED_MODEL
+    for provider, model in [("ollama", "llama3.1:8b"), ("fake", "m"), ("x", "a:b:c")]:
+        name = live_name(provider, model)
+        assert parse_live_name(name) == (provider, model)
+        prices = PriceFile(
+            price_date=date(2026, 11, 15),
+            prices={
+                provider: {
+                    model: ModelPrice(
+                        input_usd_per_million_tokens=Decimal(1),
+                        output_usd_per_million_tokens=Decimal(2),
+                    )
+                }
+            },
+        )
+        assert model_price(name, prices) == prices.price(provider, model)
+    assert model_price("scripted", PRICES) is None
+
+
+def test_a_negative_metric_is_refused() -> None:
+    with pytest.raises(ReportError, match=r"its metrics are counts, but \['tokens_in'\]"):
+        runs_csv([live(metrics=tokens(-1, 0))])
+
+
+def test_the_example_price_file_prices_its_models_at_zero() -> None:
+    example = load_prices(ROOT / "prices" / "example.yaml")
+    run = make_result(model="ollama:qwen3:8b", adapter="live", metrics=tokens(9_000, 900))
+    assert run_cost(run, example) == 0
+    assert TOKEN_METRICS == ("tokens_in", "tokens_out")
 
 
 # A fixed order ---------------------------------------------------------------------------
@@ -602,6 +887,9 @@ def test_the_outputs_do_not_depend_on_the_order_of_the_results() -> None:
     expected = (runs_csv(results), markdown_report(results))
     for order in itertools.permutations(results):
         assert (runs_csv(order), markdown_report(order)) == expected
+    priced = (runs_csv(COST_RESULTS, PRICES), markdown_report(COST_RESULTS, PRICES))
+    for order in itertools.islice(itertools.permutations(COST_RESULTS), 0, None, 997):
+        assert (runs_csv(order, PRICES), markdown_report(order, PRICES)) == priced
 
 
 def test_the_outputs_do_not_depend_on_the_order_of_the_files(tmp_path: Path) -> None:
@@ -776,6 +1064,79 @@ def test_the_command_never_replaces_a_result_it_reads(
     assert saved.read_bytes() == before
 
 
+def test_the_command_prices_the_runs_with_a_price_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for number, result in enumerate(COST_RESULTS):
+        save(tmp_path / "results", f"run-{number}.json", result)
+    prices = tmp_path / "prices.yaml"
+    prices.write_text(PRICE_TEXT, encoding="utf-8")
+    csv_path, markdown_path = tmp_path / "out" / "runs.csv", tmp_path / "out" / "report.md"
+    outputs = ["--csv", str(csv_path), "--markdown", str(markdown_path)]
+    assert main(["report", str(tmp_path / "results"), *outputs, "--prices", str(prices)]) == 0
+    assert csv_path.read_bytes() == runs_csv(COST_RESULTS, PRICES).encode("utf-8")
+    assert markdown_path.read_bytes() == markdown_report(COST_RESULTS, PRICES).encode("utf-8")
+    assert capsys.readouterr().out == f"Reported 9 runs in {csv_path} and {markdown_path}.\n"
+    assert "| fake:m | G2 | C2 | 3 | 2 | 11000 | 450 | 0.00192 | 0.00096 |" in (
+        markdown_path.read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize(
+    ("prices", "why"),
+    [
+        (
+            "price_date: 2026-11-15\nprices:\n  fake:\n    other:\n"
+            "      input_usd_per_million_tokens: 1\n      output_usd_per_million_tokens: 1\n",
+            "run dev-001-single-po.G2.C2.7: the price file dated 2026-11-15 has no price for its"
+            " model fake:m",
+        ),
+        ("prices: {}\n", "is not a price file: 1 validation error for PriceFile price_date"),
+        ("price_date: [unclosed\n", "is not valid YAML:"),
+        (b"\xff\xfe", "is not a price file: it is not UTF-8 text: invalid start byte"),
+        (None, "cannot read it: No such file or directory"),
+    ],
+    ids=["model without a price", "no date", "not YAML", "not text", "missing"],
+)
+def test_the_command_refuses_a_run_or_a_price_file_it_cannot_price_in_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], prices: str | bytes | None, why: str
+) -> None:
+    save(tmp_path / "results", "run.json", live(metrics=tokens(7_000, 350)))
+    path = tmp_path / "prices.yaml"
+    if isinstance(prices, str):
+        path.write_text(prices, encoding="utf-8")
+    elif isinstance(prices, bytes):
+        path.write_bytes(prices)
+    csv_path, markdown_path = tmp_path / "runs.csv", tmp_path / "report.md"
+    outputs = ["--csv", str(csv_path), "--markdown", str(markdown_path)]
+    assert main(["report", str(tmp_path / "results"), *outputs, "--prices", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("report failed: ") and why in err, err
+    assert err.count("\n") == 1
+    assert not csv_path.exists() and not markdown_path.exists()
+
+
+@pytest.mark.parametrize("how", ["same path", "hard link", "symbolic link"])
+def test_the_command_never_replaces_the_price_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], how: str
+) -> None:
+    saved = save(tmp_path / "results", "run.json", g2_demo_1())
+    prices = tmp_path / "prices.yaml"
+    prices.write_text(PRICE_TEXT, encoding="utf-8")
+    output = {
+        "same path": prices,
+        "hard link": tmp_path / "hard.md",
+        "symbolic link": tmp_path / "soft.md",
+    }[how]
+    if how == "hard link":
+        output.hardlink_to(prices)
+    if how == "symbolic link":
+        output.symlink_to(prices)
+    assert main(["report", str(saved), "--markdown", str(output), "--prices", str(prices)]) == 1
+    assert "would replace the price file" in capsys.readouterr().err
+    assert prices.read_text(encoding="utf-8") == PRICE_TEXT
+
+
 @pytest.mark.parametrize("how", ["dotted path", "symbolic link"])
 def test_the_command_refuses_two_outputs_that_name_one_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], how: str
@@ -809,3 +1170,4 @@ def test_the_command_runs_as_a_module() -> None:
     )
     assert done.returncode == 0
     assert "--markdown PATH" in done.stdout
+    assert "--prices PATH" in done.stdout

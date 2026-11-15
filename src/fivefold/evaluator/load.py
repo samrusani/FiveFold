@@ -30,6 +30,7 @@ from fivefold.evaluator.records import (
     FactVersion,
     Fault,
     Message,
+    ModelCall,
     Read,
     RecordsError,
     RunInfo,
@@ -62,6 +63,7 @@ def load_run(conn: Connection, scenario: Scenario) -> RunRecords:
             approvals=_approvals(conn),
             fact_versions=_fact_versions(conn),
             reads=_reads(conn),
+            model_calls=_model_calls(conn),
         )
     records.check_scenario()
     return records
@@ -294,6 +296,26 @@ def _reads(conn: Connection) -> tuple[Read, ...]:
             vt=int(row[4]),
         )
         for row in rows.fetchall()
+    )
+
+
+def _model_calls(conn: Connection) -> tuple[ModelCall, ...]:
+    rows = conn.execute(
+        "SELECT call_no, worker, asked_vt, answered_vt, model, input_tokens, output_tokens,"
+        " refused FROM harness.model_call ORDER BY call_no"
+    ).fetchall()
+    return tuple(
+        ModelCall(
+            call_no=int(row[0]),
+            worker=str(row[1]),
+            asked_vt=int(row[2]),
+            answered_vt=int(row[3]),
+            model=str(row[4]),
+            input_tokens=_integer(row[5]),
+            output_tokens=_integer(row[6]),
+            refused=_text(row[7]),
+        )
+        for row in rows
     )
 
 

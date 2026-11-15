@@ -5,14 +5,20 @@ Each run's result is one JSON file, as `result_json` writes it. `load_results` r
 files and directories it is given, and refuses any file that is not a valid `RunResult`.
 `runs_csv` and `markdown_report` sort the runs before they write anything, so the same
 results give the same bytes whatever order they come in (0009). They add no date, no
-wall-clock time and no randomness; a result holds none either.
+wall-clock time and no randomness; a result holds none either. The one date in the report
+is the price file's own.
 
 The CSV has a header row and the columns of `CSV_COLUMNS`, in that order. Its rows are
 sorted by scenario, configuration, contract level, planned faults and seed, then by the
 rest of the run's identity. The report says what was run. It counts verdicts, and safe
 and live runs, by configuration and contract level, failures by property and
 configuration, and verdicts by fault plan, each count over its denominator. It sums every
-metric by configuration, and names the metrics of record 0004 that are not computed yet.
+metric by configuration, and names the metric of record 0004 that is not computed yet.
+
+Given a price file (`fivefold.domain.prices`), the CSV gains the column `cost_usd`, each
+run's cost, and the report a cost table by model, configuration and contract level, with
+the price file's date. Without one, the report says that cost is not computed, and shows
+no value for it.
 
 Readings the decision records leave open:
 
@@ -27,7 +33,26 @@ Readings the decision records leave open:
   and 2b). So nothing here keys on the run id alone. Two files that hold the very same
   result are refused, so that no run counts twice.
 - A result must hold exactly the metrics in `METRICS`. Any other set is refused, so a
-  total never mixes runs that computed a metric with runs that did not.
+  total never mixes runs that computed a metric with runs that did not. Every metric is a
+  count, so a negative one is refused too.
+- A run's cost is its input tokens at its model's input price plus its output tokens at
+  its output price, in USD, as exact decimals: never a float, never rounded. A cost that
+  needs more digits than `EXACT` has is refused rather than rounded. The model is priced
+  by the name `harness.run.model` records, `provider:model` for a live model, so a replay
+  costs what the calls it plays back cost. The scripted model makes no calls to any
+  provider and reports no tokens (0009), so it costs 0 USD and needs no price. Any other
+  model the price file does not price is refused.
+- A reply that reported no usage counts no tokens, so its cost is left out. With a model
+  that is not free, the live adapter's spend cap then refuses every later call of the
+  recording command (`fivefold.agents.live`), so at most one such call per command is
+  left out. A call the spend cap refused was never sent and costs nothing.
+- A passing run is one whose verdict is `pass` or `pass_unresolved`: all five properties
+  hold in both. Cost per passing run is the cost of all a row's runs, passing or not, over
+  its passing runs: what one passing run costs, failures included. With no passing run it
+  shows `no passing run`. It is exact when the division ends within `EXACT`'s digits, and
+  otherwise rounded half to even to 6 significant digits and marked `about`.
+- The cost table groups runs by model as well as by configuration and contract level, so
+  that no row mixes the prices of two models.
 """
 
 from __future__ import annotations
@@ -38,13 +63,25 @@ import io
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import (
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    Inexact,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from pathlib import Path
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from fivefold.domain.prices import ModelPrice, PriceFile, PriceFileError, load_price_file
 from fivefold.evaluator.checks import CLAIM_METRICS
-from fivefold.evaluator.metrics import RUN_METRICS
+from fivefold.evaluator.metrics import RUN_METRICS, TOKEN_METRICS
 from fivefold.evaluator.result import (
     PROPERTY_NAMES,
     PropertyVerdict,
@@ -63,28 +100,27 @@ PROPERTY_METRICS = (
 )
 """The metrics of properties 1 to 4, in the order of record 0004's list."""
 
-METRICS: tuple[str, ...] = (*PROPERTY_METRICS, *CLAIM_METRICS, *RUN_METRICS)
-"""Every metric a result holds, in the order of record 0004's list: 14 in all."""
+METRICS: tuple[str, ...] = (*PROPERTY_METRICS, *CLAIM_METRICS, *RUN_METRICS, *TOKEN_METRICS)
+"""Every metric a result holds, in the order of record 0004's list: 16 in all."""
 
-NOT_COMPUTED = (
-    "recovery latency per affected action, in virtual and wall milliseconds",
-    "tokens in and out",
-    "cost, from a price file that records its price date",
-    "cost per passing run",
-)
-"""The metrics of record 0004 that the evaluator does not compute yet."""
+NOT_COMPUTED = "recovery latency per affected action, in virtual and wall milliseconds"
+"""The metric of record 0004 that the evaluator does not compute yet: it waits for record
+0014."""
 
 PROPERTIES = tuple(sorted(PROPERTY_NAMES))
 """The five properties, by number."""
 
 VERDICTS = (Verdict.PASS, Verdict.PASS_UNRESOLVED, Verdict.FAIL)
+"""The run verdicts, in the order the tables show them."""
+
+PASSING = frozenset({Verdict.PASS, Verdict.PASS_UNRESOLVED})
+"""The verdicts of a passing run: all five properties hold (0004, Verdict)."""
 
 SAFETY = (1, 2, 3, 5)
 """The safety properties: nothing bad happened (0004)."""
 
 LIVENESS = (4,)
 """The liveness property: the required effect happened (0004)."""
-"""The run verdicts, in the order the tables show them."""
 
 NO_FAULTS = "none"
 """How a run with an empty fault plan shows its planned faults."""
@@ -115,11 +151,33 @@ CSV_COLUMNS: tuple[str, ...] = (
 )
 """The CSV's columns, in order. A property's column is empty when the run did not
 evaluate it, and so are `cassette_digest`, `parent_run_id` and `branch_point` when the run
-has none."""
+has none. Given a price file, `COST_COLUMN` comes last."""
+
+COST_COLUMN: Final = "cost_usd"
+"""The CSV's last column when a price file is given: the run's cost in USD, exactly."""
+
+SCRIPTED_MODEL: Final = "scripted"
+"""The scripted model's name in `harness.run.model`: the policy of record 0008, which
+makes no calls to any provider and reports no tokens (0009). It costs 0 USD."""
+
+EXACT: Final = Context(
+    prec=50,
+    rounding=ROUND_HALF_EVEN,
+    traps=[InvalidOperation, DivisionByZero, Overflow, Inexact],
+)
+"""The arithmetic of costs: 50 significant digits, and an error instead of any rounding.
+Only copies are ever used (`localcontext`), so its flags never change."""
+
+ROUNDED: Final = Context(
+    prec=6, rounding=ROUND_HALF_EVEN, traps=[InvalidOperation, DivisionByZero, Overflow]
+)
+"""How a cost per passing run that does not end is rounded: to 6 significant digits, half
+to even."""
 
 
 class ReportError(Exception):
-    """A result the outputs refuse, or a path that names no result."""
+    """A result the outputs refuse, a path that names no result, or a price file the
+    outputs cannot use."""
 
 
 # Planned faults --------------------------------------------------------------------------
@@ -207,8 +265,8 @@ def check_result(result: RunResult) -> None:
     """Refuse a result the outputs cannot show as it is.
 
     Its properties must be the ones it says it evaluated, in that order, each once and
-    numbered 1 to 5. Its metrics must be exactly `METRICS`. The plan in its params, if
-    any, must read as planned faults.
+    numbered 1 to 5. Its metrics must be exactly `METRICS`, none negative. The plan in its
+    params, if any, must read as planned faults.
     """
     name = f"run {result.run.run_id}"
     numbers = tuple(prop.property for prop in result.properties)
@@ -223,9 +281,12 @@ def check_result(result: RunResult) -> None:
     unknown = sorted(set(result.metrics) - set(METRICS))
     if missing or unknown:
         raise ReportError(
-            f"{name}: its metrics are not the 14 of record 0004: missing {missing or 'none'},"
-            f" unknown {unknown or 'none'}"
+            f"{name}: its metrics are not the {len(METRICS)} of record 0004: missing"
+            f" {missing or 'none'}, unknown {unknown or 'none'}"
         )
+    negative = [metric for metric in METRICS if result.metrics[metric] < 0]
+    if negative:
+        raise ReportError(f"{name}: its metrics are counts, but {negative} are negative")
     planned_faults(result)
 
 
@@ -308,6 +369,93 @@ def _first_error(error: ValidationError) -> str:
     return text
 
 
+# Prices and cost -------------------------------------------------------------------------
+
+
+def load_prices(path: Path) -> PriceFile:
+    """Read the price file at `path` with `fivefold.domain.prices`.
+
+    Raises `ReportError`, in one line, when the file cannot be read or is not a price file.
+    """
+    try:
+        return load_price_file(path)
+    except OSError as error:
+        raise ReportError(f"{path}: cannot read it: {error.strerror or error}") from None
+    except UnicodeDecodeError as error:
+        raise ReportError(
+            f"{path} is not a price file: it is not UTF-8 text: {error.reason}"
+        ) from None
+    except PriceFileError as error:
+        raise ReportError(" ".join(str(error).split())) from None
+
+
+def model_price(model: str, prices: PriceFile) -> ModelPrice | None:
+    """The price of the live model `model`, named `provider:model` as `harness.run.model`
+    names it, such as `ollama:llama3.1:8b`: the provider is the text before the first
+    colon. None when the price file has no price for it."""
+    provider, colon, name = model.partition(":")
+    if not colon:
+        return None
+    return prices.prices.get(provider, {}).get(name)
+
+
+def run_cost(result: RunResult, prices: PriceFile) -> Decimal:
+    """The run's cost in USD, exactly: its input tokens at its model's input price plus its
+    output tokens at its output price (0004, Metrics). The scripted model costs nothing.
+
+    Raises `ReportError` when the price file has no price for the run's model, when a run of
+    the scripted model used tokens, and when the cost needs more digits than `EXACT` has.
+    """
+    run = result.run
+    tokens_in, tokens_out = (result.metrics[name] for name in TOKEN_METRICS)
+    if run.model == SCRIPTED_MODEL:
+        if tokens_in or tokens_out:
+            raise ReportError(
+                f"run {run.run_id}: the scripted model reports no tokens, but the run used"
+                f" {tokens_in} in and {tokens_out} out"
+            )
+        return Decimal(0)
+    price = model_price(run.model, prices)
+    if price is None:
+        raise ReportError(
+            f"run {run.run_id}: the price file dated {prices.price_date.isoformat()} has no"
+            f" price for its model {run.model}"
+        )
+    return _exactly(lambda: price.cost_usd(tokens_in, tokens_out), f"the cost of run {run.run_id}")
+
+
+def usd(amount: Decimal) -> str:
+    """An amount in USD as the outputs write it: every digit, in plain notation with no
+    exponent and no trailing zeros, such as `0.00126` or `0`."""
+    return _exactly(lambda: format(amount.normalize(), "f"), f"the amount {amount}")
+
+
+def cost_per_passing_run(total: Decimal, passing: int) -> str:
+    """`total`, the cost of a group's runs in USD, over its `passing` runs, as the report
+    writes it: exact when the division ends within `EXACT`'s digits, otherwise rounded to 6
+    significant digits after `about`, and `no passing run` when there is none."""
+    if passing == 0:
+        return "no passing run"
+    try:
+        with localcontext(EXACT):
+            return usd(total / passing)
+    except Inexact:
+        with localcontext(ROUNDED):
+            return f"about {usd(total / passing)}"
+
+
+def _exactly[Value](compute: Callable[[], Value], what: str) -> Value:
+    """`compute()` with the arithmetic of `EXACT`. Raises `ReportError` naming `what` when
+    a result would need rounding."""
+    try:
+        with localcontext(EXACT):
+            return compute()
+    except Inexact:
+        raise ReportError(
+            f"{what} needs more than {EXACT.prec} significant digits, so it cannot be exact"
+        ) from None
+
+
 # Runs in a fixed order -------------------------------------------------------------------
 
 Natural = tuple[tuple[str | int, ...], str]
@@ -335,6 +483,8 @@ class Row:
     """Its planned faults without their parameters: its row of the fault table."""
     text: str
     """The result's JSON: the last key of the order, so the order is total."""
+    cost: Decimal | None = None
+    """Its cost in USD (`run_cost`), when a price file is given."""
 
     def order(self) -> Order:
         """Scenario, configuration, contract level, planned faults and seed, then the rest
@@ -357,8 +507,10 @@ class Row:
         )
 
 
-def _rows(results: Iterable[RunResult]) -> list[Row]:
-    """The results as rows, checked and in the fixed order."""
+def _rows(results: Iterable[RunResult], prices: PriceFile | None = None) -> list[Row]:
+    """The results as rows, checked and in the fixed order, each with its cost when
+    `prices` is given. A run the price file cannot price is refused: the first in the
+    fixed order, so the refusal does not depend on the order of the results."""
     rows: list[Row] = []
     for result in results:
         check_result(result)
@@ -371,22 +523,31 @@ def _rows(results: Iterable[RunResult]) -> list[Row]:
                 text=result_json(result),
             )
         )
-    return sorted(rows, key=Row.order)
+    rows.sort(key=Row.order)
+    if prices is None:
+        return rows
+    return [replace(row, cost=run_cost(row.result, prices)) for row in rows]
 
 
 # The CSV ---------------------------------------------------------------------------------
 
 
-def runs_csv(results: Iterable[RunResult]) -> str:
-    """The CSV across runs: a header row, then one row per run in the fixed order.
+def runs_csv(results: Iterable[RunResult], prices: PriceFile | None = None) -> str:
+    """The CSV across runs: a header row, then one row per run in the fixed order. Given
+    `prices`, the last column, `cost_usd`, holds each run's cost in USD, exactly.
 
-    Lines end with a line feed. Raises `ReportError` for a result `check_result` refuses.
+    Lines end with a line feed. Raises `ReportError` for a result `check_result` refuses,
+    and for a run `run_cost` cannot price.
     """
+    rows = _rows(results, prices)
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
-    writer.writerow(CSV_COLUMNS)
-    for row in _rows(results):
-        writer.writerow(_csv_values(row))
+    writer.writerow(CSV_COLUMNS if prices is None else (*CSV_COLUMNS, COST_COLUMN))
+    for row in rows:
+        values = _csv_values(row)
+        if row.cost is not None:
+            values.append(usd(row.cost))
+        writer.writerow(values)
     return buffer.getvalue()
 
 
@@ -431,12 +592,14 @@ def reason_codes(result: RunResult) -> str:
 # The Markdown report ---------------------------------------------------------------------
 
 
-def markdown_report(results: Iterable[RunResult]) -> str:
-    """The report across runs, in Markdown, with plain tables.
+def markdown_report(results: Iterable[RunResult], prices: PriceFile | None = None) -> str:
+    """The report across runs, in Markdown, with plain tables. Given `prices`, its cost
+    section prices each run's tokens; without, it says that cost is not computed.
 
-    Raises `ReportError` for a result `check_result` refuses.
+    Raises `ReportError` for a result `check_result` refuses, and for a run `run_cost`
+    cannot price.
     """
-    rows = _rows(results)
+    rows = _rows(results, prices)
     lines = [
         "# Fivefold results",
         "",
@@ -450,6 +613,7 @@ def markdown_report(results: Iterable[RunResult]) -> str:
         *_failure_table(rows),
         *_fault_table(rows),
         *_metric_table(rows),
+        *_cost_table(rows, prices),
         *_not_computed(),
     ]
     return "\n".join(lines).rstrip("\n") + "\n"
@@ -617,13 +781,85 @@ def _metric_table(rows: Sequence[Row]) -> list[str]:
     return [*lines, ""]
 
 
+def _cost_table(rows: Sequence[Row], prices: PriceFile | None) -> list[str]:
+    if prices is None:
+        return [
+            "## Cost",
+            "",
+            "Cost is not computed, because no price file was given. Give one with `--prices`,"
+            " in the format of `prices/example.yaml`. The tokens each run used are in the"
+            " metric totals and in the CSV.",
+            "",
+        ]
+    lines = [
+        "## Cost",
+        "",
+        f"Prices come from the price file dated {prices.price_date.isoformat()}, in USD per"
+        " million input tokens and per million output tokens (record 0004). A run's cost is"
+        " its input tokens at its model's input price plus its output tokens at its output"
+        " price, exactly. The scripted model costs nothing. A reply that reported no usage"
+        " counts no tokens; a call the spend cap refused was never sent, so it counts none"
+        " either. A passing run is one whose verdict is pass or pass_unresolved: all five"
+        " properties hold. Cost per passing run is the cost of all the row's runs, passing or"
+        " not, over its passing runs. It is exact when the division ends, and otherwise"
+        ' rounded to 6 significant digits and marked "about".',
+        "",
+        _table_row(
+            [
+                "Model",
+                "Configuration",
+                "Contract",
+                "runs",
+                "passing runs",
+                "tokens in",
+                "tokens out",
+                "cost (USD)",
+                "cost per passing run (USD)",
+            ]
+        ),
+        _table_rule(9),
+    ]
+    groups = _groups(
+        rows,
+        lambda row: (row.result.run.model, row.result.run.config, row.result.run.contract),
+    )
+    for (model, config, contract), members in groups:
+        total = _total_cost(members, f"the cost of {model} in {config} at {contract}")
+        passing = sum(1 for row in members if row.result.verdict in PASSING)
+        tokens_in, tokens_out = (
+            sum(row.result.metrics[name] for row in members) for name in TOKEN_METRICS
+        )
+        lines.append(
+            _table_row(
+                [
+                    model,
+                    config,
+                    contract,
+                    str(len(members)),
+                    str(passing),
+                    str(tokens_in),
+                    str(tokens_out),
+                    usd(total),
+                    cost_per_passing_run(total, passing),
+                ]
+            )
+        )
+    return [*lines, ""]
+
+
+def _total_cost(rows: Sequence[Row], what: str) -> Decimal:
+    """The sum of the rows' costs in USD, exactly."""
+    costs = [row.cost for row in rows if row.cost is not None]
+    return _exactly(lambda: sum(costs, Decimal(0)), what)
+
+
 def _not_computed() -> list[str]:
     return [
         "## Not computed yet",
         "",
-        "Record 0004 also lists these metrics, which the evaluator does not compute yet: "
-        + "; ".join(NOT_COMPUTED)
-        + ". No result holds a value for them, so this report shows none, not zeros.",
+        f"Record 0004 also lists {NOT_COMPUTED}. The evaluator does not compute it yet: it"
+        " waits for record 0014. No result holds a value for it, so this report shows none,"
+        " not zeros.",
         "",
     ]
 

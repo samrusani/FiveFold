@@ -24,7 +24,7 @@ All four demos of record 0006 run from a seed (see Demo below). The development 
 
 Milestone M3 is nearly done: faults F3 (a gateway crash after the reply arrives, before it is recorded), F4 (a request delivered twice), F5 (a commit after the caller's timeout) and F10 (status answers delayed or stale), demos 2 and 3, and recorded playback (see below) are in. Viewer v1 waits for record 0012, and the held-out scenarios are kept outside this repository. Two of F10's cells contradict record 0006; record 0013 proposes how to resolve them, and they wait for the maintainer.
 
-Milestone M4, the live study, has started: configuration G1, the evaluator's CSV and Markdown report (see Results below) and the live model adapter (see A live episode with Ollama below) are in. The live study waits for the maintainer's choice of models, API keys and a spend cap.
+Milestone M4, the live study, has started: configuration G1, the evaluator's CSV and Markdown report with token counts and cost (see Results below), the live model adapter (see A live episode with Ollama below) and the study runner (see A study below) are in. The live study waits for the maintainer's choice of models, API keys and a spend cap.
 
 ## Demo
 
@@ -110,7 +110,9 @@ Database tests connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose 
 
 ## Results
 
-The evaluator writes each run's result as JSON. `uv run python -m fivefold.harness.demo --out results` saves one file per demo run. `uv run python -m fivefold.evaluator report results --csv runs.csv --markdown report.md` turns them into a CSV with one row per run and a Markdown report: what was run, verdicts and safe and live runs by configuration and contract level, failures by property and verdicts by fault plan, each count over its denominator, and metric totals. The report needs no database, and the same results always give the same bytes.
+The evaluator writes each run's result as JSON, with the input and output tokens its model calls used (`tokens_in` and `tokens_out`; a scripted run uses none). `uv run python -m fivefold.harness.demo --out results` saves one file per demo run. `uv run python -m fivefold.evaluator report results --csv runs.csv --markdown report.md` turns them into a CSV with one row per run and a Markdown report: what was run, verdicts and safe and live runs by configuration and contract level, failures by property and verdicts by fault plan, each count over its denominator, and metric totals. The report needs no database, and the same results always give the same bytes.
+
+Add `--prices prices.yaml`, a price file in the format of `prices/example.yaml`, to price the tokens. The CSV then gains `cost_usd`, each run's cost in USD as an exact decimal. The report gains a cost table by model, configuration and contract level: runs, passing runs, tokens in and out, total cost and cost per passing run, at the price file's date. A passing run has the verdict pass or pass_unresolved. Cost per passing run is the cost of all the row's runs, failed ones too, over its passing runs. The scripted model costs nothing, and a run of a model the price file does not price is refused. Without a price file, the report says that cost is not computed.
 
 ## Maintainer
 
