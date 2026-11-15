@@ -72,8 +72,27 @@ class FaultRecord:
     params: Mapping[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ReportRecord:
+    """A final report an agent worker submitted, as the report sink received it (0004).
+
+    `valid` says whether it met the report schema; `errors` says how it did not.
+    `accepted_by` is `gateway` when G2 accepted it, or G1 forwarded it, and `sink` when
+    a baseline agent submitted it to the sink directly (0008).
+    """
+
+    seq: int
+    worker: str
+    report: JsonValue
+    valid: bool
+    errors: tuple[str, ...]
+    accepted_by: Literal["gateway", "sink"]
+    vt: int
+    message_seq: int | None = None
+
+
 class HarnessLog(ABC):
-    """Numbers harness events and records messages and faults."""
+    """Numbers harness events and records messages, faults and reports."""
 
     @abstractmethod
     def next_seq(self) -> int:
@@ -100,6 +119,10 @@ class HarnessLog(ABC):
     def fault_fired(self, record: FaultRecord) -> None:
         """Record a fault that fired."""
 
+    @abstractmethod
+    def report_submitted(self, record: ReportRecord) -> None:
+        """Record a final report as the sink received it."""
+
 
 def _check_fate(fate: Fate, reason: DropReason | None, delivered_seq: int | None) -> None:
     if fate == "delivered" and (delivered_seq is None or reason is not None):
@@ -115,6 +138,7 @@ class MemoryHarnessLog(HarnessLog):
         self._last_seq = 0
         self._messages: dict[int, MessageRecord] = {}
         self.faults: list[FaultRecord] = []
+        self.reports: list[ReportRecord] = []
 
     @property
     def messages(self) -> list[MessageRecord]:
@@ -156,6 +180,9 @@ class MemoryHarnessLog(HarnessLog):
     def fault_fired(self, record: FaultRecord) -> None:
         self.faults.append(record)
 
+    def report_submitted(self, record: ReportRecord) -> None:
+        self.reports.append(record)
+
 
 Connection = psycopg.Connection[TupleRow]
 
@@ -174,7 +201,8 @@ class PgHarnessLog(HarnessLog):
         row = conn.execute(
             "SELECT greatest((SELECT max(seq) FROM harness.message_log),"
             " (SELECT max(delivered_seq) FROM harness.message_log),"
-            " (SELECT max(seq) FROM harness.fault_log))"
+            " (SELECT max(seq) FROM harness.fault_log),"
+            " (SELECT max(seq) FROM harness.final_report))"
         ).fetchone()
         self._last_seq = 0 if row is None or row[0] is None else int(row[0])
 
@@ -239,6 +267,22 @@ class PgHarnessLog(HarnessLog):
                 record.component,
                 list(record.voided),
                 Jsonb(dict(record.params)),
+                record.vt,
+            ),
+        )
+
+    def report_submitted(self, record: ReportRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO harness.final_report (seq, worker, report, valid, errors,"
+            " accepted_by, message_seq, vt) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                record.seq,
+                record.worker,
+                Jsonb(record.report),
+                record.valid,
+                Jsonb(list(record.errors)),
+                record.accepted_by,
+                record.message_seq,
                 record.vt,
             ),
         )

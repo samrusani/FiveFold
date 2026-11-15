@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import LiteralString
 
 import psycopg
@@ -9,7 +10,9 @@ import pytest
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 
-from fivefold.harness.log import FaultRecord, MessageRecord, PgHarnessLog
+from fivefold.harness.log import FaultRecord, MessageRecord, PgHarnessLog, ReportRecord
+from fivefold.harness.reports import TEXT_KEY, ReportSink
+from fivefold.harness.scheduler import Scheduler
 
 pytestmark = pytest.mark.pg
 
@@ -79,6 +82,49 @@ def test_the_log_writes_messages_their_fates_and_faults(migrated_database: str) 
         ]
     with _harness(migrated_database) as conn:
         assert PgHarnessLog(conn).next_seq() == 5, "a new log continues after the stored events"
+
+
+def test_the_log_writes_reports_and_numbers_after_them(migrated_database: str) -> None:
+    with _harness(migrated_database) as conn:
+        log = PgHarnessLog(conn)
+        log.report_submitted(
+            ReportRecord(
+                seq=log.next_seq(),
+                worker="agent-1",
+                report={"claims": []},
+                valid=False,
+                errors=("REQ-1 has no claim",),
+                accepted_by="sink",
+                vt=12,
+            )
+        )
+        row = conn.execute(
+            "SELECT seq, worker, report, valid, errors, accepted_by, message_seq, vt"
+            " FROM harness.final_report"
+        ).fetchone()
+        assert row == (
+            1,
+            "agent-1",
+            {"claims": []},
+            False,
+            ["REQ-1 has no claim"],
+            "sink",
+            None,
+            12,
+        )
+    with _harness(migrated_database) as conn:
+        assert PgHarnessLog(conn).next_seq() == 2, "a new log continues after the stored reports"
+
+
+def test_the_sink_records_a_report_jsonb_cannot_hold(migrated_database: str) -> None:
+    """A NUL character in a report must not stop the sink recording it."""
+    report = {"claims": [{"intent_id": "REQ-1", "status": "unknown", "note": "a\x00b"}]}
+    with _harness(migrated_database) as conn:
+        sink = ReportSink(Scheduler(), PgHarnessLog(conn), ["REQ-1"])
+        assert sink.submit("agent-1", report, accepted_by="sink") != ()
+        row = conn.execute("SELECT report, valid FROM harness.final_report").fetchone()
+    assert row is not None and row[1] is False
+    assert json.loads(row[0][TEXT_KEY]) == report
 
 
 def test_a_message_is_history_and_its_fate_is_set_once(migrated_database: str) -> None:
