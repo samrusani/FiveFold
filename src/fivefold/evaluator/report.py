@@ -1,0 +1,645 @@
+"""The evaluator's outputs across runs: a CSV with one row per run, and a Markdown report
+(0004, Metrics).
+
+Each run's result is one JSON file, as `result_json` writes it. `load_results` reads the
+files and directories it is given, and refuses any file that is not a valid `RunResult`.
+`runs_csv` and `markdown_report` sort the runs before they write anything, so the same
+results give the same bytes whatever order they come in (0009). They add no date, no
+wall-clock time and no randomness; a result holds none either.
+
+The CSV has a header row and the columns of `CSV_COLUMNS`, in that order. Its rows are
+sorted by scenario, configuration, contract level, planned faults and seed, then by the
+rest of the run's identity. The report says what was run. It counts verdicts by
+configuration and contract level, failures by property and configuration, and verdicts by
+fault plan, each count over its denominator. It sums every metric by configuration, and
+names the metrics of record 0004 that are not computed yet.
+
+Readings the decision records leave open:
+
+- A run's planned faults are the fault plan the harness records in the run's params
+  (`params.plan`), with the parameters the run drew from its seed. A run whose params
+  hold no plan shows `not recorded`. A plan that does not read as planned faults is
+  refused.
+- The fault table groups runs by their planned faults without the faults' parameters, so
+  the trials of one cell share a row even where a fault draws a parameter from the seed
+  (F4's `copy_delay_ms`). The CSV keeps the parameters.
+- Run ids are not unique: runs that differ only in their fault plan share one (demos 2a
+  and 2b). So nothing here keys on the run id alone. Two files that hold the very same
+  result are refused, so that no run counts twice.
+- A result must hold exactly the metrics in `METRICS`. Any other set is refused, so a
+  total never mixes runs that computed a metric with runs that did not.
+"""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import re
+from collections import Counter
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from fivefold.evaluator.checks import CLAIM_METRICS
+from fivefold.evaluator.metrics import RUN_METRICS
+from fivefold.evaluator.result import (
+    PROPERTY_NAMES,
+    PropertyVerdict,
+    RunResult,
+    Verdict,
+    result_json,
+)
+
+PROPERTY_METRICS = (
+    "duplicates",
+    "unintended_effects",
+    "unauthorized_effects",
+    "stale_effects",
+    "missing_effects",
+    "excused_intents",
+)
+"""The metrics of properties 1 to 4, in the order of record 0004's list."""
+
+METRICS: tuple[str, ...] = (*PROPERTY_METRICS, *CLAIM_METRICS, *RUN_METRICS)
+"""Every metric a result holds, in the order of record 0004's list: 14 in all."""
+
+NOT_COMPUTED = (
+    "recovery latency per affected action, in virtual and wall milliseconds",
+    "tokens in and out",
+    "cost, from a price file that records its price date",
+    "cost per passing run",
+)
+"""The metrics of record 0004 that the evaluator does not compute yet."""
+
+PROPERTIES = tuple(sorted(PROPERTY_NAMES))
+"""The five properties, by number."""
+
+VERDICTS = (Verdict.PASS, Verdict.PASS_UNRESOLVED, Verdict.FAIL)
+"""The run verdicts, in the order the tables show them."""
+
+NO_FAULTS = "none"
+"""How a run with an empty fault plan shows its planned faults."""
+
+UNRECORDED = "not recorded"
+"""How a run whose params hold no fault plan shows its planned faults."""
+
+CSV_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "scenario_id",
+    "scenario_digest",
+    "config",
+    "contract",
+    "seed",
+    "topology",
+    "model_adapter",
+    "model",
+    "cassette_digest",
+    "parent_run_id",
+    "branch_point",
+    "code_version",
+    "planned_faults",
+    "end_vt",
+    "verdict",
+    *(f"p{number}_{PROPERTY_NAMES[number]}" for number in PROPERTIES),
+    "reason_codes",
+    *METRICS,
+)
+"""The CSV's columns, in order. A property's column is empty when the run did not
+evaluate it, and so are `cassette_digest`, `parent_run_id` and `branch_point` when the run
+has none."""
+
+
+class ReportError(Exception):
+    """A result the outputs refuse, or a path that names no result."""
+
+
+# Planned faults --------------------------------------------------------------------------
+
+
+class PlannedTrigger(BaseModel):
+    """Where and when a planned fault fires, as the harness records it (0006, Plans)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    point: str
+    match: dict[str, str | int] = Field(default_factory=dict)
+    occurrence: int = 1
+
+
+class PlanEntry(BaseModel):
+    """One fault of a run's plan, as the harness records it in the run's params."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fault: str
+    variant: str | None = None
+    at: PlannedTrigger
+    params: dict[str, str | int] = Field(default_factory=dict)
+
+    def label(self, *, params: bool = True) -> str:
+        """The fault in words: its id, variant, point, match and occurrence, then its
+        parameters if `params`. For example `F11 at agent.after_tool_call when
+        tool=submit_purchase_order with restart_delay_ms=10000`. The occurrence shows
+        only when it is not the first."""
+        words = [self.fault]
+        if self.variant is not None:
+            words.append(self.variant)
+        words += ["at", self.at.point]
+        if self.at.match:
+            words += ["when", _pairs(self.at.match)]
+        if self.at.occurrence != 1:
+            words += ["occurrence", str(self.at.occurrence)]
+        if params and self.params:
+            words += ["with", _pairs(self.params)]
+        return " ".join(words)
+
+
+def _pairs(values: dict[str, str | int]) -> str:
+    return ", ".join(f"{name}={values[name]}" for name in sorted(values))
+
+
+def planned_faults(result: RunResult) -> tuple[PlanEntry, ...] | None:
+    """The faults the run planned, from its params; None when its params hold no plan.
+
+    Raises `ReportError` when the plan does not read as a list of planned faults.
+    """
+    params = result.run.params
+    if not isinstance(params, dict) or "plan" not in params:
+        return None
+    plan = params["plan"]
+    if not isinstance(plan, list):
+        raise ReportError(f"run {result.run.run_id}: the plan in its params is not a list")
+    entries: list[PlanEntry] = []
+    for number, entry in enumerate(plan, start=1):
+        try:
+            entries.append(PlanEntry.model_validate(entry))
+        except ValidationError as error:
+            raise ReportError(
+                f"run {result.run.run_id}: planned fault {number} does not read as a fault:"
+                f" {_first_error(error)}"
+            ) from None
+    return tuple(entries)
+
+
+def plan_label(plan: Sequence[PlanEntry] | None, *, params: bool = True) -> str:
+    """A run's planned faults in words, in plan order, joined by ` + `: `none` for an
+    empty plan, `not recorded` when the run recorded none."""
+    if plan is None:
+        return UNRECORDED
+    if not plan:
+        return NO_FAULTS
+    return " + ".join(entry.label(params=params) for entry in plan)
+
+
+# Loading results -------------------------------------------------------------------------
+
+
+def check_result(result: RunResult) -> None:
+    """Refuse a result the outputs cannot show as it is.
+
+    Its properties must be the ones it says it evaluated, in that order, each once and
+    numbered 1 to 5. Its metrics must be exactly `METRICS`. The plan in its params, if
+    any, must read as planned faults.
+    """
+    name = f"run {result.run.run_id}"
+    numbers = tuple(prop.property for prop in result.properties)
+    if numbers != result.evaluated:
+        raise ReportError(
+            f"{name}: it evaluated properties {list(result.evaluated)} but holds results for"
+            f" {list(numbers)}"
+        )
+    if len(set(numbers)) != len(numbers) or not set(numbers) <= set(PROPERTIES):
+        raise ReportError(f"{name}: its properties must be distinct and from 1 to 5: {numbers}")
+    missing = [metric for metric in METRICS if metric not in result.metrics]
+    unknown = sorted(set(result.metrics) - set(METRICS))
+    if missing or unknown:
+        raise ReportError(
+            f"{name}: its metrics are not the 14 of record 0004: missing {missing or 'none'},"
+            f" unknown {unknown or 'none'}"
+        )
+    planned_faults(result)
+
+
+def load_result(path: Path) -> RunResult:
+    """Read one run's result from the JSON file `path`.
+
+    Raises `ReportError` when the file cannot be read, is not a valid `RunResult`, or
+    fails `check_result`.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ReportError(f"{path}: cannot read it: {error.strerror or error}") from None
+    try:
+        result = RunResult.model_validate_json(data)
+    except ValidationError as error:
+        raise ReportError(f"{path} is not a valid run result: {_first_error(error)}") from None
+    try:
+        check_result(result)
+    except ReportError as error:
+        raise ReportError(f"{path}: {error}") from None
+    return result
+
+
+def result_files(paths: Iterable[Path]) -> tuple[Path, ...]:
+    """The result files `paths` name: each file, and each `.json` file directly in each
+    directory. A file named twice counts once. The order is fixed: by resolved path.
+
+    Raises `ReportError` for a path that is neither a file nor a directory, and for a
+    directory that holds no `.json` file.
+    """
+    found: dict[Path, Path] = {}
+    for path in paths:
+        if path.is_dir():
+            files = sorted(
+                child for child in path.iterdir() if child.suffix == ".json" and child.is_file()
+            )
+            if not files:
+                raise ReportError(f"{path} holds no .json file")
+        elif path.is_file():
+            files = [path]
+        else:
+            raise ReportError(f"{path} is neither a file nor a directory")
+        for file in files:
+            found.setdefault(file.resolve(), file)
+    return tuple(found[resolved] for resolved in sorted(found))
+
+
+def load_results(paths: Iterable[Path]) -> tuple[RunResult, ...]:
+    """Every result in the files and directories `paths` name (`result_files`).
+
+    Raises `ReportError` when there is none, when a file is refused (`load_result`), and
+    when two files hold the same result, which would count one run twice.
+    """
+    files = result_files(paths)
+    if not files:
+        raise ReportError("no result files given")
+    seen: dict[str, Path] = {}
+    results: list[RunResult] = []
+    for path in files:
+        result = load_result(path)
+        digest = hashlib.sha256(result_json(result).encode("utf-8")).hexdigest()
+        if digest in seen:
+            raise ReportError(f"{seen[digest]} and {path} hold the same result")
+        seen[digest] = path
+        results.append(result)
+    return tuple(results)
+
+
+def _first_error(error: ValidationError) -> str:
+    """The first problem pydantic found, where it is, and how many more there are."""
+    details = error.errors(include_url=False)
+    if not details:
+        return str(error)
+    first = details[0]
+    where = ".".join(str(part) for part in first["loc"])
+    text = f"{where}: {first['msg']}" if where else first["msg"]
+    if len(details) > 1:
+        text += f" (and {len(details) - 1} more)"
+    return text
+
+
+# Runs in a fixed order -------------------------------------------------------------------
+
+Natural = tuple[tuple[str | int, ...], str]
+
+
+def _natural(text: str) -> Natural:
+    """A sort key that orders numbers inside text by value, so F2 comes before F10. The
+    text itself breaks ties, so two different texts never sort as equal."""
+    parts = re.split(r"(\d+)", text)
+    return tuple(int(part) if index % 2 else part for index, part in enumerate(parts)), text
+
+
+Order = tuple[Natural, str, Natural, Natural, Natural, int, Natural, str, str, str, str, str, str]
+"""A run's place in the fixed order (`Row.order`)."""
+
+
+@dataclass(frozen=True)
+class Row:
+    """One run, as both outputs show it."""
+
+    result: RunResult
+    faults: str
+    """Its planned faults with their parameters, as the CSV shows them."""
+    fault_group: str
+    """Its planned faults without their parameters: its row of the fault table."""
+    text: str
+    """The result's JSON: the last key of the order, so the order is total."""
+
+    def order(self) -> Order:
+        """Scenario, configuration, contract level, planned faults and seed, then the rest
+        of the run's identity, then the whole result."""
+        run = self.result.run
+        return (
+            _natural(run.scenario_id),
+            run.scenario_digest,
+            _natural(run.config),
+            _natural(run.contract),
+            _natural(self.fault_group),
+            run.seed,
+            _natural(self.faults),
+            run.model_adapter,
+            run.model,
+            run.cassette_digest or "",
+            self.result.code_version,
+            run.run_id,
+            self.text,
+        )
+
+
+def _rows(results: Iterable[RunResult]) -> list[Row]:
+    """The results as rows, checked and in the fixed order."""
+    rows: list[Row] = []
+    for result in results:
+        check_result(result)
+        plan = planned_faults(result)
+        rows.append(
+            Row(
+                result=result,
+                faults=plan_label(plan),
+                fault_group=plan_label(plan, params=False),
+                text=result_json(result),
+            )
+        )
+    return sorted(rows, key=Row.order)
+
+
+# The CSV ---------------------------------------------------------------------------------
+
+
+def runs_csv(results: Iterable[RunResult]) -> str:
+    """The CSV across runs: a header row, then one row per run in the fixed order.
+
+    Lines end with a line feed. Raises `ReportError` for a result `check_result` refuses.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(CSV_COLUMNS)
+    for row in _rows(results):
+        writer.writerow(_csv_values(row))
+    return buffer.getvalue()
+
+
+def _csv_values(row: Row) -> list[str]:
+    result = row.result
+    run = result.run
+    verdicts = {prop.property: str(prop.verdict) for prop in result.properties}
+    return [
+        run.run_id,
+        run.scenario_id,
+        run.scenario_digest,
+        run.config,
+        run.contract,
+        str(run.seed),
+        run.topology,
+        run.model_adapter,
+        run.model,
+        _blank(run.cassette_digest),
+        _blank(run.parent_run_id),
+        _blank(run.branch_point),
+        result.code_version,
+        row.faults,
+        str(run.end_vt),
+        str(result.verdict),
+        *(verdicts.get(number, "") for number in PROPERTIES),
+        reason_codes(result),
+        *(str(result.metrics[name]) for name in METRICS),
+    ]
+
+
+def _blank(value: str | int | None) -> str:
+    return "" if value is None else str(value)
+
+
+def reason_codes(result: RunResult) -> str:
+    """Every reason code of the run's failed checks, once each, by property, joined by
+    `; `. Each code belongs to one property, so the codes name the property too."""
+    ordered = sorted(result.properties, key=lambda prop: prop.property)
+    return "; ".join(str(code) for prop in ordered for code in prop.reason_codes)
+
+
+# The Markdown report ---------------------------------------------------------------------
+
+
+def markdown_report(results: Iterable[RunResult]) -> str:
+    """The report across runs, in Markdown, with plain tables.
+
+    Raises `ReportError` for a result `check_result` refuses.
+    """
+    rows = _rows(results)
+    lines = [
+        "# Fivefold results",
+        "",
+        f"The evaluator's results for {_runs(len(rows))} (record 0004). It decides every"
+        " verdict from the simulator's and the harness's records. Each run's result is a"
+        " JSON file, and the CSV across runs has one row per run.",
+        "",
+        *_what_was_run(rows),
+        *_verdict_table(rows),
+        *_failure_table(rows),
+        *_fault_table(rows),
+        *_metric_table(rows),
+        *_not_computed(),
+    ]
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _what_was_run(rows: Sequence[Row]) -> list[str]:
+    runs = [row.result.run for row in rows]
+    scenarios = Counter((run.scenario_id, run.scenario_digest) for run in runs)
+    models = Counter((run.model, run.model_adapter) for run in runs)
+    seeds = Counter(run.seed for run in runs)
+    with_cassette = sum(1 for run in runs if run.cassette_digest is not None)
+    branched = sum(1 for run in runs if run.parent_run_id is not None)
+    lines = [
+        "## What was run",
+        "",
+        f"- Runs: {len(runs)}.",
+        f"- Code versions: {_counted(row.result.code_version for row in rows)}.",
+        "- Scenarios, with the SHA-256 digest each run recorded:" + ("" if scenarios else " none."),
+    ]
+    for scenario_id, digest in sorted(scenarios, key=lambda key: (_natural(key[0]), key[1])):
+        lines.append(f"  - {scenario_id}, {digest} ({_runs(scenarios[scenario_id, digest])}).")
+    model_list = ", ".join(
+        f"{model} through the {adapter} adapter ({_runs(models[model, adapter])})"
+        for model, adapter in sorted(models, key=lambda key: (_natural(key[0]), _natural(key[1])))
+    )
+    seed_list = ", ".join(f"{seed} ({_runs(seeds[seed])})" for seed in sorted(seeds))
+    lines += [
+        f"- Configurations: {_counted(run.config for run in runs)}.",
+        f"- Contract levels: {_counted(run.contract for run in runs)}.",
+        f"- Models: {model_list or 'none'}.",
+        f"- Seeds: {seed_list or 'none'}.",
+        f"- Topologies: {_counted(run.topology for run in runs)}.",
+        f"- Runs that name a cassette: {with_cassette} of {len(runs)}.",
+        f"- Runs branched from another run: {branched} of {len(runs)}.",
+        "",
+    ]
+    return lines
+
+
+def _verdict_table(rows: Sequence[Row]) -> list[str]:
+    lines = [
+        "## Verdicts by configuration and contract level",
+        "",
+        "Each cell is the runs with that verdict over the runs with that configuration and"
+        " contract level.",
+        "",
+        _table_row(["Configuration", "Contract", *(str(verdict) for verdict in VERDICTS)]),
+        _table_rule(2 + len(VERDICTS)),
+    ]
+    for (config, contract), members in _groups(
+        rows, lambda row: (row.result.run.config, row.result.run.contract)
+    ):
+        lines.append(_table_row([config, contract, *_verdict_counts(members)]))
+    return [*lines, ""]
+
+
+def _failure_table(rows: Sequence[Row]) -> list[str]:
+    lines = [
+        "## Failures by property and configuration",
+        "",
+        "Each cell is the runs that fail the property over the runs that evaluated it."
+        " Properties 1, 2, 3 and 5 are safety properties, and property 4 is liveness"
+        " (record 0004).",
+        "",
+        _table_row(
+            ["Configuration", *(f"{number} {PROPERTY_NAMES[number]}" for number in PROPERTIES)]
+        ),
+        _table_rule(1 + len(PROPERTIES)),
+    ]
+    for (config,), members in _groups(rows, lambda row: (row.result.run.config,)):
+        cells = []
+        for number in PROPERTIES:
+            failed, evaluated = _property_counts(members, number)
+            cells.append(_fraction(failed, evaluated) if evaluated else "not evaluated")
+        lines.append(_table_row([config, *cells]))
+    return [*lines, ""]
+
+
+def _fault_table(rows: Sequence[Row]) -> list[str]:
+    lines = [
+        "## Verdicts by fault plan",
+        "",
+        "Runs are grouped by the faults they planned: each fault's id, variant, point,"
+        " match and occurrence, in plan order. Fault parameters are left out, since a run"
+        " can draw some from its seed (F4's copy delay); the CSV lists them. Each count is"
+        " over the runs in the row. Properties failed lists each property that a run of"
+        " the row failed, with the runs that failed it over the runs that evaluated it.",
+        "",
+        _table_row(
+            [
+                "Faults planned",
+                "Configuration",
+                "Contract",
+                *(str(verdict) for verdict in VERDICTS),
+                "Properties failed",
+            ]
+        ),
+        _table_rule(4 + len(VERDICTS)),
+    ]
+    for (faults, config, contract), members in _groups(
+        rows, lambda row: (row.fault_group, row.result.run.config, row.result.run.contract)
+    ):
+        failed = []
+        for number in PROPERTIES:
+            failing, evaluated = _property_counts(members, number)
+            if failing:
+                failed.append(f"{number} ({_fraction(failing, evaluated)})")
+        lines.append(
+            _table_row(
+                [faults, config, contract, *_verdict_counts(members), ", ".join(failed) or "none"]
+            )
+        )
+    return [*lines, ""]
+
+
+def _metric_table(rows: Sequence[Row]) -> list[str]:
+    groups = _groups(rows, lambda row: (row.result.run.config,))
+    configs = [config for (config,), _ in groups]
+    lines = [
+        "## Metric totals by configuration",
+        "",
+        "Each value is the sum of the metric over the configuration's runs (record 0004,"
+        " Metrics). The first row gives the number of runs.",
+        "",
+        _table_row(["Metric", *configs]),
+        _table_rule(1 + len(configs)),
+        _table_row(["runs", *(str(len(members)) for _, members in groups)]),
+    ]
+    for name in METRICS:
+        totals = [str(sum(row.result.metrics[name] for row in members)) for _, members in groups]
+        lines.append(_table_row([name, *totals]))
+    return [*lines, ""]
+
+
+def _not_computed() -> list[str]:
+    return [
+        "## Not computed yet",
+        "",
+        "Record 0004 also lists these metrics, which the evaluator does not compute yet: "
+        + "; ".join(NOT_COMPUTED)
+        + ". No result holds a value for them, so this report shows none, not zeros.",
+        "",
+    ]
+
+
+# Helpers ---------------------------------------------------------------------------------
+
+
+def _groups[Key: tuple[str, ...]](
+    rows: Sequence[Row], key: Callable[[Row], Key]
+) -> list[tuple[Key, list[Row]]]:
+    """The rows grouped by `key`, the groups in natural order of their keys, each group's
+    rows in the fixed order."""
+    groups: dict[Key, list[Row]] = {}
+    for row in rows:
+        groups.setdefault(key(row), []).append(row)
+    ordered = sorted(groups, key=lambda found: tuple(_natural(part) for part in found))
+    return [(found, groups[found]) for found in ordered]
+
+
+def _verdict_counts(rows: Sequence[Row]) -> list[str]:
+    counts = Counter(row.result.verdict for row in rows)
+    return [_fraction(counts[verdict], len(rows)) for verdict in VERDICTS]
+
+
+def _property_counts(rows: Sequence[Row], number: int) -> tuple[int, int]:
+    """How many of `rows` fail property `number`, and how many evaluated it."""
+    verdicts = [
+        prop.verdict for row in rows for prop in row.result.properties if prop.property == number
+    ]
+    return sum(1 for verdict in verdicts if verdict is PropertyVerdict.FAIL), len(verdicts)
+
+
+def _counted(values: Iterable[str]) -> str:
+    """Each distinct value with its number of runs, in natural order."""
+    counts = Counter(values)
+    if not counts:
+        return "none"
+    return ", ".join(f"{value} ({_runs(counts[value])})" for value in sorted(counts, key=_natural))
+
+
+def _fraction(count: int, total: int) -> str:
+    return f"{count}/{total}"
+
+
+def _runs(count: int) -> str:
+    return f"{count} run" if count == 1 else f"{count} runs"
+
+
+def _table_row(cells: Sequence[str]) -> str:
+    return "| " + " | ".join(_cell(cell) for cell in cells) + " |"
+
+
+def _table_rule(columns: int) -> str:
+    return "|" + " --- |" * columns
+
+
+def _cell(text: str) -> str:
+    """Text that cannot break a table row: pipes escaped, line breaks as spaces."""
+    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ")

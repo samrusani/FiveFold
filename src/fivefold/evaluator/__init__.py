@@ -13,7 +13,9 @@ Typical use, after the run has stopped:
     text = result_json(result)
 
 `load_run` and `evaluate` split that into reading and pure scoring; `write_result`
-stores a result in the `eval` schema.
+stores a result in the `eval` schema. Across runs, `load_results` reads saved result
+files, and `runs_csv` and `markdown_report` write a CSV with one row per run and a
+Markdown report (`report`; `python -m fivefold.evaluator report`).
 """
 
 from fivefold.evaluator.checks import CLAIM_METRICS
@@ -44,6 +46,14 @@ from fivefold.evaluator.records import (
     RunRecords,
     SubmittedReport,
 )
+from fivefold.evaluator.report import (
+    CSV_COLUMNS,
+    METRICS,
+    ReportError,
+    load_results,
+    markdown_report,
+    runs_csv,
+)
 from fivefold.evaluator.result import (
     ClaimJudgment,
     CountedReport,
@@ -63,7 +73,9 @@ from fivefold.evaluator.store import EVALUATOR_ROLE, WrongRole, evaluate_run, wr
 
 __all__ = [
     "CLAIM_METRICS",
+    "CSV_COLUMNS",
     "EVALUATOR_ROLE",
+    "METRICS",
     "RUN_METRICS",
     "ActorAction",
     "Approval",
@@ -85,6 +97,7 @@ __all__ = [
     "Read",
     "ReasonCode",
     "RecordsError",
+    "ReportError",
     "RequestFinding",
     "RequestOutcome",
     "RunInfo",
@@ -99,9 +112,12 @@ __all__ = [
     "evaluate",
     "evaluate_run",
     "facts_without_effects",
+    "load_results",
     "load_run",
+    "markdown_report",
     "result_json",
     "run_verdict",
+    "runs_csv",
     "stack_knowledge",
     "write_result",
 ]
