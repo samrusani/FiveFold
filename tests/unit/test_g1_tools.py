@@ -23,6 +23,7 @@ from fivefold.agents.connection import GatewayConnection
 from fivefold.agents.tools import ServerError, Timeouts, gateway_tools
 from fivefold.domain.api import FactRead, GetBudget, GetQuote
 from fivefold.domain.contracts import Contract, ContractParams
+from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
 from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.freshness import RuleFreshness
@@ -79,6 +80,8 @@ class FakeSim:
         self.ledger: list[tuple[str, str]] = []
         self.lose_answers = 0
         self.fact_checks = 0
+        self.slow: set[str] = set()
+        """Actions whose answer comes 50 ms later than the others'."""
 
     async def read(self, request: ReadRequest) -> FactRead:
         await self.scheduler.sleep(2 * HOP)
@@ -104,7 +107,7 @@ class FakeSim:
         return ApprovalNow(approval_id, status, expires)
 
     async def send(self, action: Action, attempt: Attempt, approval_id: str) -> Answer:
-        await self.scheduler.sleep(HOP)
+        await self.scheduler.sleep(HOP + (50 if action.action_id in self.slow else 0))
         effect = f"PO-{len(self.ledger) + 1:04d}"
         self.ledger.append((effect, approval_id))
         if self.lose_answers:
@@ -144,11 +147,17 @@ class Client:
 class Run:
     """A G1 gateway: the store with action identity off, at `contract`."""
 
-    def __init__(self, contract: Contract = Contract.C2) -> None:
+    def __init__(
+        self, contract: Contract = Contract.C2, plan: list[dict[str, object]] | None = None
+    ) -> None:
         self.scheduler = Scheduler()
         self.log = MemoryHarnessLog()
         self.transport = Transport(
-            self.scheduler, self.log, Generators(7).get("latency"), max_hop_latency_ms=50
+            self.scheduler,
+            self.log,
+            Generators(7).get("latency"),
+            max_hop_latency_ms=50,
+            faults=FaultInjector(parse_plan(plan or [])),
         )
         self.sim = FakeSim(self.scheduler)
         self.store = MemoryStore(
@@ -341,3 +350,46 @@ def test_a_g1_report_that_breaks_the_schema_is_recorded_and_refused(
     assert message in refused["details"]["message"]
     (report,) = run.log.reports
     assert (report.report, report.valid) == ({"claims": claims}, False)
+
+
+# A copy of the agent's call, in G1 --------------------------------------------------------
+
+
+def test_the_agent_gets_the_answer_to_its_own_call() -> None:
+    """F4 on the agent's hop (0006): the transport delivers the order call twice, and the
+    answer to the copy is the one not delivered to the agent. In G2 both deliveries reach
+    one action, so their answers are the same. In G1 the copy is a second action with its
+    own answer, which here comes first. The agent is still told about its own call, and
+    the copy's answer is dropped."""
+    plan: list[dict[str, object]] = [
+        {
+            "fault": "F4",
+            "at": {"point": "net.agent_gw.request", "match": {"api": "submit_purchase_order"}},
+            "params": {"copy_delay_ms": 0},
+        }
+    ]
+    run = Run(plan=plan)
+    run.sim.slow = {"A-0001"}
+    seen: list[dict[str, Any]] = []
+
+    async def agent(client: Client) -> None:
+        based_on = await client.cite()
+        seen.append(await client.ok("submit_purchase_order", **ORDER, based_on=based_on))
+
+    run.go(agent)
+    request, copy = (
+        m for m in run.log.messages if (m.kind, m.api) == ("request", "submit_purchase_order")
+    )
+    assert copy.copy_of == request.seq
+    created = [p.action_id for p in run.store.snapshot().proposals]
+    assert created == ["A-0001", "A-0002"], "G1: one action per delivery"
+    answers = [
+        (m.correlation, m.fate, m.drop_reason, m.delivered_vt)
+        for m in run.log.messages
+        if (m.hop, m.kind, m.api) == ("agent_gw", "answer", "submit_purchase_order")
+    ]
+    (copys_answer, own_answer) = answers
+    assert copys_answer[:3] == (copy.seq, "dropped", "answer_to_copy"), "it came first"
+    assert own_answer[:3] == (request.seq, "delivered", None)
+    (result,) = seen
+    assert (result["action_id"], result["state"]) == ("A-0001", "confirmed")
