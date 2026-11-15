@@ -99,6 +99,9 @@ Config = Literal["B0", "G1", "G2"]
 GATEWAY_CONFIGS = ("G1", "G2")
 """The configurations that write through the gateway (0008). G1 is authorization only."""
 
+CONFIGS: tuple[Config, ...] = ("B0", "G1", "G2")
+"""Every configuration a run can have (0008)."""
+
 GATEWAY = "gateway"
 SIMULATOR = "simulator"
 REPORT_SINK = "report_sink"

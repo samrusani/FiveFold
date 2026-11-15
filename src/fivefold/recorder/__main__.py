@@ -36,7 +36,7 @@ from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
 from fivefold.harness.migrations import DEFAULT_ADMIN_DSN, bootstrap, migrate, recreate_database
-from fivefold.harness.run import RunSpec
+from fivefold.harness.run import CONFIGS, RunSpec
 from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import RECORDS, PlaybackError, play, record, replay_spec
 
@@ -115,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     recording.add_argument(
         "--contract", choices=[str(level) for level in Contract], help="for a scenario file"
     )
-    recording.add_argument("--config", choices=["B0", "G2"], required=True)
+    recording.add_argument("--config", choices=CONFIGS, required=True)
     recording.add_argument("--seed", type=int, default=7, help="the run seed (default 7)")
     recording.add_argument("--cassette", type=Path, required=True, help="where to write it")
     recording.add_argument(

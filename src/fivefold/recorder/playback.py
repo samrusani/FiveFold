@@ -128,9 +128,7 @@ def replay_spec(cassette: Cassette, scenario: Scenario) -> RunSpec:
             f"scenario {scenario.id} changed since the recording: its digest is {digest},"
             f" and the cassette's is {run.scenario_digest}"
         )
-    if run.config not in ("B0", "G2"):
-        raise PlaybackError(f"this build runs B0 and G2, not {run.config}")
-    config: Config = "B0" if run.config == "B0" else "G2"
+    config: Config = run.config
     plan, workers = run.params.get("plan"), run.params.get("workers")
     if not isinstance(plan, list) or not isinstance(workers, int) or isinstance(workers, bool):
         raise PlaybackError("the cassette's run names no fault plan or no number of workers")

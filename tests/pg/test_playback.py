@@ -1,6 +1,6 @@
 """Recorded playback of whole runs (0009, Playback and branching; Determinism contract).
 
-Demo 1 is recorded in B0 and in G2, then played back from its cassette into a fresh run
+Demo 1 is recorded in B0, G1 and G2, then played back from its cassette into a fresh run
 database: the replay serves every recorded call, and its message log, effects ledger,
 action events, approval events, other harness logs and evaluation JSON are byte-identical
 to the original run's, ignoring wall-clock columns. A replay against a changed scenario or
@@ -28,7 +28,7 @@ from fivefold.harness.cells import cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001, DEV_002, demo_1_plan, demo_1_spec
 from fivefold.harness.migrations import drop_database
 from fivefold.harness.models import Replay
-from fivefold.harness.run import Config, InprocRun, RunSpec
+from fivefold.harness.run import CONFIGS, Config, InprocRun, RunSpec
 from fivefold.recorder.__main__ import main
 from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import PlaybackError, compare, play, record, records
@@ -49,6 +49,7 @@ COPIES: LiteralString = (
 EFFECTS: LiteralString = "SELECT to_jsonb(e) FROM sim.effect e ORDER BY commit_seq"
 EVALUATION: LiteralString = "SELECT result FROM eval.run_result"
 RUN: LiteralString = "SELECT model_adapter, model, cassette_digest FROM harness.run"
+FAULTS: LiteralString = "SELECT DISTINCT fault FROM harness.fault_log ORDER BY fault"
 
 
 def rows(dsn: str, query: LiteralString) -> list[tuple[Any, ...]]:
@@ -76,7 +77,7 @@ def first_difference(recorded: Cassette, changed: Cassette) -> int:
     )
 
 
-@pytest.mark.parametrize(("config", "verdict"), [("B0", "fail"), ("G2", "pass")])
+@pytest.mark.parametrize(("config", "verdict"), [("B0", "fail"), ("G1", "fail"), ("G2", "pass")])
 def test_demo_1_plays_back_byte_for_byte_from_its_cassette(
     run_database: Callable[[str], str], config: Config, verdict: str
 ) -> None:
@@ -84,6 +85,7 @@ def test_demo_1_plays_back_byte_for_byte_from_its_cassette(
     recorded, cassette = record(demo_1_spec(config, 7), original)
     assert recorded.result.evaluation is not None
     assert str(recorded.result.evaluation.verdict) == verdict
+    assert rows(original, FAULTS) == [("F11",), ("F2",)], "both of demo 1's faults fired"
 
     playback = play(cassette, load_scenario_file(DEV_001), original=original, replay=replay)
 
@@ -192,7 +194,7 @@ def cell_run(name: str) -> tuple[RunSpec, Scenario]:
     """The run of the cell `name` of `faults/expected.yaml`, as its own test runs it."""
     (cell,) = [cell for cell in EXPECTED.cells if cell.name == name]
     scenario = cell_scenario(cell, load_scenario_file(DEV_001))
-    config: Config = "B0" if cell.config == "B0" else "G2"
+    (config,) = [config for config in CONFIGS if config == cell.config]
     return RunSpec(scenario, config, cell.contract, EXPECTED.seed, plan=cell_plan(cell)), scenario
 
 
@@ -200,6 +202,7 @@ def cell_run(name: str) -> tuple[RunSpec, Scenario]:
     ("name", "copies"),
     [
         ("F4-agent_gw-C2-G2", 1),
+        ("F4-agent_gw-C2-G1", 1),
         ("F4-gw_sim-C2-G2", 1),
         ("F4-agent_sim-C2-B0", 1),
         ("F5-in_contract-C2-G2", 0),
@@ -288,14 +291,16 @@ def cli_databases(admin_dsn: str, db_prefix: str) -> Iterator[tuple[str, str]]:
         drop_database(admin_dsn, name)
 
 
+@pytest.mark.parametrize("config", ["B0", "G1"])
 def test_the_command_records_and_plays_back(
     admin_dsn: str,
     cli_databases: tuple[str, str],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    config: Config,
 ) -> None:
     recorded, replayed = cli_databases
-    path = tmp_path / "demo-1-b0.json"
+    path = tmp_path / f"demo-1-{config.lower()}.json"
     common = ["--dsn", admin_dsn]
     assert (
         main(
@@ -305,7 +310,7 @@ def test_the_command_records_and_plays_back(
                 "--demo",
                 "1",
                 "--config",
-                "B0",
+                config,
                 "--cassette",
                 str(path),
                 "--database",

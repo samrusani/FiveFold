@@ -45,7 +45,7 @@ from fivefold.harness.migrations import (
     migrate,
     recreate_database,
 )
-from fivefold.harness.run import Config, InprocRun, RunSpec
+from fivefold.harness.run import GATEWAY_CONFIGS, Config, InprocRun, RunSpec
 
 ROOT = Path(__file__).resolve().parents[3]
 DEV_001 = ROOT / "scenarios" / "dev" / "dev-001-single-po.yaml"
@@ -57,7 +57,7 @@ ORDER = "submit_purchase_order"
 
 def _lost_reply(config: Config) -> dict[str, Any]:
     """F2 on the purchase order's committed answer, on the stack's hop to the simulator."""
-    hop = "gw_sim" if config == "G2" else "agent_sim"
+    hop = "gw_sim" if config in GATEWAY_CONFIGS else "agent_sim"
     return {
         "fault": "F2",
         "at": {
@@ -69,9 +69,9 @@ def _lost_reply(config: Config) -> dict[str, Any]:
 
 
 def _before_the_send(config: Config) -> tuple[str, dict[str, str]]:
-    """Where demo 2's faults fire: at the gateway's dispatch check in G2, and in B0 as the
+    """Where demo 2's faults fire: at the gateway's dispatch check in G1 and G2, and in B0 as the
     approval answer reaches the agent (0006, F6 and F7 early)."""
-    if config == "G2":
+    if config in GATEWAY_CONFIGS:
         return "gw.dispatch.before_check", {}
     return "net.agent_sim.answer", {"api": "get_approval_status"}
 
