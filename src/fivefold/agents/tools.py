@@ -55,7 +55,7 @@ from fivefold.domain.api import (
 )
 from fivefold.domain.report import FinalReport
 from fivefold.harness.scheduler import Scheduler
-from fivefold.harness.transport import Transport
+from fivefold.harness.transport import Calls
 
 GATEWAY_WRITES = frozenset({"submit_purchase_order", "reserve_inventory"})
 SIMULATOR = "simulator"
@@ -164,7 +164,7 @@ STATUS_TOOLS: tuple[_ApiTool, ...] = (
 
 
 def baseline_tools(
-    transport: Transport,
+    transport: Calls,
     scheduler: Scheduler,
     timeouts: Timeouts,
     *,
@@ -177,7 +177,7 @@ def baseline_tools(
 
 
 def _baseline_tool(
-    transport: Transport, scheduler: Scheduler, timeouts: Timeouts, spec: _ApiTool, worker: str
+    transport: Calls, scheduler: Scheduler, timeouts: Timeouts, spec: _ApiTool, worker: str
 ) -> BaseTool:
     async def call(**arguments: Any) -> str:
         limit = WaitLimit(timeouts.max_wait_ms)
