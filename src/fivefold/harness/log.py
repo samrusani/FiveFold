@@ -66,7 +66,8 @@ class FaultRecord:
     target_seq: int | None = None
     """The message the fault acted on, if any."""
     component: str | None = None
-    """The component a crash stopped, if any."""
+    """The component the fault acted on, if any: the one a crash stopped, the worker F9
+    started, or the gateway where F6 or F7 fired at a dispatch point."""
     voided: tuple[int, ...] = ()
     """The seqs of messages whose delivery the fault voided (0006, crashes)."""
     params: Mapping[str, object] = field(default_factory=dict)

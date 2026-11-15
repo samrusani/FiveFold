@@ -9,7 +9,9 @@ build runs B0 and G2 with the scripted model. `InprocRun.execute`:
 2. in G2, starts the gateway: its store, its dispatcher after startup recovery, and its
    tools, one MCP server per agent connection;
 3. starts each agent worker with its own checkpoint thread, and the scripted approver,
-   which decides queued approval requests by the scenario's rules (0002, rule 7);
+   which decides queued approval requests by the scenario's rules (0002, rule 7). F9
+   starts one more worker on the same task when it fires; the gateway expects a report
+   from every worker the plan can start (0010);
 4. fires the plan's faults: the transport fires those on its hops, the dispatcher those
    at its points (F1, F6 and F7 early), and this module those at the agent's points (F1's
    B0 equivalent, F11). A crashed gateway restarts through startup recovery (0003), and
@@ -153,7 +155,11 @@ class InprocRun:
         self._dsn = dsn
         self.scheduler = Scheduler()
         self.result = RunResult(spec.run_id)
-        self._workers = [f"agent-{number}" for number in range(1, spec.workers + 1)]
+        self._workers = list(_worker_names(spec.workers))
+        self._ranks: dict[str, int] = {}
+        self._agent_workers = spec.workers + sum(
+            1 for entry in self._plan if entry.kind.action is Action.START_WORKER
+        )
         self._tool_names = GATEWAY_TOOL_NAMES if spec.config == "G2" else BASELINE_TOOL_NAMES
         self._closing: list[Any] = []
 
@@ -182,6 +188,7 @@ class InprocRun:
                     "params": scenario.params.model_dump(mode="json"),
                     "plan": [entry.model_dump(mode="json") for entry in plan],
                     "workers": spec.workers,
+                    "agent_workers": self._agent_workers,
                 },
             )
         )
@@ -196,7 +203,7 @@ class InprocRun:
         )
         self.transport.observe(self._agent_points)
         self.transport.before_send(self._before_tool_call)
-        credentials = (GATEWAY,) if spec.config == "G2" else tuple(self._workers)
+        credentials = (GATEWAY,) if spec.config == "G2" else _worker_names(self._agent_workers)
         config = SimConfig.preset(
             spec.contract, credentials=credentials, params=params.contract_params()
         )
@@ -258,7 +265,7 @@ class InprocRun:
             dispatch_timeout_ms=params.dispatch_timeout_ms,
             max_attempts=params.max_attempts,
             max_probes=params.max_probes,
-            agent_workers=self.spec.workers,
+            agent_workers=self._agent_workers,
         )
         self.store = PgStore(
             self._conninfo("ff_gw"),
@@ -374,12 +381,16 @@ class InprocRun:
     async def _worker(self, worker: str, *, resume: bool) -> None:
         scenario = self.spec.scenario
         mode = Mode.GATEWAY if self.spec.config == "G2" else Mode.BASELINE
-        rank = 0  # F9's different_args variant (M2) gives the second worker rank 1.
+        rank = self._ranks.get(worker, 0)
         model = ScriptedModel(
             lambda: scripted_policy(scenario.intents, mode=mode, rank=rank),
             lambda: self.scheduler.sleep(scenario.params.think_ms),
         )
         spec = WorkerSpec(worker, scenario.task, scenario.budget.max_agent_steps)
+
+        def on_step(step: int) -> None:
+            self._agent_step(worker, step)
+
         if self.spec.config == "B0":
             tools = baseline_tools(
                 self.transport,
@@ -388,7 +399,9 @@ class InprocRun:
                 worker=worker,
                 status=self.spec.contract.has(Capability.STATUS),
             )
-            graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
+            graph = build_graph(
+                model, tools, self.checkpointer, max_steps=spec.max_steps, on_step=on_step
+            )
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
             return
         connection = GatewayConnection(
@@ -400,7 +413,9 @@ class InprocRun:
         try:
             listed = await connection.list_tools()
             tools = gateway_tools(connection, listed, self.timeouts)
-            graph = build_graph(model, tools, self.checkpointer, max_steps=spec.max_steps)
+            graph = build_graph(
+                model, tools, self.checkpointer, max_steps=spec.max_steps, on_step=on_step
+            )
             self.result.ends[worker] = await run_worker(graph, spec, resume=resume)
         except asyncio.CancelledError:
             raise
@@ -413,6 +428,34 @@ class InprocRun:
             connection.close()
 
     # Fault points of the agent (0006) -----------------------------------------------------
+
+    def _agent_step(self, worker: str, step: int) -> None:
+        """`agent.step`: F9 starts another worker on the same task (0006).
+
+        The new worker runs the same scripted policy from the start, with its own
+        checkpoint thread and step budget; in the `different_args` variant it chooses the
+        second-cheapest acceptable option (0008).
+        """
+        for fired in self.faults.at("agent.step", {"worker": worker, "step": step}):
+            if fired.planned.kind.action is not Action.START_WORKER:
+                continue
+            started = f"agent-{len(self._workers) + 1}"
+            self.log.fault_fired(
+                FaultRecord(
+                    seq=self.log.next_seq(),
+                    fault=str(fired.fault),
+                    variant=fired.planned.variant,
+                    point="agent.step",
+                    occurrence=fired.occurrence,
+                    action=str(Action.START_WORKER),
+                    vt=self.scheduler.now,
+                    component=started,
+                    params={**fired.planned.params, "worker": worker, "step": step},
+                )
+            )
+            self._workers.append(started)
+            self._ranks[started] = 1 if fired.planned.variant == "different_args" else 0
+            self._start_worker(started, resume=False)
 
     def _before_tool_call(self, outgoing: Outgoing) -> None:
         """F1's B0 equivalent: kill a worker just before it sends a tool call (0006).
@@ -498,6 +541,11 @@ class InprocRun:
         await settle()
         for resource in reversed(self._closing):
             resource.close()
+
+
+def _worker_names(count: int) -> tuple[str, ...]:
+    """The names of a run's agent workers: `agent-1` to `agent-{count}`."""
+    return tuple(f"agent-{number}" for number in range(1, count + 1))
 
 
 def _describe(error: BaseException) -> str:

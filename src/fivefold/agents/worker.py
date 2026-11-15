@@ -59,17 +59,21 @@ def build_graph(
     checkpointer: BaseCheckpointSaver[Any],
     *,
     max_steps: int,
-    on_step: Callable[[], None] | None = None,
+    on_step: Callable[[int], None] | None = None,
 ) -> Any:
-    """The agent's graph: a model node and the prebuilt tool node, with retries."""
+    """The agent's graph: a model node and the prebuilt tool node, with retries.
+
+    `on_step` is called with the step's number each time the model finishes a step: the
+    fault point `agent.step` (0006).
+    """
 
     async def call_model(state: MessagesState) -> dict[str, list[Any]]:
         steps = sum(1 for message in state["messages"] if isinstance(message, AIMessage))
         if steps >= max_steps:
             return {"messages": [AIMessage(content=BUDGET_TEXT)]}
-        if on_step is not None:
-            on_step()
         reply = await model.ainvoke(state["messages"])
+        if on_step is not None:
+            on_step(steps + 1)
         return {"messages": [reply]}
 
     graph = StateGraph(MessagesState)
