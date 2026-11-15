@@ -15,6 +15,13 @@ The timeout of a call is the tool's declared server-side wait plus T (0005, 0008
 reads and simulator calls, `tool_wait_ms` plus T for gateway writes, and `wait_ms` plus T
 for calls that wait. Timeouts run on the scheduler's virtual clock.
 
+A status tool's wait is at most the run's `max_wait_ms` (0005). B0's
+`get_approval_status` refuses a longer wait before anything is sent, as it refuses any
+other invalid argument: the request model raises pydantic's `ValidationError`, which the
+tool node hands back to the model (0008). In G modes the gateway refuses it; the
+agent's own timeout for a gateway status call counts at most `max_wait_ms`, so the call
+ends even when the gateway does not answer.
+
 Checked in langchain-core 1.8.0: `StructuredTool.from_function(coroutine=, name=,
 description=, args_schema=)` takes a Pydantic model or a JSON Schema dict
 (`ArgsSchema`, `langchain_core/tools/base.py`), and passes the tool call's arguments to
@@ -44,6 +51,7 @@ from fivefold.domain.api import (
     RequestApproval,
     ReserveInventory,
     SubmitPurchaseOrder,
+    WaitLimit,
 )
 from fivefold.domain.report import FinalReport
 from fivefold.harness.scheduler import Scheduler
@@ -66,6 +74,8 @@ class Timeouts:
     """T: the destination's dispatch timeout."""
     tool_wait_ms: int
     """How long a gateway write waits before it answers."""
+    max_wait_ms: int = 60_000
+    """The longest `wait_ms` a status tool accepts: the scenario's `max_wait_ms`."""
 
 
 # G modes: the gateway's tools over MCP ------------------------------------------------------
@@ -87,7 +97,8 @@ def _gateway_tool(connection: GatewayConnection, tool: types.Tool, timeouts: Tim
         if name in GATEWAY_WRITES:
             timeout = timeouts.tool_wait_ms + timeouts.t_ms
         else:
-            timeout = int(arguments.get("wait_ms", 0) or 0) + timeouts.t_ms
+            wait_ms = int(arguments.get("wait_ms", 0) or 0)
+            timeout = min(wait_ms, timeouts.max_wait_ms) + timeouts.t_ms
         result = await connection.call_tool(name, arguments, timeout)
         text = "".join(c.text for c in result.content if isinstance(c, types.TextContent))
         if result.is_error and _error_code(text) == "gateway_timeout":
@@ -169,7 +180,8 @@ def _baseline_tool(
     transport: Transport, scheduler: Scheduler, timeouts: Timeouts, spec: _ApiTool, worker: str
 ) -> BaseTool:
     async def call(**arguments: Any) -> str:
-        request = spec.model.model_validate(_plain(arguments))
+        limit = WaitLimit(timeouts.max_wait_ms)
+        request = spec.model.model_validate(_plain(arguments), context=limit)
         body = request.model_dump(mode="json")
         wait_ms = int(body.get("wait_ms", 0) or 0)
         reply = await transport.call(

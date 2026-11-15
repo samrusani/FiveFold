@@ -20,7 +20,9 @@ G1 and G2 expose the same tools with the same schemas; only their behaviour diff
   admission (0001, item 17), starts the action's driver, waits at most `tool_wait_ms`
   for a state the agent can act on, and returns the action's result (0003).
 - `get_action_status(action_id, wait_ms)` waits at most `wait_ms` for a final state. It
-  never contacts the destination (0003).
+  never contacts the destination (0003). Its schema allows at most 60,000 ms, 0005's
+  default; a wait above the run's own `max_wait_ms` is refused too, as `invalid_args`,
+  so the schema the agent sees stays the same in every run.
 - `submit_final_report(claims)` refuses a report that breaks the schema with
   `invalid_args`, checks the rest against the records, and hands an accepted report to
   the harness's report sink (0003, 0008).
@@ -36,7 +38,15 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StringConstraints,
+    ValidationError,
+)
 
 from fivefold.domain.api import (
     FactRead,
@@ -47,6 +57,8 @@ from fivefold.domain.api import (
     ListSuppliers,
     Minor,
     Quantity,
+    WaitLimit,
+    within_wait_limit,
 )
 from fivefold.domain.identity import InvalidArgs, action_key, normalize, target_of
 from fivefold.domain.report import FinalReport, InvalidReport, parse_report, validation_messages
@@ -118,7 +130,9 @@ class ActionStatusArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     action_id: Annotated[str, StringConstraints(pattern=r"^A-[0-9]{4,}$")]
-    wait_ms: Annotated[StrictInt, Field(ge=0, le=60_000)] = 0
+    wait_ms: Annotated[StrictInt, Field(ge=0, le=60_000), AfterValidator(within_wait_limit)] = 0
+    """At most 60,000 by the schema, and at most the run's `max_wait_ms` when validated
+    with a `WaitLimit`."""
 
 
 @dataclass(frozen=True)
@@ -198,6 +212,8 @@ class ToolTiming:
     """How long tools wait, in virtual ms (0003, 0005)."""
 
     tool_wait_ms: int = 2_500
+    max_wait_ms: int = 60_000
+    """The longest `wait_ms` `get_action_status` accepts: the scenario's `max_wait_ms`."""
 
 
 Json = dict[str, object]
@@ -350,8 +366,9 @@ class GatewayTools:
     # Status ----------------------------------------------------------------------------------
 
     async def _status(self, arguments: Mapping[str, object], call: Call) -> Json:
+        limit = WaitLimit(self._timing.max_wait_ms)
         try:
-            args = ActionStatusArgs.model_validate(dict(arguments))
+            args = ActionStatusArgs.model_validate(dict(arguments), context=limit)
         except ValidationError as error:
             raise ToolError("invalid_args", "; ".join(validation_messages(error))) from None
         try:

@@ -13,7 +13,9 @@ inventing an answer the API does not define.
 
 The simulator never waits. `get_approval_status` with `wait_ms` above 0 (B0's tool,
 0008) waits here, on the scheduler's clock: while the approval is pending, the endpoint
-asks again every `poll_ms` until it is decided or the wait ends.
+asks again every `poll_ms` until it is decided or the wait ends. A wait above the run's
+`max_wait_ms` does not parse (0005), so the endpoint never polls past it: one wait makes
+at most `1 + ceil(max_wait_ms / poll_ms)` lookups, 121 with the defaults.
 
 Two fault points of record 0006 are reached here, and `points` decides what fires there:
 
@@ -41,6 +43,7 @@ from fivefold.domain.api import (
     GetReservationStatus,
     ReserveInventory,
     SubmitPurchaseOrder,
+    WaitLimit,
     Write,
     WriteReceived,
 )
@@ -100,6 +103,7 @@ def endpoint(
     scheduler: Scheduler,
     *,
     poll_ms: int = 500,
+    max_wait_ms: int = 60_000,
     served: Sequence[Served] = (),
     points: FaultPoints | None = None,
 ) -> Handler:
@@ -107,14 +111,15 @@ def endpoint(
 
     Each of `served` is told of every answer, as the scripted approver needs to learn of
     queued approval requests (0002, rule 7). `points`, if given, decides the faults at
-    the simulator's fault points.
+    the simulator's fault points. `max_wait_ms` is the run's longest status wait (0005).
     """
+    limit = WaitLimit(max_wait_ms)
 
     async def handle(request: Envelope) -> Reply:
         if request.api is None:
             raise ValueError(f"request {request.seq} names no API call")
         api = ApiName(request.api)
-        parsed = REQUESTS[api].model_validate(request.body)
+        parsed = REQUESTS[api].model_validate(request.body, context=limit)
         answer = await respond(request, api, parsed)
         for listener in served:
             listener(api, answer)
