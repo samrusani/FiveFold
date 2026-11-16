@@ -145,16 +145,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Final
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
-from langchain_openai import ChatOpenAI
 from pydantic import JsonValue, PrivateAttr, ValidationError
 
 from fivefold.agents.worker import SPEND_CAP_TEXT
@@ -210,6 +206,8 @@ class Provider:
 
 
 def _ollama(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    from langchain_ollama import ChatOllama
+
     arguments: dict[str, Any] = dict(params)
     return ChatOllama(model=model, **arguments)
 
@@ -220,16 +218,22 @@ outlives the run's event loop (see the module)."""
 
 
 def _anthropic(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    from langchain_anthropic import ChatAnthropic
+
     arguments: dict[str, Any] = dict(params)
     return ChatAnthropic(model=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
 
 
 def _openai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    from langchain_openai import ChatOpenAI
+
     arguments: dict[str, Any] = dict(params)
     return ChatOpenAI(model_name=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
 
 
 def _google_genai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
     arguments: dict[str, Any] = dict(params)
     return ChatGoogleGenerativeAI(
         model=model, additional_headers=dict(CLOSE_AFTER_REPLY), **arguments
