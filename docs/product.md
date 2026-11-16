@@ -9,8 +9,8 @@ Status: M0 decisions accepted, 14 Nov 2026. Companion docs: [spec.md](spec.md) (
 Agents now write to real systems through tools, and ordinary failures break them in ways a transcript hides.
 
 - **Duplicates after a lost reply.** In the LIMBO study, agents still reported success in 90% of runs that produced a duplicate. Idempotency keys cut duplicates from 28% to 4%.
-- **Stale approvals.** In the CommitGuard study, 207 of 216 runs whose approval had been invalidated still committed.
-- **Judges miss it.** LLM judges passed 6 to 11 of 11 forbidden database writes; a rule-based check of the writes caught all 11. The source for this finding is not yet confirmed (see Sources).
+- **Stale approvals.** In the CommitGuard study, Qwen chose to commit 207 of 215 executions flagged as invalid. The controlled study did not let it revalidate.
+- **Judges miss it.** In five of six judge settings, LLM judges passed 6 to 11 of 11 forbidden database writes. The sixth passed none but failed 40 of 55 fully correct episodes. A rule-based check caught all 11 forbidden writes.
 - **The plumbing does not solve it.** Temporal warns activities may run more than once. LangGraph re-runs model and API calls after a checkpoint. MCP has no idempotency field, and a proposal to add one was closed unmerged.
 
 All of this evidence comes from 2026 preprints that have not been peer-reviewed. See Sources at the end.
@@ -93,15 +93,15 @@ Two openings are untaken: an MCP conformance test for lost replies (requested in
 
 ## Sources
 
-All papers are preprints that have not been peer-reviewed. Titles and IDs were checked by web search on 14 Nov 2026, with the exceptions noted. Check every figure quoted above against its paper before the report is published.
+All papers are preprints that have not been peer-reviewed. Titles, IDs and the figures above were checked against arXiv on 16 Nov 2026.
 
 - [Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents (LIMBO), arXiv 2609.29095](https://arxiv.org/abs/2609.29095)
 - [Beyond Single-Use Tokens: Durable Authorization State for Replay-Resistant LLM Agent Actions (CapLease), arXiv 2608.01710](https://arxiv.org/abs/2608.01710)
-- [When Evaluators of AI Agents Disagree, arXiv 2611.14581](https://arxiv.org/abs/2611.14581). Not confirmed: a web search on 14 Nov 2026 found no paper with this ID or title. Confirm or remove before launch.
+- [When Evaluators of AI Agents Disagree: An Empirical Study of Native Scoring, LLM Judges, and Commit-Boundary Checks on tau2-bench, arXiv 2611.14581](https://arxiv.org/abs/2611.14581)
 - [ReliabilityBench: Evaluating LLM Agent Reliability Under Production-Like Stress Conditions, arXiv 2601.06112](https://arxiv.org/abs/2601.06112)
 - [Temporary Authority, Permanent Effects: Commit-Time Authorization for LLM Agents (CommitGuard), arXiv 2607.10487](https://arxiv.org/abs/2607.10487)
 - [Cordon: Semantic Transactions for Tool-Using LLM Agents, arXiv 2606.17573](https://arxiv.org/abs/2606.17573)
-- [UndoBench: Separating Task Competence from Recovery Capability in Tool-Using AI Agents, arXiv 2610.05622](https://arxiv.org/abs/2610.05622). The title comes from secondary coverage; confirm it against arXiv.
+- [UndoBench: Separating Task Competence from Recovery Capability in Tool-Using AI Agents, arXiv 2610.05622](https://arxiv.org/abs/2610.05622)
 - [IdempotencyBench](https://github.com/gssanjana4/idempotencybench)
 - [ActionProxy](https://github.com/ActionProxy/actionproxy)
 - [MCP issue #3394](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/3394) and [idempotencyKey proposal, closed](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3182)
