@@ -52,11 +52,9 @@ from fivefold.harness.migrations import (
     create_run_database,
 )
 from fivefold.harness.run import GATEWAY_CONFIGS, Config, InprocRun, RunSpec
-
-ROOT = Path(__file__).resolve().parents[3]
-DEV_001 = ROOT / "scenarios" / "dev" / "dev-001-single-po.yaml"
-DEV_002 = ROOT / "scenarios" / "dev" / "dev-002-human-approval.yaml"
-DB_DIR = ROOT / "db"
+from fivefold.paths import DB_DIR
+from fivefold.paths import DEV_001 as DEV_001
+from fivefold.paths import DEV_002 as DEV_002
 
 ORDER = "submit_purchase_order"
 

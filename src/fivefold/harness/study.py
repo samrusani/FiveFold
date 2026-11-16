@@ -99,7 +99,6 @@ from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import result_json
 from fivefold.harness.cells import Cell, Expected, cell_plan, cell_scenario, load_expected
-from fivefold.harness.demo import DB_DIR, DEV_001
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
@@ -115,6 +114,7 @@ from fivefold.harness.migrations import (
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.registry import forget
 from fivefold.harness.run import CONFIGS, Config, InprocRun, RunSpec, run_plan
+from fivefold.paths import DB_DIR, DEV_001
 from fivefold.recorder.cassette import Cassette, response_message
 
 ALL: Final = "all"

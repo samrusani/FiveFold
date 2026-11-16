@@ -52,9 +52,7 @@ from pydantic import BaseModel, ConfigDict
 
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario
-
-ROOT = Path(__file__).resolve().parents[3]
-EXPECTED = ROOT / "faults" / "expected.yaml"
+from fivefold.paths import EXPECTED
 
 ORDER = "submit_purchase_order"
 APPROVAL = "request_approval"

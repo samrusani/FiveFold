@@ -69,7 +69,7 @@ from fivefold.agents.worker import WorkerEnd
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.evaluator import result_json
-from fivefold.harness.demo import DB_DIR, DEMO_BY_KEY, verdict_line
+from fivefold.harness.demo import DEMO_BY_KEY, verdict_line
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
@@ -79,6 +79,7 @@ from fivefold.harness.migrations import (
 )
 from fivefold.harness.models import SCRIPTED, Live
 from fivefold.harness.run import CONFIGS, RunResult, RunSpec
+from fivefold.paths import DB_DIR
 from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import (
     RECORDS,

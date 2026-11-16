@@ -40,6 +40,11 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/fivefold"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"db" = "fivefold/_data/db"
+"scenarios/dev" = "fivefold/_data/scenarios/dev"
+"faults/expected.yaml" = "fivefold/_data/faults/expected.yaml"
+
 # Lint and format (0007). Ruff's version is pinned so lint results do not drift.
 [tool.ruff]
 line-length = 100
