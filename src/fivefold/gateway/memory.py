@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
+from decimal import Decimal
 
 from fivefold.domain.contracts import Contract
 from fivefold.gateway.codec import plain_from_json
@@ -143,7 +144,8 @@ class _MemoryTransaction(Transaction):
         snapshot = self._working
         number = len(snapshot.reads) + 1
         read = ReadRecord(read_id_for(number), key, version, _object(plain_from_json(data)), vt)
-        self._working = replace(snapshot, reads=frozen({**snapshot.reads, read.read_id: read}))
+        stored = replace(read, data=_object(plain_from_json(_jsonb_numbers(data))))
+        self._working = replace(snapshot, reads=frozen({**snapshot.reads, read.read_id: stored}))
         return read
 
     def read_of(self, key: str, version: int) -> ReadRecord | None:
@@ -172,7 +174,7 @@ class _MemoryTransaction(Transaction):
             proposal_id,
             operation,
             intent_id,
-            _object(plain_from_json(args)),
+            _object(plain_from_json(_jsonb_numbers(args))),
             based_on,
             admission,
             reason,
@@ -235,7 +237,7 @@ class _MemoryTransaction(Transaction):
     ) -> int:
         snapshot = self._working
         call_no = len(snapshot.tool_calls) + 1
-        kept = _object(plain_from_json(args))
+        kept = _object(plain_from_json(_jsonb_numbers(args)))
         call = ToolCall(call_no, tool, kept, action_id, result, _last_seq(snapshot), vt)
         self._working = replace(snapshot, tool_calls=(*snapshot.tool_calls, call))
         return call_no
@@ -254,4 +256,22 @@ def _last_seq(snapshot: Snapshot) -> int:
 def _object(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError("a call's arguments are a JSON object")
+    return value
+
+
+def _jsonb_numbers(value: object) -> object:
+    """Match jsonb's expansion of exponent notation when it stores an integer number.
+
+    Only the in-memory store uses this. PostgreSQL receives the original value, and its
+    own jsonb conversion sets the representation recorded by a run.
+    """
+    if isinstance(value, float):
+        number = Decimal(str(value))
+        exponent = number.as_tuple().exponent
+        if isinstance(exponent, int) and exponent >= 0:
+            return int(number)
+    if isinstance(value, Mapping):
+        return {key: _jsonb_numbers(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonb_numbers(item) for item in value]
     return value

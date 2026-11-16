@@ -1134,3 +1134,58 @@ def _wait_for[T](check: Callable[[], T | None], limit_s: float) -> T:
             return found
         assert time.monotonic() < deadline, "the condition did not hold in time"
         time.sleep(0.05)
+
+
+def test_stopping_answers_held_tool_calls(split: Split, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Held calls receive the existing stopped error without waiting for their timeout."""
+    run = split.start("G2", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    service = GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url)
+    gateway = serve(service.app())
+    entered = threading.Event()
+    count = 0
+
+    async def hold(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal count
+        count += 1
+        if count == 2:
+            entered.set()
+        await asyncio.Event().wait()
+        return {}
+
+    monkeypatch.setattr(service.serving.tools, "call", hold)
+
+    async def exercise() -> None:
+        scheduler = HostScheduler(HostClock(HostClock.host_ms()))
+        connection = HttpGatewayConnection(scheduler, f"{gateway.url}/mcp", timeout_ms=10_000)
+        await connection.list_tools()
+        calls = [
+            asyncio.create_task(
+                connection.call_tool(
+                    "get_action_status", {"action_id": "A-0001", "wait_ms": 60_000}, 65_000
+                )
+            )
+            for _ in range(2)
+        ]
+        try:
+            assert await asyncio.to_thread(entered.wait, START_S), "calls were not held"
+            headers = {"authorization": f"Bearer {run.secret(HARNESS)}"}
+            async with httpx.AsyncClient() as client:
+                stopped = await client.post(f"{gateway.url}/harness/stop", headers=headers)
+            assert stopped.json() == {"status": "stopped"}
+            for call in calls:
+                with pytest.raises(RunOver) as error:
+                    await asyncio.wait_for(call, timeout=5)
+                assert isinstance(error.value.__cause__, MCPError)
+                assert error.value.__cause__.code == -32019
+        finally:
+            for call in calls:
+                call.cancel()
+            await asyncio.gather(*calls, return_exceptions=True)
+            connection.close()
+
+    try:
+        asyncio.run(asyncio.wait_for(exercise(), AGENT_S))
+    finally:
+        gateway.stop()
+        simulator.stop()
