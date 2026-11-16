@@ -40,7 +40,7 @@ Read these before writing code, in this order:
 
 ## Pull requests
 
-- One ticket per PR, kept small. Keep one open PR per branch, and restart the branch from `main` after each merge.
+- One ticket per PR, kept small. Keep one open PR per branch, and restart the branch from `main` after each merge. When a reviewer merges a sprint's PRs together at its end, stack them: each ticket's branch starts from the previous ticket's branch, and every PR targets `main`.
 - The description names the spec section and decision records it implements, lists each library API it uses with where it was checked (a docs URL, or the installed source path and version), and states anything left uncertain.
 - Dependency upgrades are separate PRs. An upgrade of LangGraph, langgraph-prebuilt or the MCP SDK re-checks the facts that 0008 and 0009 pin.
 - Run the full deterministic suite before asking for review.
