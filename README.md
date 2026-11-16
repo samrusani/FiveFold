@@ -290,6 +290,8 @@ In demo 1, K = 4 replays the calls up to the order, so the new model takes over 
 
 The viewer shows the runs on your PostgreSQL server: each run's timeline and five-property scorecard, and a demo's B0 and G2 runs side by side (record 0012). It only reads. It needs Node 26, the current LTS line, and npm, to build its frontend once.
 
+An installed package has no built frontend. Its viewer shows a not-built page and still serves the API. To use the frontend with an installed package, build it from a checkout and pass its `viewer/dist` directory with `python -m fivefold.viewer --static PATH`.
+
 ```
 make viewer-build   # install the viewer's locked npm packages and build its frontend
 make demo           # run the demos; each run lists itself in the run registry
@@ -479,6 +481,8 @@ make test-fast  # only the tests that need no database
 make demo       # the four demos, for B0 and G2, from a seed
 make help       # every target
 ```
+
+CI also builds the wheel, installs it outside the checkout and runs demo 1 against PostgreSQL 16.
 
 The demos, the tests and every command that runs an episode connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose database, `postgresql://postgres@127.0.0.1:5432/postgres`. Any PostgreSQL 16 server works if that connection is a superuser and the component roles can log in. `db/bootstrap.sql` creates those roles without a password; the Compose database and CI trust local connections, so the roles need none there. Test runs that share one server at the same time need different `FIVEFOLD_TEST_DB_PREFIX` values.
 
