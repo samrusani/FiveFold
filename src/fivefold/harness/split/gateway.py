@@ -276,12 +276,32 @@ class AgentHop:
         if message.kind == "notification":
             return await call_next(replace(ctx, request=Delivery(message.seq)))
         try:
-            result = await call_next(replace(ctx, request=Delivery(message.seq)))
+            result = await self._until_stop(replace(ctx, request=Delivery(message.seq)), call_next)
+            if serving.stopping.is_set():
+                raise MCPError(code=SERVICE_STOPPED, message="the run has stopped")
         except Exception as error:
-            self._answer(message, ctx, _error_body(ctx, error)).delivered()
+            if not serving.stopping.is_set():
+                self._answer(message, ctx, _error_body(ctx, error)).delivered()
             raise
         self._answer(message, ctx, _result_body(ctx, result)).delivered()
         return result
+
+    async def _until_stop(
+        self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
+    ) -> HandlerResult:
+        """Answer a held request with the existing stopped error when the run stops."""
+        stopping = self._service.serving.stopping
+        call = asyncio.ensure_future(call_next(ctx))
+        stopped = asyncio.create_task(stopping.wait())
+        try:
+            await asyncio.wait((call, stopped), return_when=asyncio.FIRST_COMPLETED)
+            if stopping.is_set():
+                raise MCPError(code=SERVICE_STOPPED, message="the run has stopped")
+            return await call
+        finally:
+            call.cancel()
+            stopped.cancel()
+            await asyncio.gather(call, stopped, return_exceptions=True)
 
     def _answer(self, request: Envelope, ctx: ServerRequestContext[Any, Any], body: Any) -> _Sent:
         hops = self._service.serving.hops

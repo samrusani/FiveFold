@@ -175,3 +175,16 @@ def test_a_schema_refusal_without_a_textual_intent_records_none(store: Store) ->
     store.refuse_invalid("reserve_inventory", {"intent_id": 7, "based_on": "R-1"}, "bad", 0)
     (record,) = store.snapshot().proposals
     assert (record.intent_id, record.based_on) == (None, ())
+
+
+def test_large_exponent_numbers_match_jsonb(store: Store) -> None:
+    args: dict[str, object] = {"intent_id": "REQ-1", "nested": [1e23, -1e23]}
+    store.refuse_invalid("submit_purchase_order", args, "bad quantity", 3)
+    (proposal,) = store.snapshot().proposals
+    assert proposal.args["nested"] == (10**23, -(10**23))
+
+
+def test_large_exponent_read_matches_jsonb_snapshot(store: Store) -> None:
+    read = store.record_read(QUOTE, 1, {"value": 1e23}, 0)
+    assert read.data["value"] == 1e23
+    assert store.snapshot().reads[read.read_id].data["value"] == 10**23
