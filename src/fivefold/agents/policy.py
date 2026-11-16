@@ -5,8 +5,8 @@ The policy is the same in every configuration, except where 0008 says B0 differs
 1. Read the quotes of the intent's allowed suppliers and the budget. Choose the cheapest
    acceptable quote that fits the budget (with `rank` 1, the second-cheapest: F9's
    `different_args` variant for the second worker).
-2. B0 only: request approval, then wait with `get_approval_status(wait_ms = 60,000)`, at
-   most 3 times.
+2. B0 only: request approval, then wait with `get_approval_status` for at most the
+   scenario limit or 60,000 ms, at most 3 times (0015).
 3. Submit the write once, with no optional fields. G modes cite exactly the reads of the
    operation's dependencies; B0 passes the approval id and those reads' versions.
 4. Act on the result, as 0008's table says.
@@ -34,7 +34,7 @@ from fivefold.domain.rules import Operation, budget_key, inventory_key, quote_ke
 from fivefold.domain.scenario import Intent, PurchaseOrderAccept, ReservationAccept
 
 WAIT_MS = 60_000
-"""How long each status wait asks for (0008)."""
+"""The maximum the scripted policy asks for in each status wait (0015)."""
 
 MAX_WAITS = 3
 """Status waits per action, and approval waits per request (0008)."""
@@ -107,14 +107,17 @@ Policy = Generator[ToolCall, Result, None]
 _Step = Generator[ToolCall, Result, Any]
 
 
-def scripted_policy(intents: Sequence[Intent], *, mode: Mode, rank: int = 0) -> Policy:
-    """The policy for one agent worker; `rank` 1 picks the second-cheapest option."""
+def scripted_policy(
+    intents: Sequence[Intent], *, mode: Mode, rank: int = 0, max_wait_ms: int = WAIT_MS
+) -> Policy:
+    """The policy for one worker, with its scenario limit and option rank."""
+    wait_ms = min(WAIT_MS, max_wait_ms)
     outcomes: dict[str, _Outcome] = {}
     for intent in intents:
         if mode is Mode.GATEWAY:
-            outcomes[intent.id] = yield from _gateway_intent(intent, rank)
+            outcomes[intent.id] = yield from _gateway_intent(intent, rank, wait_ms)
         else:
-            outcomes[intent.id] = yield from _baseline_intent(intent, rank)
+            outcomes[intent.id] = yield from _baseline_intent(intent, rank, wait_ms)
     if mode is Mode.GATEWAY:
         for outcome in outcomes.values():
             yield from _refresh(outcome)
@@ -184,7 +187,7 @@ def _read_and_choose(intent: Intent, rank: int) -> _Step:
 # G modes ---------------------------------------------------------------------------------
 
 
-def _gateway_intent(intent: Intent, rank: int) -> _Step:
+def _gateway_intent(intent: Intent, rank: int, wait_ms: int) -> _Step:
     """Steps 1, 3 and 4 for one intent, through the gateway's tools."""
     actions: list[str] = []
     stale_retries = failure_retries = reread_retries = 0
@@ -209,7 +212,7 @@ def _gateway_intent(intent: Intent, rank: int) -> _Step:
                         return _settled_outcome(str(details.get("state")), actions, None)
                     waits[holder] = waits.get(holder, 0) + 1
                     result = yield ToolCall(
-                        "get_action_status", {"action_id": holder, "wait_ms": WAIT_MS}
+                        "get_action_status", {"action_id": holder, "wait_ms": wait_ms}
                     )
                     continue
                 if reason == "intent_done":
@@ -234,7 +237,7 @@ def _gateway_intent(intent: Intent, rank: int) -> _Step:
                     return _settled_outcome(state, actions, None)
                 waits[action_id] = waits.get(action_id, 0) + 1
                 result = yield ToolCall(
-                    "get_action_status", {"action_id": action_id, "wait_ms": WAIT_MS}
+                    "get_action_status", {"action_id": action_id, "wait_ms": wait_ms}
                 )
                 continue
             reason = str(result.get("reason"))
@@ -331,7 +334,7 @@ def _basis(intent: Intent, choice: _Choice) -> dict[str, int]:
     return {key: int(read["version"]) for key, read in zip(keys, choice.reads, strict=True)}
 
 
-def _baseline_intent(intent: Intent, rank: int) -> _Step:
+def _baseline_intent(intent: Intent, rank: int, wait_ms: int) -> _Step:
     """Steps 1 to 4 for one intent, against the simulator's API."""
     approval: tuple[str, dict[str, str | int]] | None = None
     stale_retries = failure_retries = 0
@@ -350,7 +353,7 @@ def _baseline_intent(intent: Intent, rank: int) -> _Step:
                 waits += 1
                 answer = yield ToolCall(
                     "get_approval_status",
-                    {"approval_id": answer["approval_id"], "wait_ms": WAIT_MS},
+                    {"approval_id": answer["approval_id"], "wait_ms": wait_ms},
                 )
             if answer.get("status") != "approved":
                 status = answer.get("status", answer.get("reason"))

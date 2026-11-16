@@ -74,7 +74,9 @@ def test_a_gateway_call_holding_a_nul_is_refused_with_invalid_params_and_not_log
     gateway's invalid params, and nothing is logged. The agent's framework retries a
     refused call as it retries any MCP error, so the worker still ends with an error."""
 
-    def reads_with_a_nul(intents: Sequence[Intent], *, mode: Mode, rank: int = 0) -> Policy:
+    def reads_with_a_nul(
+        intents: Sequence[Intent], *, mode: Mode, rank: int = 0, max_wait_ms: int = 60_000
+    ) -> Policy:
         yield ToolCall("get_quote", ARGUMENTS[where])
 
     result, dsn = run_with(run_database, monkeypatch, config, reads_with_a_nul)
@@ -90,7 +92,9 @@ def test_a_baseline_report_holding_a_nul_is_a_tool_error_the_model_sees(
     refusals: dict[str, str] = {}
     """The answer to each call holding a NUL; the model replays its policy at each call."""
 
-    def calls_with_a_nul(intents: Sequence[Intent], *, mode: Mode, rank: int = 0) -> Policy:
+    def calls_with_a_nul(
+        intents: Sequence[Intent], *, mode: Mode, rank: int = 0, max_wait_ms: int = 60_000
+    ) -> Policy:
         refused = yield ToolCall("get_quote", {"supplier_id": "S-1", "sku": f"W-100{NUL}"})
         refusals["get_quote"] = str(refused)
         claims = [{"intent_id": intent.id, "status": "unknown"} for intent in intents]

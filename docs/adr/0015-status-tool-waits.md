@@ -1,6 +1,6 @@
 # 0015: Status-tool waits and the scenario's `max_wait_ms`
 
-Status: Proposed
+Status: Accepted on 16 Nov 2026 by the maintainer: options A and B together.
 Date: 2026-11-15
 Spec sections affected: Gateway (`get_action_status`), Tool contracts (parameters, through record 0005), Configurations (the scripted agent policy, through record 0008), Simulator (the scenario file, through record 0009)
 
@@ -68,7 +68,7 @@ The published schemas do not change. No scenario in the repository sets `max_wai
 
 ## Decision
 
-Recommended: options A and B together.
+The maintainer chose options A and B together.
 
 1. The scripted policy asks for `min(60,000, max_wait_ms)` ms in each wait: `get_approval_status` in B0, and `get_action_status` in G1 and G2, including the wait on another worker's action after `intent_busy`. Each still waits at most 3 times.
 2. The scenario file accepts `params.max_wait_ms` from 0 to 60,000 ms. A larger value is refused when the scenario loads.

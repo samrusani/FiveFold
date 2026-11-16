@@ -782,7 +782,10 @@ class InprocRun:
 
         def scripted(its_think: Think) -> BaseChatModel:
             return ScriptedModel(
-                lambda: scripted_policy(scenario.intents, mode=mode, rank=rank), its_think
+                lambda: scripted_policy(
+                    scenario.intents, mode=mode, rank=rank, max_wait_ms=scenario.params.max_wait_ms
+                ),
+                its_think,
             )
 
         return self.models.chat_model(

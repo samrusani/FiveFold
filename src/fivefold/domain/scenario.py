@@ -267,8 +267,8 @@ class Params(ScenarioModel):
     max_probes: Count = 20
     tool_wait_ms: Ms = 2_500
     approval_poll_interval_ms: PositiveMs = 500
-    max_wait_ms: Ms = 60_000
-    """The longest `wait_ms` a status tool accepts."""
+    max_wait_ms: Ms = Field(default=60_000, le=60_000)
+    """The longest `wait_ms` a status tool accepts, at most 60,000 (0015)."""
     think_ms: Ms = 1_000
     """Virtual time each model call takes (0009)."""
 

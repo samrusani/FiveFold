@@ -214,7 +214,7 @@ Tools the agent sees over MCP. 0008 lists the baseline tool surface.
 | --- | --- | --- |
 | get_quote, list_suppliers, get_budget, get_inventory | Read | Data, version and read_id. The gateway records each read. |
 | submit_purchase_order, reserve_inventory | Write | An action result: action_id, state, effect_id when confirmed, the stale facts when a stale input caused a rejection, and what to reconcile when the outcome is unknown. Or a refusal with a reason. |
-| get_action_status(action_id, wait_ms) | Status | The action result. Waits up to `wait_ms` (at most 60,000) for a final state. Never contacts the destination. |
+| get_action_status(action_id, wait_ms) | Status | The action result. Waits up to `wait_ms` (at most 60,000 ms, or the scenario's lower `max_wait_ms`) for a final state. Never contacts the destination. |
 | submit_final_report | Report | Accepted, or, in G2, refused when a claim contradicts the gateway's records |
 
 - Write states the agent can see: `confirmed`, `rejected`, `failed`, `pending_approval` and `outcome_unknown`, plus `proposed`, `authorized` or `dispatched` when the tool's wait ends first. 0003 gives the exact result shapes and refusal reasons.
@@ -247,7 +247,7 @@ Detail: 0005.
 | C2 | idempotency_key |
 | C3 | idempotency_key, conditional_write |
 
-Destination parameters, in virtual ms: `max_hop_latency` 50, `commit_deadline` (D) 10,000 and `status_lag` (L) 0. Gateway settings: `dispatch_timeout` (T) 2,000; retry backoff from T, doubling, capped at 8 × T; 5 attempts at most; status probes every 1,000, at most 20; `tool_wait_ms` 2,500; approval polling every 500. Scenarios can override any value. The settle time is `S = max_hop_latency + D`.
+Destination parameters, in virtual ms: `max_hop_latency` 50, `commit_deadline` (D) 10,000 and `status_lag` (L) 0. Gateway settings: `dispatch_timeout` (T) 2,000; retry backoff from T, doubling, capped at 8 × T; 5 attempts at most; status probes every 1,000, at most 20; `tool_wait_ms` 2,500; approval polling every 500. Scenarios can override any value, except that `max_wait_ms` cannot exceed 60,000 ms. The settle time is `S = max_hop_latency + D`.
 
 | Level | What G2 does after a lost reply |
 | --- | --- |

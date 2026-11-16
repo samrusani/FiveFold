@@ -1,7 +1,7 @@
 # 0003: Action state machine and invariants
 
 Status: Accepted (2026-11-14)
-Amended by: 0010 (2026-11-14): T5, T11 and T12 reasons; escalation; final report and run closing
+Amended by: 0010 (2026-11-14): T5, T11 and T12 reasons; escalation; final report and run closing; 0015 (2026-11-16): status waits use the scenario limit
 Date: 2026-11-14
 Spec sections affected: Action state machine, Gateway (write tools, get_action_status, submit_final_report, startup), Data model (Action, Attempt, ActionEvent)
 Resolves M0 questions: 8, 9, 10, 11, 12 (state side), 15 (state side), 16; part of 38
@@ -81,7 +81,7 @@ Escalation ends automatic recovery: after the `escalated` note, the gateway send
 - It then locks the action row, confirms that the state and the latest event are unchanged since the check, and commits T6 together with the new attempt row and the check result. Only then does it send. If anything changed, it commits nothing and starts again.
 - Retries (T13) follow the same pattern.
 - A write tool call runs admission and every step that needs no waiting. When policy approves at once, the call returns the result of the first send (`confirmed`, `failed` or `outcome_unknown`) within `tool_wait_ms` (0005). When approval is pending, the call returns `pending_approval` at once.
-- `get_action_status(action_id, wait_ms)` reads gateway state only. It never contacts the destination. With `wait_ms` above 0 (at most 60,000 virtual ms), it returns as soon as the action reaches a final state, or when the wait ends. Reconciliation runs on the gateway's own timers, whether or not the agent asks.
+- `get_action_status(action_id, wait_ms)` reads gateway state only. It never contacts the destination. With `wait_ms` above 0 (at most 60,000 virtual ms, or the scenario's lower `max_wait_ms`), it returns as soon as the action reaches a final state, or when the wait ends. Reconciliation runs on the gateway's own timers, whether or not the agent asks.
 - Network calls never happen inside a database transaction. A transition locks the action row, checks the expected from-state, writes the new state and its event, and commits. A step that finds the action in an unexpected state does nothing.
 
 ### Startup recovery

@@ -423,3 +423,9 @@ def test_feasibility_takes_linear_time_in_the_number_of_intents(dev_data: Data) 
     dev_data["facts"]["budget/CC-OPS"]["limit_minor"] = need - 1
     with pytest.raises(ScenarioError, match="not feasible together"):
         scenario_from_data(dev_data)
+
+
+def test_status_wait_limit_cannot_exceed_tool_schema(dev_data: Data) -> None:
+    dev_data["params"]["max_wait_ms"] = 60_001
+    with pytest.raises(ScenarioError, match="max_wait_ms"):
+        scenario_from_data(dev_data)

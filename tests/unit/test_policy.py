@@ -62,7 +62,9 @@ class World:
         return queue.pop(0)
 
     def run(self, scenario: Scenario, *, rank: int = 0) -> list[ToolCall]:
-        policy = scripted_policy(scenario.intents, mode=self.mode, rank=rank)
+        policy = scripted_policy(
+            scenario.intents, mode=self.mode, rank=rank, max_wait_ms=scenario.params.max_wait_ms
+        )
         try:
             call = next(policy)
             while True:
@@ -433,3 +435,27 @@ def test_the_policy_is_a_pure_function_of_the_results(scenario: Scenario) -> Non
 
 
 Responder = Callable[[ToolCall], Result]
+
+
+@pytest.mark.parametrize("limit", [0, 5_000])
+@pytest.mark.parametrize("case", ["approval", "action", "busy"])
+def test_status_waits_respect_the_scenario_limit(scenario: Scenario, limit: int, case: str) -> None:
+    params = scenario.params.model_copy(update={"max_wait_ms": limit})
+    scenario = scenario.model_copy(update={"params": params})
+    world = World(Mode.BASELINE if case == "approval" else Mode.GATEWAY)
+    if case == "approval":
+        world.then("request_approval", approval("pending"))
+        world.then("get_approval_status", *[approval("pending")] * 3)
+    else:
+        first = (
+            refused("intent_busy", action_id="A-0001", state="pending_approval")
+            if case == "busy"
+            else action("pending_approval")
+        )
+        world.then("submit_purchase_order", first)
+        world.then("get_action_status", *[action("pending_approval")] * 4)
+    world.then("submit_final_report", ACCEPTED)
+    calls = world.run(scenario)
+    name = "get_approval_status" if case == "approval" else "get_action_status"
+    waits = [call.args["wait_ms"] for call in calls if call.name == name]
+    assert waits == ([limit] * 3 if case == "approval" else [limit] * 3 + [0])

@@ -1,7 +1,7 @@
 # 0009: Runs, scenarios and deterministic execution
 
 Status: Accepted (2026-11-14)
-Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too
+Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too; 0015 (2026-11-16): cap scenario status waits
 Date: 2026-11-14
 Spec sections affected: Simulator (determinism, scenarios), Playback and branching, Stack (packaging, `make demo`), Testing, Data model (Run)
 Resolves M0 questions: 29, 31, 32, 33 (MCP transport), 41, 42 (scenario format); part of 38
@@ -130,7 +130,7 @@ budget: {max_agent_steps: 40, max_tokens: 60000}   # per agent worker
 - `facts`: initial values. Every fact starts at version 1.
 - `authority`: see 0002. The resolver, when present, attests only after the settle time and always tells the truth.
 - `faults`: see 0006. It may be a random plan.
-- `params`: overrides the contract and timing defaults in 0005 and in this record. Each run records the values it used.
+- `params`: overrides the contract and timing defaults in 0005 and in this record. `max_wait_ms` is at most 60,000. Each run records the values it used.
 - `budget`: applies to each agent worker.
 - A JSON Schema for this format lives in the repo, and the loader validates every scenario against it. The loader also checks that the required intents are feasible together on the initial facts (0004).
 - The loader takes any path. Held-out scenarios stay outside the repo and are run by passing their path.
