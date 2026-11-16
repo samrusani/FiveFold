@@ -448,7 +448,7 @@ Limits: a split run has one agent worker, `agent-1`. Start each service once per
 
 ## Status
 
-FiveFold is working toward its first release, v0.1. Everything above runs today.
+FiveFold is working toward its first release, v0.1. The package version is `0.1.0a1`. Everything above runs today.
 
 - **Built:** the simulator at contract levels C0 to C3; the deterministic harness with eleven faults, fixed or random fault plans, recorded playback and branching; the reference gateway (G2) and the approval gate (G1); the LangGraph agent with scripted and live models; the evaluator with its reports, cost and recovery latency; the viewer; the admin API; and the split topology for bringing your own agent.
 - **Left for v0.1:** the live-model study and its report with raw data, and a short video. The study waits for the maintainer's choice of models, API keys and a spend cap. The held-out scenarios are kept outside this repository.
@@ -472,7 +472,7 @@ Questions, bug reports and failure modes FiveFold does not cover yet are welcome
 
 ## Development
 
-You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Docker Compose can run the database for you. The viewer's frontend also needs Node 26 and npm; the Python tests never do.
+You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Put `uv` on your path. Two packaging tests run `uv build` and need network access for build dependencies. Docker Compose can run the database for you. The viewer's frontend also needs Node 26 and npm; the Python tests never do.
 
 ```
 make setup      # install the locked dependencies into .venv
