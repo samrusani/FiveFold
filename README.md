@@ -466,6 +466,7 @@ Questions, bug reports and failure modes FiveFold does not cover yet are welcome
 - [docs/limitations.md](docs/limitations.md): what each guarantee depends on, and the known limits
 - [docs/adr/](docs/adr/README.md): decision records, with a suggested reading order
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to propose changes
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): community conduct and reporting
 - [SECURITY.md](SECURITY.md): how to report a vulnerability privately
 - [CLAUDE.md](CLAUDE.md): rules for coding agents working in this repository
 

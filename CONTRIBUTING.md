@@ -2,6 +2,8 @@
 
 FiveFold is working toward its first release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
 
+Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the community.
+
 ## How decisions are made
 
 - The contracts live in `docs/spec.md`. The maintainer owns their meaning: action identity, the grant lifecycle, states and transitions, invariants, the five property definitions, tool names and return shapes, contract levels and fault IDs.
