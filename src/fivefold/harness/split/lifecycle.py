@@ -85,10 +85,8 @@ from fivefold.harness.split.rundir import (
     read_run,
     write_run,
 )
+from fivefold.paths import DB_DIR
 from fivefold.sim import SimConfig, setup_run
-
-ROOT = Path(__file__).resolve().parents[4]
-DB_DIR = ROOT / "db"
 
 DEFAULT_MODEL = "unknown"
 """The model a split run records when the user names none."""

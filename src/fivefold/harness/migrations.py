@@ -52,6 +52,8 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 
+from fivefold.paths import DB_DIR
+
 DEFAULT_ADMIN_DSN = "postgresql://postgres@127.0.0.1:5432/postgres"
 """Used when FIVEFOLD_ADMIN_DSN is unset: the local Docker Compose database."""
 
@@ -490,8 +492,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--db-dir",
         type=Path,
-        default=Path("db"),
-        help="directory holding bootstrap.sql and migrations/ (default: db)",
+        default=DB_DIR,
+        help="directory holding bootstrap.sql and migrations/ (default: bundled data)",
     )
     args = parser.parse_args(argv)
     admin_dsn: str = args.dsn
