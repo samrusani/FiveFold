@@ -257,7 +257,12 @@ async def run_remote_agent(agent: RemoteAgent) -> tuple[WorkerEnd, str]:
     def think() -> Any:
         return scheduler.sleep(0)
 
-    model = ScriptedModel(lambda: scripted_policy(scenario.intents, mode=mode, rank=0), think)
+    model = ScriptedModel(
+        lambda: scripted_policy(
+            scenario.intents, mode=mode, rank=0, max_wait_ms=params.max_wait_ms
+        ),
+        think,
+    )
     budget = scenario.budget
     spec = WorkerSpec(WORKER, scenario.task, budget.max_agent_steps, budget.max_tokens)
     if gateway:

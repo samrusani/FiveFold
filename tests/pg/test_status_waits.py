@@ -251,19 +251,16 @@ def run(dsn: str, data: dict[str, Any], config: Config) -> InprocRun:
     return inproc
 
 
-@pytest.mark.parametrize(("max_wait_ms", "made"), [(60_000, 3 * LOOKUPS_PER_WAIT), (5_000, 0)])
+@pytest.mark.parametrize(("max_wait_ms", "made"), [(60_000, 3 * LOOKUPS_PER_WAIT), (5_000, 3 * 11)])
 def test_b0_s_scripted_waits_are_bounded_by_the_scenario_s_maximum(
     run_database: Callable[[str], str], dev_data: dict[str, Any], max_wait_ms: int, made: int
 ) -> None:
-    """The scripted policy waits for a decision with 60,000 ms, at most 3 times (0008).
-    At the default maximum each wait makes 121 lookups. A scenario that lowers the
-    maximum to 5,000 ms has each wait refused before anything is sent, so the agent
-    stops work on the intent."""
+    """The policy waits at most 3 times, using the scenario's limit (0015)."""
     dsn = run_database(f"b0_wait_{max_wait_ms}")
     run(dsn, queued(dev_data, max_wait_ms), "B0")
     assert lookups(dsn)[0] == made
     sent = rows(dsn, "SELECT count(*) FROM harness.message_log WHERE api = 'get_approval_status'")
-    assert sent == [(2 * 3 if made else 0,)], "each wait sent is a request and its answer"
+    assert sent == [(2 * 3,)], "each wait sent is a request and its answer"
     (report,) = rows(dsn, "SELECT report FROM harness.final_report WHERE valid")
     assert [claim["status"] for claim in report[0]["claims"]] == ["not_done"]
 
@@ -283,3 +280,33 @@ def test_the_gateway_s_status_tool_takes_the_scenario_s_maximum(
         "invalid_args",
         "wait_ms: Value error, the run's max_wait_ms is 5000",
     )
+
+
+@pytest.mark.parametrize("config", ["B0", "G2"])
+def test_dev_002_with_short_wait_completes(
+    run_database: Callable[[str], str], config: Config
+) -> None:
+    from fivefold.domain.scenario import load_scenario_file
+    from fivefold.paths import DEV_002
+
+    scenario = load_scenario_file(DEV_002)
+    params = scenario.params.model_copy(update={"max_wait_ms": 5_000})
+    scenario = scenario.model_copy(update={"params": params})
+    dsn = run_database(f"short_wait_{config.lower()}")
+    inproc = InprocRun(RunSpec(scenario, config, Contract.C2, 7), dsn)
+    asyncio.run(inproc.execute())
+    assert inproc.result.evaluation is not None
+    assert str(inproc.result.evaluation.verdict) == "pass"
+    if config == "B0":
+        waits = rows(
+            dsn,
+            "SELECT body->>'wait_ms' FROM harness.message_log"
+            " WHERE api = 'get_approval_status' AND kind = 'request'",
+        )
+    else:
+        waits = rows(
+            dsn,
+            "SELECT args->>'wait_ms' FROM gw.tool_call"
+            " WHERE tool = 'get_action_status' AND args->>'wait_ms' <> '0'",
+        )
+    assert waits and all(wait == "5000" for (wait,) in waits)

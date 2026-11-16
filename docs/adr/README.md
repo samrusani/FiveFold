@@ -29,7 +29,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | [0012](0012-viewer-tooling.md) | Viewer v1 tooling: a read-only Starlette API, a run registry, and a React and TypeScript frontend built with Vite | Accepted |
 | [0013](0013-f10-cells.md) | F10's delayed and stale-beyond-L cells: the delayed cell's `count`, and where the stale state is taken | Accepted |
 | [0014](0014-recovery-latency.md) | Recovery latency: per affected intent, from the first fault that touched it until the stack's evidence settles the outcome found at the end; unresolved intents counted apart | Accepted |
-| [0015](0015-status-tool-waits.md) | Status-tool waits and the scenario's `max_wait_ms`: the scripted policy waits at most the scenario's limit, and a scenario can lower the limit but not raise it above 60,000 ms | Proposed |
+| [0015](0015-status-tool-waits.md) | Status-tool waits and the scenario's `max_wait_ms`: the scripted policy waits at most the scenario's limit, and a scenario can lower the limit but not raise it above 60,000 ms | Accepted |
 
 ## Suggested reading order
 

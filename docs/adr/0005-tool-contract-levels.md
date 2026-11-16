@@ -1,6 +1,7 @@
 # 0005: Tool contract levels
 
 Status: Accepted (2026-11-14)
+Amended by: 0015 (2026-11-16): the status wait limit can be lowered, not raised
 Date: 2026-11-14
 Spec sections affected: Tool contracts, Simulator, Gateway (recovery)
 Resolves M0 questions: 5, 15, 36; parts of 14 and 23
@@ -58,9 +59,9 @@ Gateway settings. These are not promises by the destination.
 | A status probe with no answer within T | Counts as unanswered |
 | `tool_wait_ms`: how long a write tool call waits before returning the current state | 2,500 |
 | `approval_poll_interval` | 500 |
-| Longest `wait_ms` accepted by status tools | 60,000 |
+| Longest `wait_ms` accepted by status tools | 60,000, or a scenario value from 0 to 60,000 |
 
-Scenarios can override every value in their `params` block (0009), and each run records the values it used. The simulator keeps its promises unless a fault breaks one. Such faults are marked as contract violations in 0006.
+Scenarios can override every value in their `params` block (0009), except that `max_wait_ms` cannot exceed 60,000. Each run records the values it used. The simulator keeps its promises unless a fault breaks one. Such faults are marked as contract violations in 0006.
 
 ### Gateway behaviour after a non-definitive answer
 
