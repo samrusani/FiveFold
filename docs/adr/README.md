@@ -18,6 +18,8 @@ Status is **Proposed** until the maintainer marks it **Accepted**. Agents never 
 | [0008](0008-configurations-and-trust-boundaries.md) | Configurations B0, G1 and G2, the scripted policy, trust boundaries and database roles | Accepted |
 | [0009](0009-runs-and-deterministic-execution.md) | Runs, the scenario format, the deterministic scheduler, the virtual clock, replay and branching | Accepted |
 
+Record 0007 preserves the repository name used on 14 Nov 2026. The current name is FiveFold.
+
 The original M0 list had seven records. Records 0008 and 0009 were added because some review questions did not fit 0001 to 0007. [m0-review-decisions.md](m0-review-decisions.md) maps each of the 44 review questions to its decision, lists every change to items the maintainer owns, and lists the 17 fixes made after an independent review of the drafts.
 
 ## Records after M0

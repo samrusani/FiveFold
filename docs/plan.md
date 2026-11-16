@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 started (G1, the evaluator's report with tokens, cost and recovery latency, record 0014, the live model adapter with Ollama, Anthropic, OpenAI and Google, and the study runner are in; the live study waits for the maintainer's models, keys, prices and spend cap); M5 started (the README's two paths, the limitations page and the security policy are in). The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 started (G1, the evaluator's report with tokens, cost and recovery latency, record 0014, the live model adapter with Ollama, Anthropic, OpenAI and Google, and the study runner are in; the live study waits for the maintainer's models, keys, prices and spend cap); M5 started (the README's two paths, the limitations page, the security policy, the code of conduct and an installable package are in). The conduct contact is a placeholder. Records 0015 and 0016 are accepted. The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
@@ -77,9 +77,9 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 
 - [ ] Demo 1 reproduces from the README in under 15 minutes on a clean machine
 - [ ] Report includes raw results, denominators, configurations and model versions
-- [ ] Limitations section states what each guarantee depends on
-- [ ] Citations give full titles and arXiv IDs, labelled as preprints
-- [ ] Every figure quoted from a preprint is checked against the paper; unconfirmed citations are fixed or removed
+- [x] Limitations section states what each guarantee depends on
+- [x] Citations give full titles and arXiv IDs, labelled as preprints
+- [x] Every figure quoted from a preprint is checked against the paper; unconfirmed citations are fixed or removed
 - [ ] Report shared with the cited papers' authors; MCP issue #3394 gets a link once the conformance test exists
 - [ ] Open-source files in place: LICENSE, CODE_OF_CONDUCT and a security policy
 - [ ] Docs and git history audited for secrets and personal identifiers

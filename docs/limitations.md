@@ -2,7 +2,7 @@
 
 What each of FiveFold's guarantees depends on, and the limits known so far. The guarantees are those of the gateway in configuration G2. Decision records are cited by number and live in [adr/](adr/README.md).
 
-Status: written for v0.1 on 15 Nov 2026. It states the accepted records 0001 to 0011, 0013 and 0014 as written. It draws nothing yet from record 0012 (viewer tooling), whose work is not merged.
+Status: updated for v0.1 on 16 Nov 2026. It reflects the accepted decisions through 0016. The viewer is implemented under record 0012.
 
 ## How to read this page
 
@@ -128,7 +128,8 @@ When G2 cannot settle an outcome safely, it escalates to a human, and its automa
 
 ## Scripted and live models
 
-- Deterministic tests, the demos and `faults/expected.yaml` use a scripted model, which follows one fixed policy in every configuration (0008, amended by 0011). Record 0006 fixes some expected outcomes; the rest come from the first reviewed deterministic run, and all are frozen before any live-model run (0006). They show what each configuration does under that policy. A live model can act differently, for example by calling B0's status tool at C1, which the scripted policy never does.
+- Deterministic tests, the demos and `faults/expected.yaml` use a scripted model, which follows one fixed policy in every configuration (0008, amended by 0011 and 0015). Record 0006 fixes some expected outcomes; the rest come from the first reviewed deterministic run, and all are frozen before any live-model run (0006). They show what each configuration does under that policy. A live model can act differently, for example by calling B0's status tool at C1, which the scripted policy never does.
+- The scripted policy waits at most three times, each for no more than the scenario's `max_wait_ms` (0015). A lower limit can leave a slow approval unused.
 - A run is deterministic given its model's outputs (0009). A live run can be reproduced only from its cassette, which records every model call. A replay fails if a request differs from the recorded one, or if the run asks for more or fewer calls than the cassette holds ([spec](spec.md), Playback and branching).
 - Every model call takes `think_ms` of virtual time, 1,000 ms by default, however long the model really takes (0009). A slow model and a fast one see the same virtual timings.
 - A live run needs `FIVEFOLD_LIVE=1`, a spend cap in USD and a price file that prices the model. [Known limits](#known-limits) says what the cap and the token counts do not cover.

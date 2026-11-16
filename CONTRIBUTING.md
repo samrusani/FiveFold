@@ -24,7 +24,7 @@ Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the communi
 
 Releases go to PyPI through `.github/workflows/publish.yml`, with PyPI's Trusted Publishing, so no token is stored anywhere. To release:
 
-1. In a pull request, set the version in `pyproject.toml`, such as `0.1.0`.
+1. In a pull request, set or confirm the version in `pyproject.toml`, such as `0.1.0a1`.
 2. Once it merges, publish a GitHub release whose tag is `v` plus that version, such as `v0.1.0`.
 3. The workflow checks the tag against the version, builds the sdist and the wheel, installs the wheel outside the repository and runs demo 1 from it. Only then does the publish job run, in the GitHub environment `pypi`, whose protection rules apply first.
 
