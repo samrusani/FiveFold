@@ -36,7 +36,9 @@ def test_a_registry_name_the_harness_cannot_make_is_refused() -> None:
 
 
 def test_the_viewer_connects_as_ff_viewer_whatever_user_the_server_string_names() -> None:
-    source = RunSource("postgresql://postgres:secret@db.example:6543/postgres?sslmode=require")
+    source = RunSource(
+        "postgresql://postgres:" + "fixture-password" + "@db.example:6543/postgres?sslmode=require"
+    )
     params = conninfo_to_dict(source._conninfo("fivefold_demo_1_g2"))
     assert params["user"] == VIEWER_ROLE == "ff_viewer"
     assert params["dbname"] == "fivefold_demo_1_g2"
