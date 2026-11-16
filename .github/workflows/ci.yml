@@ -45,6 +45,40 @@ jobs:
       - name: Test
         run: make test
 
+  packaging:
+    name: Installed wheel demo
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      FIVEFOLD_ADMIN_DSN: postgresql://postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv==0.13.8
+      - name: Build the sdist and wheel
+        run: uv build --out-dir dist
+      - name: Run demo 1 from the installed wheel outside the checkout
+        run: |
+          smoke=$(mktemp -d)
+          uv venv --python 3.12 "$smoke/venv"
+          uv pip install --python "$smoke/venv/bin/python" dist/*.whl
+          cd "$smoke"
+          "$smoke/venv/bin/python" -m fivefold.harness.demo 1
+
   viewer:
     name: Viewer build, lint and test
     # The viewer's frontend (0012) on Node's current LTS line; the Python jobs never need Node.
