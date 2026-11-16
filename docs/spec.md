@@ -66,7 +66,7 @@ Detail: 0008.
 | Agent | In G1 and G2, holds no simulator credential and has no route to the simulator | In-process, the agent receives only an MCP client bound to the gateway. In the split topology, the agent's container shares a network only with the gateway. A test checks that the simulator refuses writes from the agent's identity in G modes. |
 | Baselines | B0 to B2 hold a simulator credential, by design; that is what they measure | The run config creates the credential per run |
 | Gateway | The only writer to the simulator in G1 and G2 | Its role has no privileges on schema `sim`; it reaches the simulator only through the simulator's API |
-| Simulator | Owns ground truth | Its role owns schema `sim`; no other role can write it |
+| Simulator | Owns ground truth | Among component roles, only `ff_sim` writes schema `sim`; the migration role owns every schema (0016) |
 | Evaluator and viewer | Read-only outside their own results | Their roles can only select, except `ff_eval` on schema `eval` |
 
 Each component connects with its own role in the run's database:
