@@ -8,7 +8,7 @@
 
 An agent sends a purchase order and crashes. The order goes through, but the reply is lost. The agent restarts from its last checkpoint and sends the order again. This time the reply arrives. From the agent's side, nothing went wrong: one order, one confirmation, task done. The ledger shows two orders on one approval, and a budget 280.00 USD overdrawn.
 
-FiveFold is an open-source test suite for that gap. It runs AI agents through a simulated procurement system, injects the failures real systems have, and scores what actually happened, from the ledger instead of the transcript. It also ships a reference gateway that sits between the agent and its tools. Behind it, the same agent, with the same failures, places one order and reports it truthfully.
+FiveFold is an open-source test suite for that gap. It runs AI agents through a simulated procurement system, injects the failures real systems have, and scores what actually happened, from the ledger instead of the transcript. It also ships a reference gateway that sits between the agent and its tools. Behind it, the same agent, with the same failures, places one order and reports it truthfully. In 1,482 live runs with Claude Sonnet 5.5 and GPT-6.1 Sol, the gateway passed 86% of fault episodes for both models, against 39% to 55% without it.
 
 ## Five checks every action must pass
 
@@ -89,14 +89,17 @@ The output is trimmed; the [tour](docs/tour.md#demo-1-line-by-line) shows all of
 
 ## What the runs show
 
-![Fault cells that pass, by configuration, with the scripted agent: B0, the agent alone, 38% (27 of 72); G1, an approval gate, 39% (31 of 80); G2, the FiveFold gateway, 86% (71 of 83). The other 12 G2 cells are documented limits.](docs/images/results.png)
+![Fault episodes that pass, by configuration, in 1,482 live episodes. B0, the agent alone: Claude Sonnet 5.5 41% (89 of 216), GPT-6.1 Sol 55% (118 of 216), the scripted agent 38% (27 of 72 cells). G1, an approval gate: 39% for all three. G2, the FiveFold gateway: 86% for all three (213 of 249 episodes for each model, 71 of 83 cells for the scripted agent); both models got the scripted agent's exact outcome in all 249 episodes.](docs/images/results.png)
 
-1. **The retry is the duplicate.** In demo 1, the agent alone orders twice after one lost reply. Behind the gateway, the retry carries the first request's idempotency key, so the destination returns the order it already placed.
-2. **An approval gate is not enough.** G1 checks an approval before every send, yet passes about as few fault cells as no protection at all. Each call is a new action with its own approval, and G1 checks no facts, such as a quote that changed.
-3. **Sometimes the honest answer is "unknown".** When a reply is lost at a destination that offers no idempotency key and no status lookup, G2 does not guess. It escalates to a human, and the agent's report says `unknown`.
-4. **The destination's contract sets the ceiling.** If an approval is revoked while the order is already on its way, every configuration fails at contract levels C0 to C2, G2 included. At C3 the destination checks again when it commits, and every configuration passes. G2's 12 failing cells are documented limits, such as this one ([docs/limitations.md](docs/limitations.md)).
+Claude Sonnet 5.5 and GPT-6.1 Sol each ran every fault cell three times, 741 episodes per model. The [study report](docs/report.md) has every table and its raw data.
 
-These are the 235 expected outcomes with the scripted agent, and CI checks every one on every change. Results with live models come with v0.1.0.
+1. **Behind the gateway, the model stopped mattering.** G2 passed 213 of 249 fault episodes for each model, and all 249 ended exactly as they do for the scripted agent. At contract level C3 it passed every episode.
+2. **Without it, the outcome depends on the model.** Calling the API directly, Claude passed 41% and GPT 55%. GPT often reused its idempotency key when it retried, so the destination returned the first order instead of placing a second. Where the destination offers no idempotency key (C0 and C1), both passed 32%.
+3. **An approval gate is not enough.** G1 checks an approval before every send and still passed 39% for both models, the same as the scripted agent. Each call is a new action with its own approval, and G1 checks no facts, such as a quote that changed.
+4. **Sometimes the honest answer is "unknown".** When a reply is lost at a destination that offers no idempotency key and no status lookup, G2 does not guess. It escalates to a human, and the agent's report says `unknown`. Behind G2, 12 episodes per model ended with an honest `unknown`.
+5. **The destination's contract sets the ceiling.** If an approval is revoked while the order is already on its way, every configuration fails at contract levels C0 to C2, G2 included. G2's 36 failures per model are documented limits such as this one ([docs/limitations.md](docs/limitations.md)).
+
+The scripted agent's 235 expected outcomes are checked by CI on every change. The live study's results and recordings are in [results/study](results/study/README.md).
 
 ## Who it's for
 
