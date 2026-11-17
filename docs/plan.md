@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 started (G1, the evaluator's report with tokens, cost and recovery latency, record 0014, the live model adapter with Ollama, Anthropic, OpenAI and Google, and the study runner are in; the live study waits for the maintainer's models, keys, prices and spend cap); M5 started (the README's two paths, the limitations page, the security policy, the code of conduct and an installable package are in). The conduct contact is a placeholder. Records 0015 and 0016 are accepted. The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 started (G1, the evaluator's report with tokens, cost and recovery latency, record 0014, the live model adapter with Ollama, Anthropic, OpenAI and Google, and the study runner are in; the live study waits for the maintainer's models, keys, prices and spend cap); M5 started (the README's two-minute path and the twenty-minute tour it links to, the limitations page, the security policy, the code of conduct and an installable package are in). The conduct contact is a placeholder. Records 0015 and 0016 are accepted. The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
@@ -38,7 +38,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 3. **M2 Authority and freshness.** The scripted approver, revocation, expiry and stale-input rejections, contract levels C0 to C3, faults F1, F6, F7, F9 and F12, properties 2 to 4. Hypothesis tests for I1 to I7 pass.
 4. **M3 Full scenarios.** Demos 2 and 3, faults F3, F4, F5 and F10, recorded playback, viewer v1 (its tooling gets its own decision record) and T6's held-out set.
 5. **M4 Study.** Pilot 10 to 20 live episodes, set the spend cap, run B0, G1 and G2 across contract levels, draft the report.
-6. **M5 Release v0.1.** README with a two-minute and a twenty-minute path, a three-minute video, the report with raw data, a limitations section and full citations.
+6. **M5 Release v0.1.** README with a two-minute path and a link to the twenty-minute tour (`docs/tour.md`), a three-minute video, the report with raw data, a limitations section and full citations.
 
 ## First-week tickets
 

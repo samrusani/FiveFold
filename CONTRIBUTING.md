@@ -10,9 +10,28 @@ Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the communi
 - To change any of these, open a pull request that adds a decision record in `docs/adr/`. Copy `0000-template.md`, set the status to **Proposed**, state the rule so that a test could check it, and list the alternatives you considered.
 - Only the maintainer marks a record **Accepted**. Accepted records are binding, like the spec. The pull request that accepts a record also updates every document it affects.
 
+## Development
+
+You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Put `uv` on your path. Two packaging tests run `uv build` and need network access for build dependencies. Docker Compose can run the database for you. The viewer's frontend also needs Node 26 and npm; the Python tests never do.
+
+```
+make setup      # install the locked dependencies into .venv
+make db-up      # start PostgreSQL 16 on 127.0.0.1:5432
+make check      # lint, type check and every test
+make test-fast  # only the tests that need no database
+make demo       # the four demos, for B0 and G2, from a seed
+make help       # every target
+```
+
+CI also builds the wheel, installs it outside the checkout and runs demo 1 against PostgreSQL 16.
+
+The demos, the tests and every command that runs an episode connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose database, `postgresql://postgres@127.0.0.1:5432/postgres`. Any PostgreSQL 16 server works if that connection is a superuser and the component roles can log in. `db/bootstrap.sql` creates those roles without a password; the Compose database and CI trust local connections, so the roles need none there. Test runs that share one server at the same time need different `FIVEFOLD_TEST_DB_PREFIX` values.
+
+Every run database is a copy of one migrated template database, `fivefold_template` (set `FIVEFOLD_TEMPLATE_DB` for another; the tests use their own). The demo, the study, the recorder and the split topology's `start` make the template if it is missing, migrate it forward if it is behind, and copy it; commands that copy at once take turns. PostgreSQL copies a database only while no other session is connected to it, so keep no session open on the template: a copy waits up to 5 seconds for one to end, then is refused. A template whose applied migrations no longer match `db/migrations`, such as one an edited migration was applied to, is refused too; drop it, and the next run makes it again.
+
 ## Pull requests
 
-- Run `make check` before asking for review. The Development section of README.md explains the setup.
+- Run `make check` before asking for review. The Development section below explains the setup.
 - One change per pull request, kept small.
 - Name the spec section or decision record it implements.
 - List every library API you used and where you checked it: the official docs, or the installed package source with its version. If you are unsure an API exists, say so instead of guessing.
