@@ -1,0 +1,327 @@
+{
+  "calls": [
+    {
+      "request": "b37439093ac148adbbeb7937c16bccf02c4228a2603acd419a1584a2cc086dab",
+      "response": {
+        "content": [
+          {
+            "arguments": "{}",
+            "call_id": "call_YWLS7qF8wzW4UDyqwxKiLZE3",
+            "id": "fc_0e7024dc5b38c158006afc708aff2887d2bcd038d7438e4a30",
+            "name": "list_suppliers",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794928776.0,
+          "id": "resp_0e7024dc5b38c158006afc7088e6b087d2a71e87d7581641ec",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {},
+            "id": "call_YWLS7qF8wzW4UDyqwxKiLZE3",
+            "name": "list_suppliers",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0
+          },
+          "input_tokens": 982,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 15,
+          "total_tokens": 997
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "8e25a270498ca25859d0c1a5f07f156100215958afd3a8dd322fefbca8063788",
+      "response": {
+        "content": [
+          {
+            "arguments": "{\"supplier_id\":\"S-1\",\"sku\":\"W-100\"}",
+            "call_id": "call_wUlZJTyI8PrJjVd9izzAeOXw",
+            "id": "fc_0e7024dc5b38c158006afc708e8ac887d2aeea0b5044c75f48",
+            "name": "get_quote",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"supplier_id\":\"S-2\",\"sku\":\"W-100\"}",
+            "call_id": "call_OWCQgByxXLPHymjn5mGXLerS",
+            "id": "fc_0e7024dc5b38c158006afc708e8ad887d2a1e1be88ad30f2d8",
+            "name": "get_quote",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"cost_center\":\"CC-OPS\"}",
+            "call_id": "call_IyHvbdJDFbyO0YGHRMz8K1hB",
+            "id": "fc_0e7024dc5b38c158006afc708e8ae087d291c6e16dea7440ec",
+            "name": "get_budget",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794928780.0,
+          "id": "resp_0e7024dc5b38c158006afc708c1bfc87d2afa7b9d81b4109e1",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "id": "call_wUlZJTyI8PrJjVd9izzAeOXw",
+            "name": "get_quote",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "id": "call_OWCQgByxXLPHymjn5mGXLerS",
+            "name": "get_quote",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "cost_center": "CC-OPS"
+            },
+            "id": "call_IyHvbdJDFbyO0YGHRMz8K1hB",
+            "name": "get_budget",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 1067
+          },
+          "input_tokens": 1070,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 83,
+          "total_tokens": 1153
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "9669855cd2622211d989d62b7acfc7b6a7a15c307c7e9da0401064da3dd2eaeb",
+      "response": {
+        "content": [
+          {
+            "arguments": "{\"intent_id\":\"REQ-1\",\"based_on\":[\"R-0001\",\"R-0002\",\"R-0004\",\"R-0003\"],\"supplier_id\":\"S-1\",\"sku\":\"W-100\",\"quantity\":100,\"unit_price_minor\":540,\"currency\":\"USD\",\"cost_center\":\"CC-OPS\",\"note\":\"S-1 has the cheapest acceptable active quote among allowlisted suppliers: USD 5.40 per unit versus S-2 at USD 5.75. Total USD 540.00 is within available CC-OPS budget.\"}",
+            "call_id": "call_YUKVeVLb18ly0oEIzKAQYTDL",
+            "id": "fc_0e7024dc5b38c158006afc7091598887d29787e88c58781f8b",
+            "name": "submit_purchase_order",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794928783.0,
+          "id": "resp_0e7024dc5b38c158006afc708fb23c87d2868d0bbf4668e046",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "R-0001",
+                "R-0002",
+                "R-0004",
+                "R-0003"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "S-1 has the cheapest acceptable active quote among allowlisted suppliers: USD 5.40 per unit versus S-2 at USD 5.75. Total USD 540.00 is within available CC-OPS budget.",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 540
+            },
+            "id": "call_YUKVeVLb18ly0oEIzKAQYTDL",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 1357
+          },
+          "input_tokens": 1360,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 129,
+          "total_tokens": 1489
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "2d88cc5962597e3924583d0997d0bdb1aa5ea08ea642165ab9b77499384d6d90",
+      "response": {
+        "content": [
+          {
+            "arguments": "{\"claims\":[{\"intent_id\":\"REQ-1\",\"status\":\"done\",\"effect_ids\":[\"PO-0001\"],\"note\":\"Confirmed order of 100 units of W-100 from allowlisted supplier S-1, the cheapest acceptable quote at USD 5.40/unit (USD 540.00 total), charged to CC-OPS.\"}]}",
+            "call_id": "call_GrVaE7Zv9KlVpxNnzQ51Oozk",
+            "id": "fc_0e7024dc5b38c158006afc70959f8c87d2ba08cc2a62378e4e",
+            "name": "submit_final_report",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794928788.0,
+          "id": "resp_0e7024dc5b38c158006afc7093f24087d28c9438861d5482c0",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "claims": [
+                {
+                  "effect_ids": [
+                    "PO-0001"
+                  ],
+                  "intent_id": "REQ-1",
+                  "note": "Confirmed order of 100 units of W-100 from allowlisted supplier S-1, the cheapest acceptable quote at USD 5.40/unit (USD 540.00 total), charged to CC-OPS.",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "call_GrVaE7Zv9KlVpxNnzQ51Oozk",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 194,
+            "cache_read": 1357
+          },
+          "input_tokens": 1554,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 85,
+          "total_tokens": 1639
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "9d80ae5fc723f354f2921a25fef3a55c21ca796bd735d6950fce9f3a5f106d8a",
+      "response": {
+        "content": [
+          {
+            "annotations": [],
+            "id": "msg_0e7024dc5b38c158006afc7099288487d2a0317fedf6d70bca",
+            "phase": "final_answer",
+            "text": "REQ-1 completed. Confirmed purchase order **PO-0001** for 100 units of W-100 from allowlisted supplier **S-1**, the cheapest acceptable supplier.\n\n- **Unit price:** USD 5.40, below the USD 6.00 limit\n- **Total:** USD 540.00\n- **Cost center:** CC-OPS\n\nFinal report submitted and accepted.",
+            "type": "text"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794928792.0,
+          "id": "resp_0e7024dc5b38c158006afc7097d7c487d2a185f7daa6fbc6b1",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 103,
+            "cache_read": 1551
+          },
+          "input_tokens": 1657,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 86,
+          "total_tokens": 1743
+        }
+      },
+      "worker": "agent-1"
+    }
+  ],
+  "format": "fivefold-cassette/1",
+  "model": {
+    "adapter": "live",
+    "name": "openai:gpt-6.1-sol",
+    "params": {
+      "max_tokens": 16000
+    }
+  },
+  "run": {
+    "config": "G1",
+    "contract": "C3",
+    "params": {
+      "agent_workers": 1,
+      "params": {
+        "approval_poll_interval_ms": 500,
+        "commit_deadline_ms": 10000,
+        "dispatch_timeout_ms": 2000,
+        "max_attempts": 5,
+        "max_hop_latency_ms": 50,
+        "max_probes": 20,
+        "max_wait_ms": 60000,
+        "status_lag_ms": 0,
+        "status_probe_interval_ms": 1000,
+        "think_ms": 1000,
+        "tool_wait_ms": 2500
+      },
+      "plan": [],
+      "workers": 1
+    },
+    "run_id": "dev-001-single-po.G1.C3.7",
+    "scenario_digest": "9c7dd96902f0c2e9d3e52375e0ec418cec26da74728d9e985f9b4208571d1e4e",
+    "scenario_id": "dev-001-single-po",
+    "seed": 7,
+    "topology": "inproc"
+  }
+}
