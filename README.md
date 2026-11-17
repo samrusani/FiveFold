@@ -10,6 +10,10 @@ An agent sends a purchase order and crashes. The order goes through, but the rep
 
 FiveFold is an open-source test suite for that gap. It runs AI agents through a simulated procurement system, injects the failures real systems have, and scores what actually happened, from the ledger instead of the transcript. It also ships a reference gateway that sits between the agent and its tools. Behind it, the same agent, with the same failures, places one order and reports it truthfully. In 1,482 live runs with Claude Sonnet 5.5 and GPT-6.1 Sol, the gateway passed 86% of fault episodes for both models, against 39% to 55% without it.
 
+Watch the 3.5-minute overview, narrated and captioned:
+
+https://github.com/user-attachments/assets/884fa722-5bbd-4593-9e2d-34b59ac3d014
+
 ## Five checks every action must pass
 
 A run passes only if every real-world action:
@@ -128,7 +132,7 @@ The gateway is a research design, not hardened for production ([SECURITY.md](SEC
 
 ## Status
 
-Version 0.1.0a1 is on [PyPI](https://pypi.org/project/fivefold/) as a pre-release, and everything on this page runs today. The [full study and its raw data](docs/report.md) are available. Still to come for v0.1.0: a short video. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
+Version 0.1.0a1 is on [PyPI](https://pypi.org/project/fivefold/) as a pre-release, and everything on this page runs today. The [full study and its raw data](docs/report.md) are available. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
 
 ## Contributing
 
