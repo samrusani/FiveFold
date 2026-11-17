@@ -31,3 +31,44 @@ def test_project_links_and_sdist_wheel_file_parity(tmp_path: Path) -> None:
             "Repository, https://github.com/samrusani/FiveFold",
             "Issues, https://github.com/samrusani/FiveFold/issues",
         }
+
+
+def test_sdist_excludes_pilot_results(tmp_path: Path) -> None:
+    """A source archive stays small even when pilot data exists in the checkout."""
+    import shutil
+    import tarfile
+
+    root = Path(__file__).resolve().parents[2]
+    project = tmp_path / "project"
+    shutil.copytree(
+        root,
+        project,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".venv",
+            "__pycache__",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".hypothesis",
+            "wiki",
+            "results",
+            "dist",
+        ),
+    )
+    result = project / "results" / "pilot-ollama" / "sample.json"
+    result.parent.mkdir(parents=True)
+    result.write_text('{"sample": true}\n', encoding="utf-8")
+    output = tmp_path / "dist"
+    subprocess.run(
+        ["uv", "build", "--sdist", "--out-dir", str(output)],
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (sdist,) = output.glob("*.tar.gz")
+    with tarfile.open(sdist, "r:gz") as archive:
+        names = archive.getnames()
+    assert any(name.endswith("/pyproject.toml") for name in names)
+    assert not any("/results/" in name for name in names)

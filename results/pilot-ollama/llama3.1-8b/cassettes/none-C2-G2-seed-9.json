@@ -1,0 +1,127 @@
+{
+  "calls": [
+    {
+      "request": "893c87f55154db4b707876022ebd204bd869f929deacf5bd505d10684440f5e0",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T11:55:27.897274Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 137,
+          "eval_duration": 2354619000,
+          "load_duration": 1177417,
+          "logprobs": null,
+          "model": "llama3.1:8b",
+          "model_name": "llama3.1:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 888,
+          "prompt_eval_duration": 26999000,
+          "total_duration": 2408898000
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "get_quote",
+                "get_quote"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Requisition REQ-1: order 100 units of W-100 from an allowlisted supplier",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "allowlisted_supplier_id",
+              "unit_price_minor": 6
+            },
+            "id": "82cc3ae8-cc62-4203-82c6-3d4a08fec607",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "claims": [
+                {
+                  "intent_id": "REQ-1",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "4426c82d-2df1-455c-bd29-81a5a8abee5b",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 888,
+          "output_tokens": 137,
+          "total_tokens": 1025
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "498d51fa7e4ea8e6dc18a8b81aa1962792cf7c37839b18d66821d68a56c6bb3f",
+      "response": {
+        "content": "It seems that we need to find a quote from the allowlisted supplier. Let's try to get the quote.\n\n{\"name\": \"get_quote\", \"parameters\": {\"quantity\":100,\"sku\":\"W-100\",\"supplier_id\":\"allowlisted_supplier_id\"}}",
+        "response_metadata": {
+          "created_at": "2026-11-17T11:55:29.178865Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 53,
+          "eval_duration": 905177000,
+          "load_duration": 786458,
+          "logprobs": null,
+          "model": "llama3.1:8b",
+          "model_name": "llama3.1:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 323,
+          "prompt_eval_duration": 280393000,
+          "total_duration": 1200020958
+        },
+        "usage_metadata": {
+          "input_tokens": 323,
+          "output_tokens": 53,
+          "total_tokens": 376
+        }
+      },
+      "worker": "agent-1"
+    }
+  ],
+  "format": "fivefold-cassette/1",
+  "model": {
+    "adapter": "live",
+    "name": "ollama:llama3.1:8b",
+    "params": {
+      "num_ctx": 32768
+    }
+  },
+  "run": {
+    "config": "G2",
+    "contract": "C2",
+    "params": {
+      "agent_workers": 1,
+      "params": {
+        "approval_poll_interval_ms": 500,
+        "commit_deadline_ms": 10000,
+        "dispatch_timeout_ms": 2000,
+        "max_attempts": 5,
+        "max_hop_latency_ms": 50,
+        "max_probes": 20,
+        "max_wait_ms": 60000,
+        "status_lag_ms": 0,
+        "status_probe_interval_ms": 1000,
+        "think_ms": 1000,
+        "tool_wait_ms": 2500
+      },
+      "plan": [],
+      "workers": 1
+    },
+    "run_id": "dev-001-single-po.G2.C2.9",
+    "scenario_digest": "9c7dd96902f0c2e9d3e52375e0ec418cec26da74728d9e985f9b4208571d1e4e",
+    "scenario_id": "dev-001-single-po",
+    "seed": 9,
+    "topology": "inproc"
+  }
+}

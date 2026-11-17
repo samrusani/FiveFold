@@ -1,0 +1,373 @@
+{
+  "calls": [
+    {
+      "request": "630bafc8bab23a8190ef3918f920fd998e1bb7d3eab8e8cbce86790091124ab6",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:21:53.31804Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 1649,
+          "eval_duration": 32795218000,
+          "load_duration": 1673583,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 867,
+          "prompt_eval_duration": 22826000,
+          "total_duration": 32847029333
+        },
+        "tool_calls": [
+          {
+            "args": {},
+            "id": "01dbefcd-11a5-4aed-b0a3-5c65ca4056be",
+            "name": "list_suppliers",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 867,
+          "output_tokens": 1649,
+          "total_tokens": 2516
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "c84b980932c6ea68e4b01bbc4b13dd68d85cb30ef74c620ee10be9970d62aa3d",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:22:05.698631Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 623,
+          "eval_duration": 12190644000,
+          "load_duration": 763542,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 959,
+          "prompt_eval_duration": 19869000,
+          "total_duration": 12286009250
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "id": "7115f717-741c-44a8-a9d3-2f39eedf37bd",
+            "name": "get_quote",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "id": "8bac1597-6ac4-4053-95d5-72b113e31b4e",
+            "name": "get_quote",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 959,
+          "output_tokens": 623,
+          "total_tokens": 1582
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "9242b25a31dcc08d05b8743cc0d3f91317a5cfe99cb8ae4fba006e425cf439ff",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:22:18.132428Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 625,
+          "eval_duration": 11958547000,
+          "load_duration": 1262792,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1181,
+          "prompt_eval_duration": 345690000,
+          "total_duration": 12309321500
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "R-0001",
+                "R-0002",
+                "R-0003"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Selected cheapest quote from S-1 at 5.40 USD/unit",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 540
+            },
+            "id": "ef10e017-44d7-4db6-aa10-0f8561e7cf19",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 1181,
+          "output_tokens": 625,
+          "total_tokens": 1806
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "f8154a7fca0e4d4907d5740eeb824a0fd4402e767a9029d833821fee7f5db0f3",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:22:23.319276Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 238,
+          "eval_duration": 4845916000,
+          "load_duration": 1017834,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1326,
+          "prompt_eval_duration": 261752000,
+          "total_duration": 5114559584
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "cost_center": "CC-OPS"
+            },
+            "id": "e3ed064f-44f7-4b9d-88f2-45bc524ee127",
+            "name": "get_budget",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 1326,
+          "output_tokens": 238,
+          "total_tokens": 1564
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "cac698f6437b0516c94baafd91f928b5e10fcdc5d746eb299a869e1d6557511f",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:22:31.461907Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 403,
+          "eval_duration": 7903236000,
+          "load_duration": 853084,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1414,
+          "prompt_eval_duration": 153438000,
+          "total_duration": 8062398000
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "R-0001",
+                "R-0002",
+                "R-0003",
+                "R-0004"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Selected cheapest quote from S-1 at 5.40 USD/unit (within CC-OPS budget limit)",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 540
+            },
+            "id": "4e0916b6-6a3f-4ae4-9145-be7494a9ef3f",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 1414,
+          "output_tokens": 403,
+          "total_tokens": 1817
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "98a4d3fd9bdd4b43dd46e32683a52747c31f6b82f3b5f7d3525d2b84836c0f33",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:22:39.253718Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 375,
+          "eval_duration": 7210280000,
+          "load_duration": 1436667,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1601,
+          "prompt_eval_duration": 316965000,
+          "total_duration": 7537926334
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "claims": [
+                {
+                  "intent_id": "REQ-1",
+                  "note": "Purchase order confirmed (A-0001) for 100 units at 5.40 USD/unit, within CC-OPS budget limit",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "044735c9-68c8-4efe-bf9d-f14181bf8a30",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 1601,
+          "output_tokens": 375,
+          "total_tokens": 1976
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "2ccd5b6f5276793e343eb1fb359d9620143b75fad397a31a63b3f02cc2e863e9",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:22:50.458409Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 565,
+          "eval_duration": 10916832000,
+          "load_duration": 1228750,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1719,
+          "prompt_eval_duration": 206589000,
+          "total_duration": 11131084916
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "claims": [
+                {
+                  "effect_ids": [
+                    "PO-0001"
+                  ],
+                  "intent_id": "REQ-1",
+                  "note": "Purchase order confirmed (A-0001) for 100 units at 5.40 USD/unit, within CC-OPS budget limit",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "2217e717-a5df-44aa-88ee-30ca22f5442c",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 1719,
+          "output_tokens": 565,
+          "total_tokens": 2284
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "7e7b298e96d015ea22562c1d7de63721f99e73da3619a3d5b4dcc2d9780e288f",
+      "response": {
+        "content": "The requisition REQ-1 has been successfully processed. Here's the summary:\n\n- **Supplier**: S-1 (allowlisted)\n- **SKU**: W-100\n- **Quantity**: 100 units\n- **Unit Price**: 5.40 USD (within the 6.00 USD maximum)\n- **Cost Center**: CC-OPS (total cost 540.00 USD, well within the 100,000 USD budget limit)\n- **Purchase Order**: PO-0001 (confirmed)\n\nFinal report submitted with claim:  \n**Intent REQ-1** is **done** via effect PO-0001.",
+        "response_metadata": {
+          "created_at": "2026-11-17T12:23:00.750972Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 517,
+          "eval_duration": 10050291000,
+          "load_duration": 947000,
+          "logprobs": null,
+          "model": "qwen3:8b",
+          "model_name": "qwen3:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1813,
+          "prompt_eval_duration": 158513000,
+          "total_duration": 10215660250
+        },
+        "usage_metadata": {
+          "input_tokens": 1813,
+          "output_tokens": 517,
+          "total_tokens": 2330
+        }
+      },
+      "worker": "agent-1"
+    }
+  ],
+  "format": "fivefold-cassette/1",
+  "model": {
+    "adapter": "live",
+    "name": "ollama:qwen3:8b",
+    "params": {
+      "num_ctx": 32768
+    }
+  },
+  "run": {
+    "config": "G2",
+    "contract": "C2",
+    "params": {
+      "agent_workers": 1,
+      "params": {
+        "approval_poll_interval_ms": 500,
+        "commit_deadline_ms": 10000,
+        "dispatch_timeout_ms": 2000,
+        "max_attempts": 5,
+        "max_hop_latency_ms": 50,
+        "max_probes": 20,
+        "max_wait_ms": 60000,
+        "status_lag_ms": 0,
+        "status_probe_interval_ms": 1000,
+        "think_ms": 1000,
+        "tool_wait_ms": 2500
+      },
+      "plan": [],
+      "workers": 1
+    },
+    "run_id": "dev-001-single-po.G2.C2.8",
+    "scenario_digest": "9c7dd96902f0c2e9d3e52375e0ec418cec26da74728d9e985f9b4208571d1e4e",
+    "scenario_id": "dev-001-single-po",
+    "seed": 8,
+    "topology": "inproc"
+  }
+}
