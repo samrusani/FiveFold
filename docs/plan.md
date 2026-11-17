@@ -2,7 +2,7 @@
 
 Six milestones over roughly six weeks reach a public v0.1. The first is a one-week design freeze that the maintainer owns, because agent teams build fastest against fixed contracts. Six weeks is an estimate: review time limits the pace, not the number of agents.
 
-Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 started (the [local pilot](report/pilot-ollama.md) and [API pilot](report/pilot-api.md) are done; the full study waits for the maintainer's models and spend cap); M5 started (the README's two-minute path and the twenty-minute tour it links to, the limitations page, the security policy, the code of conduct and an installable package are in). Version `0.1.0a1` was published on PyPI on 17 Nov 2026 from commit `56dc7c5`. It is a pre-release; the full v0.1 release is still ahead. Records 0015 and 0016 are accepted. The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
+Status: M0 done, 14 Nov 2026; M1 done, 15 Nov 2026; M2 done, 15 Nov 2026; M3 done but for T6's held-out set (viewer v1 is in, record 0012); M4 done (the [full study](report.md), [local pilot](report/pilot-ollama.md) and [API pilot](report/pilot-api.md) are available); M5 started (the README's two-minute path and the twenty-minute tour it links to, the limitations page, the security policy, the code of conduct and an installable package are in). Version `0.1.0a1` was published on PyPI on 17 Nov 2026 from commit `56dc7c5`. It is a pre-release; the full v0.1 release is still ahead. Records 0015 and 0016 are accepted. The spec's admin API over HTTP, experimental branching and split topology are in too. Milestone contents follow decision record 0006.
 
 ## Roadmap
 
@@ -58,7 +58,7 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 ## Budget
 
 - **GPUs:** none. Local models run on contributors' own machines through Ollama.
-- **Live model spend:** set the cap for the full study after reviewing the pilot usage and cost estimates. Runs needed = scenarios × configs × contract levels × trials, for example 30 × 3 × 4 × 5 = 1,800.
+- **Live model spend:** the full study used caps chosen after the pilots; see its [report](report.md). Runs needed = scenarios × configs × contract levels × trials, for example 30 × 3 × 4 × 5 = 1,800.
 - **Hosting:** none; everything runs locally.
 
 ## Risks
