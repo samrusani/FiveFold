@@ -79,6 +79,19 @@ jobs:
           cd "$smoke"
           "$smoke/venv/bin/python" -m fivefold.harness.demo 1
 
+  identities:
+    name: Commit identities
+    # Every commit of a pull request must use GitHub noreply addresses (CLAUDE.md,
+    # "Commits and attribution"). The check never prints what it refuses.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check every commit's author and committer
+        run: python3 scripts/check_identities.py "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
   viewer:
     name: Viewer build, lint and test
     # The viewer's frontend (0012) on Node's current LTS line; the Python jobs never need Node.

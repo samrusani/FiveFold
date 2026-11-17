@@ -38,6 +38,8 @@ Short sentences, plain words, specific numbers with units. No em dashes. Cite pa
 - Personal names, personal email addresses, local paths and machine details. GitHub noreply addresses in commit metadata, and links to other people's public work in citations, are fine.
 - Held-out evaluation scenarios. They live outside this repository.
 
+CI checks that every commit in a pull request uses a GitHub noreply address as author and committer.
+
 ## License
 
 FiveFold is licensed under the Apache License 2.0. By contributing, you agree that your contributions are licensed under the same terms.
