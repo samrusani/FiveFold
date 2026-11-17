@@ -1,6 +1,6 @@
 # Local Ollama pilot data
 
-The pilot ran on 17 Nov 2026, from main commit `56dc7c5` with the harness fix in commit `aaabb88`. Ollama was version `0.40.15`. The models were `llama3.1:8b` (ID `46e0c10c039e`) and `qwen3:8b` (ID `500a1f067a9f`). Ollama lists both as supporting tools: [Llama 3.1](https://ollama.com/library/llama3.1:8b) and [Qwen 3](https://ollama.com/library/qwen3:8b).
+The pilot ran on 17 Nov 2026, from main commit `56dc7c5` with the harness fix in [PR #83](https://github.com/samrusani/FiveFold/pull/83), merged as `e1c5b3f`. The pilot ran on its pre-rebase commit `aaabb88`. Ollama was version `0.40.15`. The models were `llama3.1:8b` (ID `46e0c10c039e`) and `qwen3:8b` (ID `500a1f067a9f`). Ollama lists both as supporting tools: [Llama 3.1](https://ollama.com/library/llama3.1:8b) and [Qwen 3](https://ollama.com/library/qwen3:8b).
 
 Each study used dev-001, C2, B0, G1 and G2, the no-fault and F2 cells, and seeds 7 through 9. The scenario's budget remained 60,000 tokens and 40 steps per worker. The only generation parameter was `num_ctx=32768`; all others used their defaults. Both local models were priced at 0 USD in `prices/example.yaml`. Each command had a 1 USD spend cap.
 

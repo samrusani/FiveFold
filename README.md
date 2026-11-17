@@ -114,7 +114,7 @@ These are the 235 expected outcomes with the scripted agent, and CI checks every
 | [Viewer](docs/viewer.md) | Each run's timeline and scorecard, and B0 beside G2 on the same seed |
 | [Studies and reports](docs/studies.md) | Matrices of runs, CSV and Markdown reports, cost per passing run and recovery latency |
 | [Live runs](docs/live-runs.md) | Ollama, Anthropic, OpenAI and Google models, behind a flag, a spend cap and a price file |
-| [Local Ollama pilot](docs/report/pilot-ollama.md) | Findings and raw data from 18 episodes per model |
+| [Local pilot](docs/report/pilot-ollama.md) and [API pilot](docs/report/pilot-api.md) | Findings and raw data from 18 episodes per model |
 | [Bring your own agent](docs/your-own-agent.md) | The gateway and the simulator as services, for your agent over MCP or HTTP |
 | [Admin API](docs/admin-api.md) | How a person resolves an action whose outcome is unknown |
 | [Limitations](docs/limitations.md) | What each guarantee depends on, and the known limits |
