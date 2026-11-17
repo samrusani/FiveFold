@@ -25,6 +25,8 @@ Data: [`results/study/episodes.csv`](../results/study/episodes.csv), whose `raw_
 
 G2 had 213 passing or honestly unresolved fault episodes out of 249 for each model. In B0 the counts were 89 of 216 for Claude and 118 of 216 for GPT; in G1 they were 94 of 240 and 93 of 240. The configurations have different applicable fault cells, so those totals alone do not isolate a configuration effect.
 
+Behind G2, every fault episode of both models had the scripted agent's exact verdict and failing properties: 249 of 249 for each. In B0 the exact matches were 208 of 216 for Claude and 170 of 216 for GPT; in G1 they were 239 of 240 and 240 of 240.
+
 
 ## Pass share by contract
 
@@ -99,10 +101,10 @@ Data: [`results/study/episodes.csv`](../results/study/episodes.csv), the evaluat
 
 | Model | Runs | Flat-rate total USD | Mean USD per episode | Maximum USD per episode | Passing runs | Flat USD per passing run | Cache-adjusted estimate USD |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| claude-sonnet-5-5 | 741 | 44.281882 | 0.059760 | 0.153932 | 432 | 0.102504 | not calculated |
+| claude-sonnet-5-5 | 741 | 44.281882 | 0.059760 | 0.153932 | 432 | 0.102504 | 44.281882, no cache use |
 | gpt-6.1-sol | 741 | 18.937724 | 0.025557 | 0.070964 | 460 | 0.041169 | 6.3818765 |
 
-The evaluator and spend meter charge every input token at the same flat input rate. GPT uses cache reads and writes; the estimate applies the published standard read and default 30-minute write prices to the saved usage, as in the [API pilot](report/pilot-api.md). It is not an invoice. Cache pricing and an in-flight call can make the provider bill differ from the counted cap.
+The evaluator and spend meter charge every input token at the same flat input rate. Claude's 4,764 calls reported no cache reads or writes, so its flat total is its estimate. GPT uses cache reads and writes; the estimate applies the published standard read and default 30-minute write prices to the saved usage, as in the [API pilot](report/pilot-api.md). It is not an invoice. Cache pricing and an in-flight call can make the provider bill differ from the counted cap.
 
 ## Recovery latency
 
