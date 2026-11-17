@@ -82,4 +82,4 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 - [x] Every figure quoted from a preprint is checked against the paper; unconfirmed citations are fixed or removed
 - [ ] Report shared with the cited papers' authors; MCP issue #3394 gets a link once the conformance test exists
 - [ ] Open-source files in place: LICENSE, CODE_OF_CONDUCT and a security policy
-- [x] Docs and git history audited for secrets and personal identifiers
+- [x] Audited all tracked files, including the raw study data, and branch history since Sprint 2 for secrets and personal identifiers on 18 Nov 2026.
