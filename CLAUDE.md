@@ -50,6 +50,7 @@ Read these before writing code, in this order:
 - Treat this repository as public. Never commit secrets, personal names, personal email addresses, local paths or machine details. Allowed: the maintainer's GitHub username, `samrusani`; GitHub noreply addresses in commit metadata; the contact address in `CODE_OF_CONDUCT.md`, which the maintainer chose as the project's public contact; and links to other people's public work in citations.
 - No tool attribution in commits, pull requests or docs: no "Generated with" footers, no AI co-author trailers and no session links.
 - Agents working for the maintainer commit as `samrusani <samrusani@users.noreply.github.com>`. Other contributors use their own GitHub noreply address.
+- Before every push, check each new commit's author and committer. CI's commit identity check (`scripts/check_identities.py`) fails a pull request whose commits use any address that is not a GitHub noreply address, or the maintainer's address under another name.
 
 ## Working wiki
 
