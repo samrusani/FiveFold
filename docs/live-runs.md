@@ -28,7 +28,7 @@ The record command prints the verdict, the cassette's digest and what the run sp
 
 A live study takes the same options and is refused without them, before it touches any database. It also saves each episode's cassette in `cassettes/`; `python -m fivefold.recorder play` compares a replay with the original run's database, so give `--keep-databases` to play one back. One spend cap holds across the study, and the study stops once the spend reaches it, since every later model call would be refused. An episode the cap cut short keeps its cassette, and its result goes to `spend-cap/`, which a report over the directory leaves out.
 
-The pilot of 10 to 20 live episodes is the maintainer's to size (`docs/plan.md`, M4). For example, no fault and F2, at C2, in B0, G1 and G2, with three seeds each, is 18 episodes. `MODEL` and `CAP` are placeholders. The first pilot runs this matrix on two local Ollama models.
+The [local Ollama pilot report](report/pilot-ollama.md) describes 18 episodes per model, and its [raw data](../results/pilot-ollama/README.md) contains the commands, results and cassettes. The API pilot waits for the maintainer to choose models, keys, prices and a spend cap. The example below uses placeholders for a new study.
 
 ```
 FIVEFOLD_LIVE=1 uv run python -m fivefold.harness.study --out pilot \
