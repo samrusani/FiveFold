@@ -42,7 +42,7 @@ No API key, no GPU. Pick one of two ways in.
 From [PyPI](https://pypi.org/project/fivefold/). You need Python 3.12 and a PostgreSQL 16 server that trusts local connections:
 
 ```
-pip install fivefold==0.1.0a1
+pip install fivefold
 python -m fivefold.harness.demo 1
 ```
 
@@ -132,7 +132,7 @@ The gateway is a research design, not hardened for production ([SECURITY.md](SEC
 
 ## Status
 
-Version 0.1.0a1 is on [PyPI](https://pypi.org/project/fivefold/) as a pre-release, and everything on this page runs today. The [full study and its raw data](docs/report.md) are available. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
+Version 0.1.0 is the first full release and is available on [PyPI](https://pypi.org/project/fivefold/). The [full study and its raw data](docs/report.md) are available. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
 
 ## Contributing
 

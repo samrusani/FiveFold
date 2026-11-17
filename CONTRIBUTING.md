@@ -1,6 +1,6 @@
 # Contributing
 
-FiveFold has a `0.1.0a1` pre-release on PyPI and is working toward its first full release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
+FiveFold's first full release is `0.1.0`. The Status section of [README.md](README.md) says what is built and what is left. Open an issue to report a bug or question a design. Comment on a pull request to review a change. To report a vulnerability, follow [SECURITY.md](SECURITY.md).
 
 Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the community.
 
@@ -43,7 +43,7 @@ Every run database is a copy of one migrated template database, `fivefold_templa
 
 Releases go to PyPI through `.github/workflows/publish.yml`, with PyPI's Trusted Publishing, so no token is stored anywhere. To release:
 
-1. In a pull request, set or confirm the version in `pyproject.toml`, such as `0.1.0a1`.
+1. In a pull request, set or confirm the version in `pyproject.toml`, such as `0.1.0`.
 2. Once it merges, publish a GitHub release whose tag is `v` plus that version, such as `v0.1.0`.
 3. The workflow checks the tag against the version, builds the sdist and the wheel, installs the wheel outside the repository and runs demo 1 from it. Only then does the publish job run, in the GitHub environment `pypi`, whose protection rules apply first.
 
