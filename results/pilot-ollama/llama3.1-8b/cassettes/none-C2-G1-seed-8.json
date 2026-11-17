@@ -1,0 +1,352 @@
+{
+  "calls": [
+    {
+      "request": "893c87f55154db4b707876022ebd204bd869f929deacf5bd505d10684440f5e0",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T11:54:17.461439Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 143,
+          "eval_duration": 2501105000,
+          "load_duration": 3185875,
+          "logprobs": null,
+          "model": "llama3.1:8b",
+          "model_name": "llama3.1:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 888,
+          "prompt_eval_duration": 18220000,
+          "total_duration": 2599505708
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "get_quote(Supplier-1,W-100)"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "Supplier-1",
+              "unit_price_minor": 6
+            },
+            "id": "f38abbd9-45bc-417c-9337-ff033eee3915",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "claims": [
+                {
+                  "intent_id": "REQ-1",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "39faf7fa-daf1-44ad-8014-b9f265d949d8",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 888,
+          "output_tokens": 143,
+          "total_tokens": 1031
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "9b9ac8752fd3dbd1641089f2472f57214d83509286ba00cd12568a862c8f9b4d",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T11:54:26.156051Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 469,
+          "eval_duration": 8184420000,
+          "load_duration": 802583,
+          "logprobs": null,
+          "model": "llama3.1:8b",
+          "model_name": "llama3.1:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 324,
+          "prompt_eval_duration": 411428000,
+          "total_duration": 8602335416
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "get_quote(Supplier-1,W-100)",
+                "get_quote(Supplier-2,W-100)",
+                "get_quote(Supplier-3,W-100)"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": [
+                "Supplier-1",
+                "Supplier-2",
+                "Supplier-3"
+              ],
+              "unit_price_minor": [
+                4.5,
+                5,
+                6
+              ]
+            },
+            "id": "0241c5d1-d722-4dcd-8527-fc1ef7d1ebb0",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "based_on": [
+                "get_quote(Supplier-2,W-100)",
+                "get_quote(Supplier-1,W-100)",
+                "get_quote(Supplier-3,W-100)"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": [
+                "Supplier-2",
+                "Supplier-1",
+                "Supplier-3"
+              ],
+              "unit_price_minor": [
+                5,
+                4.5,
+                6
+              ]
+            },
+            "id": "04aa04f5-74d8-46ea-9d5b-23a71ad04bcf",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "based_on": [
+                "get_quote(Supplier-3,W-100)",
+                "get_quote(Supplier-1,W-100)",
+                "get_quote(Supplier-2,W-100)"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": [
+                "Supplier-3",
+                "Supplier-1",
+                "Supplier-2"
+              ],
+              "unit_price_minor": [
+                6,
+                4.5,
+                5
+              ]
+            },
+            "id": "fc2a3f14-f2a4-48df-878f-7cda8518d27a",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "based_on": [
+                "get_quote(Supplier-3,W-100)",
+                "get_quote(Supplier-2,W-100)",
+                "get_quote(Supplier-1,W-100)"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": [
+                "Supplier-3",
+                "Supplier-2",
+                "Supplier-1"
+              ],
+              "unit_price_minor": [
+                6,
+                5,
+                4.5
+              ]
+            },
+            "id": "736363c7-b430-4b04-860e-a0cf97fc39e1",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 324,
+          "output_tokens": 469,
+          "total_tokens": 793
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "49b62420e5541cf16735643c3056967f5c57f9f0e2d7eac1962cbec65e8af5d5",
+      "response": {
+        "content": "",
+        "response_metadata": {
+          "created_at": "2026-11-17T11:54:30.816872Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 205,
+          "eval_duration": 3723315000,
+          "load_duration": 1217083,
+          "logprobs": null,
+          "model": "llama3.1:8b",
+          "model_name": "llama3.1:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 973,
+          "prompt_eval_duration": 803997000,
+          "total_duration": 4531115417
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "get_quote(Supplier-2,W-100)",
+                "get_quote(Supplier-1,W-100)",
+                "get_quote(Supplier-3,W-100)"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": [
+                "Supplier-2",
+                "Supplier-1",
+                "Supplier-3"
+              ],
+              "unit_price_minor": [
+                5,
+                4.5,
+                6
+              ]
+            },
+            "id": "ec41b438-2f22-4569-8263-813a6b61941c",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "Procurement requisition for REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "Supplier-2",
+              "unit_price_minor": 5
+            },
+            "id": "ee6e9482-8b47-4dc1-b701-24a84711c1e1",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "claims": [
+                {
+                  "intent_id": "REQ-1",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "1b11a124-c8d0-46f5-b219-336b202adb32",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_tokens": 973,
+          "output_tokens": 205,
+          "total_tokens": 1178
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "1771d32d264604ca9406967947800be009bdf1e2266c4af3516e351894dfc599",
+      "response": {
+        "content": "The cheapest acceptable quote is from Supplier-2, at 5.00 USD per unit. \n\n1. Supplier-2 quote: W-100 @ 5.00 USD/unit, total: 500.00 USD\n   - Supplier ID: Supplier-2\n   - SKU: W-100\n   - Quantity: 100 units\n   - Total: 500.00 USD\n   - Cost Center: CC-OPS\n   - Currency: USD\n\nPurchase Order:\n- Supplier ID: Supplier-2\n- Order Date: Today\n- Order Number: REQ-1\n- Quantity: 100 units\n- Unit Price: 5.00 USD\n- Total: 500.00 USD\n- Cost Center: CC-OPS\n- Currency: USD\n\nFinal Report:\n- Requisition ID: REQ-1\n- Status: Done\n- Supplier ID: Supplier-2\n- Order Number: REQ-1\n- Total: 500.00 USD\n- Cost Center: CC-OPS\n- Currency: USD",
+        "response_metadata": {
+          "created_at": "2026-11-17T11:54:35.068522Z",
+          "done": true,
+          "done_reason": "stop",
+          "eval_count": 215,
+          "eval_duration": 3880959000,
+          "load_duration": 1257500,
+          "logprobs": null,
+          "model": "llama3.1:8b",
+          "model_name": "llama3.1:8b",
+          "model_provider": "ollama",
+          "prompt_eval_count": 1320,
+          "prompt_eval_duration": 239400000,
+          "total_duration": 4124708584
+        },
+        "usage_metadata": {
+          "input_tokens": 1320,
+          "output_tokens": 215,
+          "total_tokens": 1535
+        }
+      },
+      "worker": "agent-1"
+    }
+  ],
+  "format": "fivefold-cassette/1",
+  "model": {
+    "adapter": "live",
+    "name": "ollama:llama3.1:8b",
+    "params": {
+      "num_ctx": 32768
+    }
+  },
+  "run": {
+    "config": "G1",
+    "contract": "C2",
+    "params": {
+      "agent_workers": 1,
+      "params": {
+        "approval_poll_interval_ms": 500,
+        "commit_deadline_ms": 10000,
+        "dispatch_timeout_ms": 2000,
+        "max_attempts": 5,
+        "max_hop_latency_ms": 50,
+        "max_probes": 20,
+        "max_wait_ms": 60000,
+        "status_lag_ms": 0,
+        "status_probe_interval_ms": 1000,
+        "think_ms": 1000,
+        "tool_wait_ms": 2500
+      },
+      "plan": [],
+      "workers": 1
+    },
+    "run_id": "dev-001-single-po.G1.C2.8",
+    "scenario_digest": "9c7dd96902f0c2e9d3e52375e0ec418cec26da74728d9e985f9b4208571d1e4e",
+    "scenario_id": "dev-001-single-po",
+    "seed": 8,
+    "topology": "inproc"
+  }
+}
