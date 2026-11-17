@@ -9,6 +9,7 @@ import mcp_types as types
 from mcp.client.session import ClientSession
 from mcp.server.lowlevel.server import Server
 from mcp.shared.exceptions import MCPError
+from mcp.shared.message import SessionMessage
 
 from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.harness.log import MemoryHarnessLog, MessageRecord
@@ -91,6 +92,36 @@ def calls_of(log: MemoryHarnessLog) -> list[tuple[str, str | None, str | None, s
     return [
         (m.kind, m.api, m.intent_id, m.answer_class) for m in log.messages if m.api == "propose"
     ]
+
+
+def test_request_delivery_uses_the_logged_snapshot() -> None:
+    rig = Rig()
+    delivered: list[types.JSONRPCMessage] = []
+    request = types.JSONRPCRequest(
+        jsonrpc="2.0",
+        id=1,
+        method="tools/call",
+        params={"name": "propose", "arguments": {"zeta": 1, "alpha": 2}},
+    )
+
+    async def exchange() -> None:
+        link = Link(rig.scheduler, rig.transport, agent="agent-1", gateway="gateway")
+        await link.client_write.send(SessionMessage(request))
+        assert request.params is not None
+        request.params["arguments"]["zeta"] = 99
+        await rig.scheduler.run()
+        arrived = await link.server_read.receive()
+        assert isinstance(arrived, SessionMessage)
+        delivered.append(arrived.message)
+
+    asyncio.run(exchange())
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], types.JSONRPCRequest)
+    assert delivered[0].params is not None
+    arguments = delivered[0].params["arguments"]
+    assert list(arguments) == ["alpha", "zeta"]
+    assert arguments == {"alpha": 2, "zeta": 1}
+    assert delivered[0].model_dump(mode="json", exclude_none=True) == rig.log.messages[0].body
 
 
 def test_every_mcp_message_is_a_logged_message_on_the_agent_gw_hop() -> None:

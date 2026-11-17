@@ -919,3 +919,53 @@ def test_a_study_whose_spend_reaches_the_cap_as_an_episode_ends_stops_before_the
     assert printed[3].startswith("The spend cap stopped the study after 1 of 3 episodes.")
     files = sorted(str(path.relative_to(out)) for path in out.rglob("*") if path.is_file())
     assert files == ["cassettes/none-C2-B0-seed-7.json", "none-C2-B0-seed-7.json"]
+
+
+@pytest.mark.parametrize("config", ["B0", "G1", "G2"])
+def test_live_parallel_tool_calls_replay_after_argument_key_reordering(
+    run_database: Callable[[str], str],
+    provider: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    """A cassette's sorted object keys must not change tool answers or request hashes."""
+
+    async def answer(
+        self: PolicyProvider,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if any(isinstance(message, ToolMessage) for message in messages):
+            reply = AIMessage("Done.")
+        else:
+            reply = AIMessage(
+                "",
+                tool_calls=[
+                    {
+                        "name": "get_inventory",
+                        "args": {"zeta": "extra", "alpha": "extra"},
+                        "id": "inventory-call",
+                    },
+                    {
+                        "name": "get_budget",
+                        "args": {"cost_center": "CC-OPS"},
+                        "id": "budget-call",
+                    },
+                ],
+            )
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    monkeypatch.setattr(PolicyProvider, "_agenerate", answer)
+    original = run_database("parallel_arguments_rec")
+    replay = run_database("parallel_arguments_play")
+    meter = SpendMeter(Decimal(1), price_file())
+    spec = replace(demo_1_spec(config, 7), plan=[])
+    _, cassette = record(live(spec, meter), original)
+    reloaded = Cassette.from_text(cassette.text())
+    assert reloaded.calls[0].response == cassette.calls[0].response
+
+    playback = play(reloaded, SCENARIO, original=original, replay=replay)
+    assert playback.matches
+    assert playback.calls == len(cassette.calls) == 2
