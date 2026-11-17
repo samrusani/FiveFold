@@ -1,6 +1,6 @@
 # Contributing
 
-FiveFold is working toward its first release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
+FiveFold has a `0.1.0a1` pre-release on PyPI and is working toward its first full release, v0.1. The Status section of [README.md](README.md) says what is built and what is left. To report a bug or question a design, open an issue; to review a change, comment on its pull request. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
 
 Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the community.
 
@@ -54,7 +54,7 @@ Short sentences, plain words, specific numbers with units. No em dashes. Cite pa
 ## What never goes in the repository
 
 - Secrets. Keys come from environment variables.
-- Personal names, personal email addresses, local paths and machine details. GitHub noreply addresses in commit metadata, and links to other people's public work in citations, are fine.
+- Personal names, personal email addresses, local paths and machine details. GitHub noreply addresses in commit metadata, the public contact in `CODE_OF_CONDUCT.md`, and links to other people's public work in citations are fine.
 - Held-out evaluation scenarios. They live outside this repository.
 
 CI checks that every commit in a pull request uses a GitHub noreply address as author and committer.
