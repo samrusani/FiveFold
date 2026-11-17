@@ -71,6 +71,11 @@ jobs:
         run: pip install uv==0.13.8
       - name: Build the sdist and wheel
         run: uv build --out-dir dist
+      - name: Check the PyPI description
+        run: |
+          python -m pip install twine==7.0.0 'readme-renderer[md]==46.0'
+          python -m twine check --strict dist/*
+          python scripts/check_pypi_readme.py dist/*.whl dist/*.tar.gz
       - name: Run demo 1 from the installed wheel outside the checkout
         run: |
           smoke=$(mktemp -d)
