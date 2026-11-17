@@ -115,6 +115,7 @@ These are the 235 expected outcomes with the scripted agent, and CI checks every
 | [Studies and reports](docs/studies.md) | Matrices of runs, CSV and Markdown reports, cost per passing run and recovery latency |
 | [Live runs](docs/live-runs.md) | Ollama, Anthropic, OpenAI and Google models, behind a flag, a spend cap and a price file |
 | [Local pilot](docs/report/pilot-ollama.md) and [API pilot](docs/report/pilot-api.md) | Findings and raw data from 18 episodes per model |
+| [Full study](docs/report.md) | Results and raw data from the development study |
 | [Bring your own agent](docs/your-own-agent.md) | The gateway and the simulator as services, for your agent over MCP or HTTP |
 | [Admin API](docs/admin-api.md) | How a person resolves an action whose outcome is unknown |
 | [Limitations](docs/limitations.md) | What each guarantee depends on, and the known limits |
@@ -124,7 +125,7 @@ The gateway is a research design, not hardened for production ([SECURITY.md](SEC
 
 ## Status
 
-Version 0.1.0a1 is on [PyPI](https://pypi.org/project/fivefold/) as a pre-release, and everything on this page runs today. Still to come for v0.1.0: the live-model study, its report with raw data, and a short video. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
+Version 0.1.0a1 is on [PyPI](https://pypi.org/project/fivefold/) as a pre-release, and everything on this page runs today. The [full study and its raw data](docs/report.md) are available. Still to come for v0.1.0: a short video. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
 
 ## Contributing
 
