@@ -1,0 +1,828 @@
+{
+  "calls": [
+    {
+      "request": "97283b6ce22d6ce9d409a2bd592912499cc0605c5b2eb8e555695f5a9672f4e6",
+      "response": {
+        "content": [
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_013dUFK7Va3eSHZwrVddjzHP",
+            "input": {},
+            "name": "list_suppliers",
+            "toolset_name": null,
+            "type": "tool_use"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_019QKvZmtXBvrNKZt6guri4T",
+            "input": {
+              "cost_center": "CC-OPS"
+            },
+            "name": "get_budget",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qmF3zft2fKJCDeigYV",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 2436,
+            "output_tokens": 82,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {},
+            "id": "toolu_013dUFK7Va3eSHZwrVddjzHP",
+            "name": "list_suppliers",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "cost_center": "CC-OPS"
+            },
+            "id": "toolu_019QKvZmtXBvrNKZt6guri4T",
+            "name": "get_budget",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 2436,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 82,
+          "total_tokens": 2518
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "e5c973d869607dacf805d0172c63cfda73db5b09a797e77747dc819cdde82278",
+      "response": {
+        "content": [
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01WfggFG6AGq9MpGQRHKndTD",
+            "input": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "name": "get_quote",
+            "toolset_name": null,
+            "type": "tool_use"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01AP7gsMoYXUSPJMMXy2yust",
+            "input": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "name": "get_quote",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qmMesTtLu68oZanCED",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 2725,
+            "output_tokens": 153,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "id": "toolu_01WfggFG6AGq9MpGQRHKndTD",
+            "name": "get_quote",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "id": "toolu_01AP7gsMoYXUSPJMMXy2yust",
+            "name": "get_quote",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 2725,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 153,
+          "total_tokens": 2878
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "7592137e949c66fd5aebed6f30ced4e22a2900ec5e408f5b41c074736bdf0232",
+      "response": {
+        "content": [
+          {
+            "text": "S-1 is cheapest: 540 × 100 = 54,000, and the budget has 80,000 remaining.",
+            "type": "text"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01YCBArM5bBXUkDSGATwUV8R",
+            "input": {
+              "based_on": [
+                "R-0001",
+                "R-0002",
+                "R-0003",
+                "R-0004"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 540
+            },
+            "name": "submit_purchase_order",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qmUpUgNAURzkN3EVG8",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 3106,
+            "output_tokens": 294,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "R-0001",
+                "R-0002",
+                "R-0003",
+                "R-0004"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 540
+            },
+            "id": "toolu_01YCBArM5bBXUkDSGATwUV8R",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 3106,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 294,
+          "total_tokens": 3400
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "d2dd94961f39090dc448d0d6fec4d5793fedbb599be8c9ce9ce211bfe417cd3c",
+      "response": {
+        "content": [
+          {
+            "signature": "CAQS2AUKEAgTGAI4AUIIdGhpbmtpbmcSDO0iSj+Zl1hXkIxk7BoMrxl0Cfmi8oF9tQbiIjCRiB9sY0Erp5di9hXoGUIqwq0n0yZtRVIVtYlxulxBrKXAmzgr7OnWuyFpkDWnnB4q9QS6nVMCO7nX+UT7Sigd2vj5Hj4bSyKS8f75U4LL+M/mc/zJ6OWeGTBHFSauDwjgW0Ltl34d8NHbCyGBPh7Y2qeZzwxMW+R8Bv60dXvrXA51fHJg7tsKhRGPEB3NIkqj2C6sFQjqwu23SWbRKS+Q6opY7MKKrYV2m38nlrrgsZxwL9ZJfA4W8vcVmr53PC67PXGq17OD1E36chDNUIbL+bfQWt2nTDgWhD4P9osp4qT15RITkMD5C0VVIIBlSnnZi48D/W/ht2aQWGtsuxQzz4+KAkLJZ61Sstkr+Afon9g09/68ZYqxI9nSaVhPs082yz2Ky5CwDknlqz9g4OZDLi7TOQ3rG2t3MQd3UIRixgr07dgldshRr+pSTSsCaefORNf3zWEgwWHPzS+UFAIAie9xXeHLRWkOW6XT1dQDDt/j+fs6pj+8PAb7+Duy1qPB5NYp2HY6dKWMLBVVQT7Pc9QWqCcQ0Zr7inU+udk4PG3dGRyA/jQ/daWI+/+hWLGf5IrdFNEApjrk75ktUteN80j1DEJAH2tojpE/B6az6JR0xdFTfirfIA6gPojK+OVSVYfGKelSF7VIyKSOFizXWEYeThg1Qps+4CjG4tr+BkxNFhNGWkQSm2a+VUXKNPx+ZC+QeM4lH0OsSUN5wzph2HDBkaYcBMhPMVReQ3HYx6sYfedYk0MYMVdoo3ycHctwkoo/Kpd4K/s5R+ZqAvFogJ+7Jr7rf2xiLExsXswlIBm5QtkJDzk4p7DhCtRQiVRfZwQRz7cWdjGP41PdgYO2GkcZ7QRiCTiMKc2RpqHFE96SqZqwlLeVpvBAv8Wv3VpIRI/nuWq6hxgB",
+            "thinking": "",
+            "type": "thinking"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01ES4qu2RhYZyrXiZUe9cgX5",
+            "input": {
+              "action_id": "A-0001"
+            },
+            "name": "get_action_status",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qmfrFsrXpHRbR7Z2Jv",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 3473,
+            "output_tokens": 72,
+            "output_tokens_details": {
+              "thinking_tokens": 17
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "action_id": "A-0001"
+            },
+            "id": "toolu_01ES4qu2RhYZyrXiZUe9cgX5",
+            "name": "get_action_status",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 3473,
+          "output_token_details": {
+            "reasoning": 17
+          },
+          "output_tokens": 72,
+          "total_tokens": 3545
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "7a4253dccd39c3e1756a600cf3f957a30eb213053e71906ad73cd2ef215e97a2",
+      "response": {
+        "content": [
+          {
+            "signature": "CAQS5AYKEAgTGAI4AUIIdGhpbmtpbmcSDJEeNAhMU/QPAnwC7BoMVAPD+JL4KD/k/0j+IjCvx5tbfJNZGy+O9YsppWejwqB4m3sGgSIW98bQMLCtS55xb5Lu8/lEJwEgcx7y9hUqgQZQiDpnxzvtdyFwLkuMhHFWLX3qukfcSw2Peo8NTNsGBEJ6+VnX4RBwJ4Ujvu/0XPB92nBFtv9VZZu9vg7Ns/2YFdUHbbca8Xg6cvGXyrYJHBQJ7FgJJi1c3adwy4WxcZ5SIMCUuJcF6z/xzrZoPK8HxhNj+ynpiuUT2WXyMTStllvklGI49AMeQ9sID2iaz1/1EIo6ZePeaBzBxf9HktiPUmWv2xDr1Sv+v4usyWj+V/GsX7Nh4p9FHYMwc2HZ7MzlmYYD5voSkWWKSmpv9eAEkfYXKyjGbkdu8+HZ9OgNSGkIkaD7ELAZGpGnC4JUX8gnAY4YYcW4awB3Zl5WJZ46NLDYx3Lmc70hynDD+16AAO6mTNOT1mJ7+hnjbUed8HCGHf5Ewq4t4nrc+n8uNHr1xGMTDYI2cxSdT1RLOvAIgNN/7guoCwxWMwCiPUMVpBMcZbVDU4GOWJn6kPd1HuPHb9eUeXqEw042qn2SpseopvKMFukm0DQ9CFRQm2ZnTU1D2qZM3Doh7UTi2yeOX//4tJG4DFHWxFfj6B4krDek76344IWYKXLq0iPCasxX/9ihMPfssA572IGXA3Bx93o8S2l7QIy4pfsTi/tNNNYE4KVEah3NfcdenW8mMNTHI1SWmS8UivXyNmrAbdZWnq4cPxX5F7i0K1SUEmc/AEJBHnb3G8CyctGBYppx+aD9YGTL2zB7ILJLzbpnj8T5SKl0lIot9uA4R4rOMXPBYkfoA68+yCteFmaTanAFas2lhjPWqvqyA5ojhbWC8XmW8YQXN7TPmUU8b2nDk3RGey8o19eiaYihF9nH8NOnFgpkG3VoV6PZj4PpGzXVPqgVU7WgAaF5DZvPTlJ5o+Izbp/+GGuAlnoZRuPzA4niFV9395m4D0sNepgg1HH2ZCBH6DMBnRLFIl0aNqRlWOxVlLrKhEl5zQV4ghMH7I8B6Sjcb4X5yD5oqWpQxsVuRziJq1vy0KNYK+G7YhR3e1Olyi5AMFN7Ve9jZASm3KR2/VpOyjGoGAE=",
+            "thinking": "",
+            "type": "thinking"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_019asNWhzoYbdzY79KZKxtMQ",
+            "input": {
+              "cost_center": "CC-OPS"
+            },
+            "name": "get_budget",
+            "toolset_name": null,
+            "type": "tool_use"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01XaD12nRdjCn4XRnTmNzUxp",
+            "input": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "name": "get_quote",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qmmPPWp3osr5FEzFxG",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 3615,
+            "output_tokens": 178,
+            "output_tokens_details": {
+              "thinking_tokens": 46
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "cost_center": "CC-OPS"
+            },
+            "id": "toolu_019asNWhzoYbdzY79KZKxtMQ",
+            "name": "get_budget",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "id": "toolu_01XaD12nRdjCn4XRnTmNzUxp",
+            "name": "get_quote",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 3615,
+          "output_token_details": {
+            "reasoning": 46
+          },
+          "output_tokens": 178,
+          "total_tokens": 3793
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "4f2eda10229bb17d4a4daf86c4d168ce59f6b6fdbf48c7ffc7031b9aebb39675",
+      "response": {
+        "content": [
+          {
+            "signature": "CAQS1AYKEAgTGAI4AUIIdGhpbmtpbmcSDIYZQ87KA+Xt8HTqGxoM5azJs4Yc2BTwcunuIjBDAXpIMmYiw3IDXCN2LAoRMIC7RdpjTWk4zF7sGGkAJjLQgVkpUgd1WFb1CGTsqZQq8QXEF0oDRgAsIVMPkC/HuBukw2wG4iSCuNdy1JoYgm003cBy0ns4wbKDVEDbqqkxWvk7hnYpNQTnI0XqFlfj5FfpvB5bkG/MGTKqMFOnaqRvXS0+A1+1bZz+hxRR8+NzgxSOG3k/W8H/iFRXsZyJ8UJvfnWFdd7FbvuHg30JLROS9lqlunvO/0GwHsH1ABwEGEOr80BQt4zh5KeJAdjkNWjZU+imA6PwNnrQTfAMhLKWgHj5IvjkiLds7QPSUj9TQ3e8cpdYNA5uEQCh9fEwsQWpIxRduAVYaY8JbJMScT1Cz/PVionVx+oSOC3nioN26JE27AO9dLRvWErCJcWaaBp9hsDv9uJCU8phvO/0CqbHb7mYzTXfxdICTU8W7QutyUPuJLD/nL8QwCypFvIBTqsK+mOvQXLYmBdkHHS3eccD3urghc3HNmNqvN1OrWS8rndcEbGYd9WsjwJDFLo/mv1knS59QPmxn1KLipzpwD9cTzSGqN9gkk0LDZu/pav2py1kDEq3hD3i4+fVCy3/XwJzP7EFCax50qBdT/ac1erC4UjoAbayAeDOfI91qZSiegFKt0vDbasJxXllTXlwLnySlFZ+Dstppt96cWSsHBTYvRGkrQKQK8cUZDLm0PIkKyOsMTVZZ8WstAcpiBfcCi/NksnrYvgtD4QLTdzLcCr2VVprOuB/3Ax0Kw7jN9f/If6XJ67HlQEX/oXno4crKjxV/CA0GDZf/9zbZiSllZ6nwrm8yEX7QpO/EbuD+6qPIBGPOVqbnX8+Ab/we03CrdUC25zw/d3dmSBC1Mri/BOzIitRIuGRBqHnFFg2z/TMZdnVELVT4c1zXtot2ZFgg1sX+mK4PFPh5+DFY7LyZwNYMaXEanWQaVmIO0owQQeHC5nboHOf44gcgDZS+rmNiZMAy5ciG1qIxFo1Mn0E/GLghSjxYqAQ2qqt8afhgobFKjZfFG30eRzJawze8qBtqsuTv1VfaQP9T0mCRPt6E0sTV4AYAQ==",
+            "thinking": "",
+            "type": "thinking"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01EFafUUMLqNznzvv4FD61eN",
+            "input": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "name": "get_quote",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qmxHiS2Maa9UCtyBYK",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 3995,
+            "output_tokens": 115,
+            "output_tokens_details": {
+              "thinking_tokens": 36
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "id": "toolu_01EFafUUMLqNznzvv4FD61eN",
+            "name": "get_quote",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 3995,
+          "output_token_details": {
+            "reasoning": 36
+          },
+          "output_tokens": 115,
+          "total_tokens": 4110
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "6027ee20824895c1e93f76dfcc7fae9a1b4e35c534ed3c3fd12bc49373e288f2",
+      "response": {
+        "content": [
+          {
+            "text": "S-1 is still the cheapest, now at 567, which is under the 600 cap. I'll resubmit at that price.",
+            "type": "text"
+          },
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01CBQbTcB8jvvwTjYoWMRhbu",
+            "input": {
+              "based_on": [
+                "R-0002",
+                "R-0005",
+                "R-0006",
+                "R-0007"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 567
+            },
+            "name": "submit_purchase_order",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qn4yoCggQTDboB7MxG",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 4200,
+            "output_tokens": 298,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "R-0002",
+                "R-0005",
+                "R-0006",
+                "R-0007"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 567
+            },
+            "id": "toolu_01CBQbTcB8jvvwTjYoWMRhbu",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 4200,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 298,
+          "total_tokens": 4498
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "880a7a919663b3b7fd8001854066c8a350f5a99fc9315f17ef6be1517853f067",
+      "response": {
+        "content": [
+          {
+            "caller": {
+              "type": "direct"
+            },
+            "id": "toolu_01GQc6DMeCNT7djDYxNx2koz",
+            "input": {
+              "claims": [
+                {
+                  "effect_ids": [
+                    "PO-0001"
+                  ],
+                  "intent_id": "REQ-1",
+                  "note": "PO for 100 W-100 from S-1 at 5.67 USD/unit (total 567.00 USD) to CC-OPS. The first attempt at 5.40 failed because S-1's quote had changed. I re-read the quotes, and S-1 was still cheapest (S-2 was 5.75).",
+                  "status": "done"
+                }
+              ]
+            },
+            "name": "submit_final_report",
+            "toolset_name": null,
+            "type": "tool_use"
+          }
+        ],
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qnFmBriFWo1MgZyjet",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 4571,
+            "output_tokens": 190,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "claims": [
+                {
+                  "effect_ids": [
+                    "PO-0001"
+                  ],
+                  "intent_id": "REQ-1",
+                  "note": "PO for 100 W-100 from S-1 at 5.67 USD/unit (total 567.00 USD) to CC-OPS. The first attempt at 5.40 failed because S-1's quote had changed. I re-read the quotes, and S-1 was still cheapest (S-2 was 5.75).",
+                  "status": "done"
+                }
+              ]
+            },
+            "id": "toolu_01GQc6DMeCNT7djDYxNx2koz",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 4571,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 190,
+          "total_tokens": 4761
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "67178176361a34566737c0db78dfead02c1a886482bfc20caac1441233d84bf5",
+      "response": {
+        "content": "REQ-1 is done: purchase order PO-0001 is confirmed for 100 units of W-100 from S-1 at 5.67 USD per unit, 567.00 USD in total, charged to CC-OPS.\n\n- **Price change:** My first attempt at 5.40 USD failed because S-1 had raised its quote to 5.67. I re-read the quotes and resubmitted at the new price.\n- **Cheapest quote:** S-1 was still cheaper than S-2, which quoted 5.75 USD. Both are under the 6.00 USD cap, and both suppliers are allowlisted.\n- **Budget:** CC-OPS had 80,000 minor units (800.00 USD) left, so the order fits.\n\nThe final report has been submitted and accepted.",
+        "response_metadata": {
+          "container": null,
+          "diagnostics": null,
+          "id": "msg_011Ch8qnRULeBNTXZVsaLBZ4",
+          "model": "claude-sonnet-5-5",
+          "model_name": "claude-sonnet-5-5",
+          "model_provider": "anthropic",
+          "stop_details": null,
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 4779,
+            "output_tokens": 252,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0,
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "input_tokens": 4779,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 252,
+          "total_tokens": 5031
+        }
+      },
+      "worker": "agent-1"
+    }
+  ],
+  "format": "fivefold-cassette/1",
+  "model": {
+    "adapter": "live",
+    "name": "anthropic:claude-sonnet-5-5",
+    "params": {
+      "max_tokens": 16000
+    }
+  },
+  "run": {
+    "config": "G1",
+    "contract": "C3",
+    "params": {
+      "agent_workers": 1,
+      "params": {
+        "approval_poll_interval_ms": 500,
+        "commit_deadline_ms": 10000,
+        "dispatch_timeout_ms": 2000,
+        "max_attempts": 5,
+        "max_hop_latency_ms": 50,
+        "max_probes": 20,
+        "max_wait_ms": 60000,
+        "status_lag_ms": 0,
+        "status_probe_interval_ms": 1000,
+        "think_ms": 1000,
+        "tool_wait_ms": 2500
+      },
+      "plan": [
+        {
+          "at": {
+            "match": {},
+            "occurrence": 1,
+            "point": "gw.dispatch.before_check"
+          },
+          "fault": "F7",
+          "params": {},
+          "variant": "price_up"
+        }
+      ],
+      "workers": 1
+    },
+    "run_id": "dev-001-single-po.G1.C3.8",
+    "scenario_digest": "9c7dd96902f0c2e9d3e52375e0ec418cec26da74728d9e985f9b4208571d1e4e",
+    "scenario_id": "dev-001-single-po",
+    "seed": 8,
+    "topology": "inproc"
+  }
+}

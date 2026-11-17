@@ -1,0 +1,449 @@
+{
+  "calls": [
+    {
+      "request": "b37439093ac148adbbeb7937c16bccf02c4228a2603acd419a1584a2cc086dab",
+      "response": {
+        "content": [
+          {
+            "arguments": "{}",
+            "call_id": "call_ETsAYYyYqcjQkAosJC4sBz1G",
+            "id": "fc_06684a8aac40601f006afc85240d2087d296a906f17e03fd01",
+            "name": "list_suppliers",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"cost_center\":\"CC-OPS\"}",
+            "call_id": "call_AnhcGtWXpNXoKH1rHAXjiHxB",
+            "id": "fc_06684a8aac40601f006afc85240d3087d2af6793afea01097c",
+            "name": "get_budget",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794934050.0,
+          "id": "resp_06684a8aac40601f006afc8522104487d28d30ac2df58c1d01",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {},
+            "id": "call_ETsAYYyYqcjQkAosJC4sBz1G",
+            "name": "list_suppliers",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "cost_center": "CC-OPS"
+            },
+            "id": "call_AnhcGtWXpNXoKH1rHAXjiHxB",
+            "name": "get_budget",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 0
+          },
+          "input_tokens": 982,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 49,
+          "total_tokens": 1031
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "6784a0f2f1f4cb0f2cc8c35e0ce8ba4f681296c67475eb1aed4c8dc4f73fcbeb",
+      "response": {
+        "content": [
+          {
+            "arguments": "{\"supplier_id\":\"S-1\",\"sku\":\"W-100\"}",
+            "call_id": "call_YxMf8ThzNFQfmciE4yagIF4l",
+            "id": "fc_06684a8aac40601f006afc852769b487d281a4b55dfe8d0e55",
+            "name": "get_quote",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"supplier_id\":\"S-2\",\"sku\":\"W-100\"}",
+            "call_id": "call_ZFau3XuXTS4bPptQ2hi7GTId",
+            "id": "fc_06684a8aac40601f006afc852769c487d2a66bf48d30abd147",
+            "name": "get_quote",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794934053.0,
+          "id": "resp_06684a8aac40601f006afc8525381887d28911effa521ffa8c",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "id": "call_YxMf8ThzNFQfmciE4yagIF4l",
+            "name": "get_quote",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "id": "call_ZFau3XuXTS4bPptQ2hi7GTId",
+            "name": "get_quote",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 1156
+          },
+          "input_tokens": 1159,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 66,
+          "total_tokens": 1225
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "f9c9fac903396bfeee472f9ba98f46ab4d012a13862cac8febd92da10e8de1c9",
+      "response": {
+        "content": [
+          {
+            "arguments": "{\"intent_id\":\"REQ-1\",\"based_on\":[\"R-0001\",\"R-0002\",\"R-0003\",\"R-0004\"],\"supplier_id\":\"S-1\",\"sku\":\"W-100\",\"quantity\":100,\"unit_price_minor\":540,\"currency\":\"USD\",\"cost_center\":\"CC-OPS\",\"note\":\"S-1 has the cheapest acceptable active quote among allowlisted suppliers: USD 5.40 per unit versus S-2 at USD 5.75. Quantity meets the minimum; total USD 540 is within the available USD 800 budget.\"}",
+            "call_id": "call_75m4nLTnDcQqRiGLP9JJjTdy",
+            "id": "fc_06684a8aac40601f006afc852a094c87d2a785b7a387ad118c",
+            "name": "submit_purchase_order",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794934056.0,
+          "id": "resp_06684a8aac40601f006afc8528803c87d2b93f06ee8cb40a32",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "based_on": [
+                "R-0001",
+                "R-0002",
+                "R-0003",
+                "R-0004"
+              ],
+              "cost_center": "CC-OPS",
+              "currency": "USD",
+              "intent_id": "REQ-1",
+              "note": "S-1 has the cheapest acceptable active quote among allowlisted suppliers: USD 5.40 per unit versus S-2 at USD 5.75. Quantity meets the minimum; total USD 540 is within the available USD 800 budget.",
+              "quantity": 100,
+              "sku": "W-100",
+              "supplier_id": "S-1",
+              "unit_price_minor": 540
+            },
+            "id": "call_75m4nLTnDcQqRiGLP9JJjTdy",
+            "name": "submit_purchase_order",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 0,
+            "cache_read": 1374
+          },
+          "input_tokens": 1377,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 133,
+          "total_tokens": 1510
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "a40a4d432545c13f8480d023df42543192b3bbb4eba1a6e7a54182a58eef514f",
+      "response": {
+        "content": [
+          {
+            "content": [],
+            "encrypted_content": "gAAAAABq_IUvXytuGxC7PryZ3Q8ZDvnrN7Vf_9GslIhHZF_yqQzevmoRw2_6rT8zCRS3UtD3YdYTDOK5cZSVSRc1ME4OToeXETMvjP-Nk5Hrsiy_eQ2H6sA9IvVvCCJxO4-bJkjLM0zzyTq7Ho1bM9c2YRIkdsIiV_VQJclfruo9LZWT6OdG8Dy_HvBvN5bU-dx2sH7pYVLHMzvIOkzw2xRU8PpuCrkd2qa1gxgpgfUp46SjGj9Bk6XTWVS3DY0S_mwB7crRNfoJEMdgX0_wDB6sQ52qXRrZ6BNxU4vz_3A6vSPrQ2t-OjQd93Ahb0g67ZzpSF2zolfCPnZSAdEvXQ2Deoq4cWL0cZsDNQdfd3D9jIt0592YBQrSyhat7UrbC2CDfYXQHtdifJ59vd9vvtmDgrHG1zZf5Bs9cvs0nYhsvi0Rz-D9VNuEWN5fJbpeFdZkNnzv6MAoHNDDEVQJhOcmfRm4BUuxsIL-KWn6bhMBVrDmGJIkRDRTXwN0fIpMH480ncV4XLAafvc7gykJypxkwWj6M052ZdSyTyva2n3rwEmYRuwQT5IeZ2mMo4wCAxcjY0yxrFpmBxo1K_vrGtVQH34WXZG13f6CBfwSmwImvjACv0p-vBdMpKuIoi0aM2f3zEyIQSQiAm4Fm1QlsiLJkAcEydiwy4Ph-1q0ZkeuEI9oupcdt5VsPr_fJHOWISs7EAQKkTv0jZPsRyHlV9WHkZzhy8r3SUdOjfuD_sZn6Wrx4sKGRAeRkYZUMSvqkA9F7Bg4rh-mqtGlNhQ8833axeUIW9uByU3NulCrRFDU7GQIsbDKcWHPA10X-gJ1S6k9qCq-Z3peJ5pffAf2-ycsIQHYW2s57Am6Aqg5ZXenYtodbGUU5tyiPS5G4yxpl5kSLVjT37hlP3m2jh5nEugGcT23_Hqt-GRjbwfu1E-zG464A6o9ACgyGD6yLRfs73Z3RTKJkm9IHA7bNwJeVzr089mfuvuoWgiqVbCg0dtM8KEye0crm1B4AGTCwAfUjpjD0RbGhdXlKAMUJZnavF9kW9Vm73LXXAUCv6EeHOwmgFwEiOYd2Lq3X40LmgslKihtZEAPEAyhyMEjDpWvpG6KMoxPrpZjVmXNpxWimt4NdbtHT0s69N_wjf20AuE8IxR3S6yalKPHpIi7HLStVgLakM78ugSi0fj2xjpuwPDsPKHEKBC2ljptoIWL_Ucv5LDP_EOqNlS80oR-pSSI-mIk61zZr6KHkwygpxPFKYq481tMiUrg79qrFBLzK6t9IAF86YJC8qVjRW9MQEHj2KQv1-9d67iLa6NSNtB6zRZ7mrxMCvWFmAGeOk92Rn_azB7sS_BXPIap7zqhPyE5CxR5MlXenNa4R4HKgj8KW5Mj70M2Bxnp8LNP9uG4hqxv41ZZwqBiarIaarSodEl6aqqUYi07ES-VrBBw4cHV1iSEIDQTQogzuGlVpJAIms3upLiK47K4VcunVrOz6XHSYK3rVJ6Id8Z2MhVybxSWp-nFmGkmvmQjwIuSY1Pe_sKU_Nnznz4f3c3ItEG9xVzFUYfm7lox42Y2WCa2wFsPNEIt1ZCQRoLFxwpIFHwmuDI_ItWpeHWYfJwJqxgH2S-rslLr51ioXE7j1TVx7BU2Pv_FikIedBXV5QnzVSZ3O-agpHW2o_YPGQC_SLT2dwCWETojyGV61GnJu41LPpe9G1Lv8cJsHUkJailiUrsPGo6rWMDsNaXJe_-DAVkZyz9_wdtl3BLYfm-3WT5Ie-FqKbaM7V1VpyX9H2HKbLOgc9NeoRwcYmzlpcxAaTaudbiXwxWZSySCqHqLhELWz0rl9n00MU6lWJOvwPx7OG5O-bQdxYwQ2I0Nk5jFrWlkPz1kFYAyM7XJ1Q54W_UPOgBnYYl8UEnQK4rBmyP-88bV0_s7ZzK4TQZxRZIjABqWRhnLxszxi2Pew6kgGE0nK7avDudHjOeCM9G9b3dWovPnEQdvAGsgdFHoZTlnG0HbbhhRCoQlX1Q3LhMfS7sSHQrcUfQVMGwUk9zBrGRBwiP2yBieEjik55wEshZLHhtzlX2HzFhJH2Ijik-2jMTMmjZLqZKZaRLHmRkVX653KqFyoqa7nF1E3PZGV-JN6TaaL6WLmGgIo5roB6ugdgBUVDMX27aQS4iUQB_acrVBcQU6xzXS_yKnjhRg_dE_M085lc8QxHRr5QjMDyiKmK4uAtUba8B8Ksf6-y9ylEQVPkyZuRTCws4MROaWuCqTaOL_PEr2aTCs2k48Zi6AS1r0niU7qHyYH52XJO7IJKjCrzsuF9ZMyjAYGqmwjpGwbJiEqa2gD_5Bto591I-0nYQBStWskAzcAYy0HSbw9_8NZ-jm2dMAlRuACgK3GlHpKtpmpfC7sqC-_1zhpcfXJVjuG7S3MVR663sJbj2P0dnvbNTVWTXHZCQpQ5ihL_jXmLEmVGUJ8rOUNAbPnsKWGdzEG_mCY_Th0-YlwXFXh75vmrUupf6PjpJ6H48-CBpARFxWW897i5XgCIwOi41iPIyymY5V5_iJ3q-pUJPNe_UfglEkX4J5XbmvBNTr3VXcHvgy0z7Dg6sqI1lv9AyEe65uh0V7zK-f5rCAtkM_noaG_DhWe-k1aHiY6UVWWKKs7epMz1flh59r91MfQA8rXsTWFQOpbu--lv8LhfkaD7xAQEvfdn2cNQj4QSUtxYH0OP0Ku5bSuCmY4LDy2a7XPsMyo3PB53PQCxQ6LyorjEDUEx4Xmffx0S_GLZAu5hR5RevWHsNfE-7a9ZIubX30CugLDGnlwCwFcIKM7b9jCXHu2O9pByWL4KeWf9uppI-NV-V9lcXsDnI46mjvcctuo7KtjHuN7We1GXcnMgv9U0UwsUDad3vsr_Or_-oYi-wDM763s6Qz_T3Wk2i-8dNcowkOiLRfSF2aJ2PSrBtrAW1T1eQKWUYJnzGYkC0Xo0kjW_RUtWah9q3ILzuDpYuC_R_ru1BWpNs4SsodCzBmXR6MDg7fMiAoD7HAkWe_SHqKtdDlFKWwAtUHkMLN2j1TjQmjMJPaemd-BTx2B7BwaKc2o6f_1_Ht4WoBcwcrVs27nKjHRQkos6xHKVCXCsegt85gJxb8xbYPBrYEmHGvE9sDiUDhDrcH5IyMcBVGyuDTW6G_OPF2mgiq8yNzV4hvHQbdNzQUNN6-EKMm1NUfq8OTcZdYUbBc5jqUlTV9GCs0h2txrapretnRm-JcK8XRh588XF9lBJGP894bN4ejzeTtMrCRBUsj_9qr9-6kTNIZl76dc8vKJcQmp2S1J-m6HQ==",
+            "id": "rs_06684a8aac40601f006afc852df9b087d29f6902dd06409a4f",
+            "summary": [],
+            "type": "reasoning"
+          },
+          {
+            "arguments": "{}",
+            "call_id": "call_VsC3JIIKaZRhfAkuwy4S0TSG",
+            "id": "fc_06684a8aac40601f006afc852f2cd087d2892b6000777eb62b",
+            "name": "list_suppliers",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"cost_center\":\"CC-OPS\"}",
+            "call_id": "call_LTMKhjz3ULkQgMUWxmiLKTA9",
+            "id": "fc_06684a8aac40601f006afc852f2ce487d2aa165c9ea02bef89",
+            "name": "get_budget",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"supplier_id\":\"S-1\",\"sku\":\"W-100\"}",
+            "call_id": "call_z5NWjkeIBqI2Bhal4uN6eRJ8",
+            "id": "fc_06684a8aac40601f006afc852f2cf087d280989c1701921425",
+            "name": "get_quote",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"supplier_id\":\"S-2\",\"sku\":\"W-100\"}",
+            "call_id": "call_jtJTXYr9HhMtDyxGF3tE3Uh6",
+            "id": "fc_06684a8aac40601f006afc852f2cf887d28797457b56e0f7ff",
+            "name": "get_quote",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794934060.0,
+          "id": "resp_06684a8aac40601f006afc852c979887d29c43d618d87658ad",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {},
+            "id": "call_VsC3JIIKaZRhfAkuwy4S0TSG",
+            "name": "list_suppliers",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "cost_center": "CC-OPS"
+            },
+            "id": "call_LTMKhjz3ULkQgMUWxmiLKTA9",
+            "name": "get_budget",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-1"
+            },
+            "id": "call_z5NWjkeIBqI2Bhal4uN6eRJ8",
+            "name": "get_quote",
+            "type": "tool_call"
+          },
+          {
+            "args": {
+              "sku": "W-100",
+              "supplier_id": "S-2"
+            },
+            "id": "call_jtJTXYr9HhMtDyxGF3tE3Uh6",
+            "name": "get_quote",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 195,
+            "cache_read": 1374
+          },
+          "input_tokens": 1572,
+          "output_token_details": {
+            "reasoning": 10
+          },
+          "output_tokens": 107,
+          "total_tokens": 1679
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "a064c2955e6f0a523339c43cec1278aa3271bddd9c54d58f6a9cbe58e4cbc731",
+      "response": {
+        "content": [
+          {
+            "content": [],
+            "encrypted_content": "gAAAAABq_IU256jrTabiWSV2eTP1xpa1QDsAWnlCzQc1Q22lzQl0ySFTN94Ts20NE_NboYyayKCA_6bOA68Q7oCnG0tvELvnojiu4xWDIBWN3hkUcnIC0uTtOY_guon_0g3nmMchf_a7qBwK312MtWuhPlr6t0PX_KkoeyVGjY-KPtEa8jvj2Pq-JYqQkC07wpJh4PhxP2GSy46TlPgsE9B41yRFCdg2XtAbklBqyVQvR6M8P8ZVcTqM_iaSsDZXn8i_LXko9FpyUj82g68jEBrlWM-XEKbD1PVv1ESFcOnz1oY8pOHxuOjYeSi6aDB_ilAhaKfHt6mR3cWpAGuAAkxHrp3F3YSN6NcPmh9YaKyFcsOj_Q8D9NXdEMRsXhfc9jFmMxd5sQVLANC2gxDXBC6iWO0vT8Gesms28GsTbnJJDoar3kWRJsuDqh3KQ1zc0gf9wZTUcsxYGqFiC_DHs9d65ruwH85P3IFXgrsJX3wXvBICosTxauy6le1cH0Z1nL8UxjABIXOeXjdlm0DAAD8QO-mtssskHAAOBLJ1bygEUNbUt-UBOkcO15LllB9wmLqzGTp9C3bPfQbrCMaOGbQR-N1vRENQVMs9PKaOLxpFZhwi8VgVakHv3U8DA18BFQqZGh-NRfMrAUIYDYWFipC9xhhRAXXEVR6vwkf39_Z-0zePtnTyRVf5MbuylUG6ZcXKviBnylhDCOCy9ANwo8Th-sveRkEAxcxJjgtLoyJqNG4At6jCRp02IlUNBTpxSDLDMHJrqxpal3D_akahKrcQcl_kPMZiD_Hdwuy_xr7_NngQ01Jpt76YUshCeccFOzoGX3rEXz4Znm7_xzeNVEQYYqCqwad8GyNcuBe7KzvR7GRshSDZ-a9Zp-wR-xZ4jqq8ypFaDHQJ7_Vqkg7yIaLFIWeGIZfMGLpGYSfRAdDAkn_kpWQfrRESAi_o73iJOOiifSqX-7eGg6xjltoq4pSIV-8MqXMkwHOUvyA35AGMOQ1LWVvZ9_j4a-vBZB436IQbLVqEVdFvzMswb6M8nE4I1agezl1Be7PRV4W2kG3j6E_Q58fwyffFtbE6M3WUXxay6Nfvh6XjOpyrueHKzkcsbbcXVy93YAUuUaqCNxq-f5ZM3dHJzMiEXdEfV9KHcarhga-9frLJ-4oX2RCcDHZFX2K3gKe2S6BcXv8leR4GPJ8zSqNmkuOpL_lR6A4Caia_RMogZmv9y128kCjBrat-jutuoLTh9pb4oRXCTQv63jUcXx6_nz5hnAyuz-yD8oH_g_zoc0SUjo3bRaYFVx2VDqTajoJlo5Z2GWpBGj_z7xWwBarutO1EcTm_8rED3FdkLuU8YHTVu9s1uHKWwbZeFLo9VOpZ83MZdY5S1gyyVTQLqRQTb51hO3oB7kMK2VcoLm1Dn-hEOtH6hblgVY6Zeqzxv7XREM7rRtS17Wt09EeRRuLF0P7PC8pXET0UMVCUFLPASa_83x-wJK7gN3Ybs68Y_pyYuhVhw-5XtPNsRi8VTmeRdDRLI7gRU1H5-JYmiXPLWeFmPGHlQ_kHcJQE5VwtmwwAnhGUFgP96PoQopMD_ADkJdS4_UzRZFvrzoTWiP8_lpuUEn2yHGkwvi3j_vHVXwK6Ud2q7glvuXv7t3mdVJtFq4Tx-zCH7Ertr3t3BBZcYFHp-nqPJycen70B6rBofnlz5TOBq54U2l-GzJYvgvdiOtpZ1ClXsTEaxVTcawy3mjBCgARPF9cYCSxZomJemR1tr1x1CJ4CD94F6iI9yd1weRw8dvWom7pOdrSNjoG3i4aAb9EBlRq7B9C9QffnA1be3aBcWQdbs6CTNJobkfyUbQaDX_uFFhCvDt9HbxcS_9TAoza8D3kD_MsBBvBNx8zkttukZv2llY7js6_bfIo41mTRzvBHfb8A4V6W_Z7wiYXFtAkq2VLhfZo3IdBZ0Mdwhk_sb7raaxXGspmai5925RODTUwSPF1jjLdhvy50JfiTuPVvhHux34fO1RTuCfVWxAs_JNsbdzaGBlfoM4QpeEydILsEBbVmkEYzUGOBKoL2S9Sion2gDWXoKOySzsVsUmpyuzdDDsj_TEenDv2WM0eTi2tthOTW0zMjyJySKmo58EapM8TZAuoFN3HdSNG4bLk9xQFhWZoN86YD1PJRFlMkbvgr82DYqCCJH9YfI0oRgyCv4Pcrt1uJyEUo-TSSW-scGzYyL2QJOxdw_gTZni5Y40ZrBtALMhtbggGBVCR1wBug9WsZTZRhKYxzgx5nSU_Tw1bPgEgMN_4zGsBGlgGUxaASWXmIh-_zQIDfdpG7Df7cOM0F8MduF0IQoyvzWaMjn_vfKnog-3qLx_IPStIhK9EZeFxQeVbTr3l4JOJtAQqXIxK8skt-65hvywZu1818tvuKj0SmwHfLIe7bFlP8mHBT8AwK36lotLlV4Go_EAiol_ojQIClRCFBApE39IeElwy5jPetvvEENDkLbrtsoD6CErrTJa5vnImI0COv2ybXTEWnimohbkwuJFL6uhgZKTKKcHhGY2gyBft1LovVVPkte471U3wOGQU2atoc-uMbjqip5Sd_iI-DhNg3bN-2ZVEDHzsflyj480t6LUr6_-yrQZzFN5Esnj2wGlcgMEcyppMXgjsehAaQi8FPoF4F0-xJ1T449UEvce098XMu3aTlDBp-5RTzDkzu-S7M8Oo6bm66U9sNQqV65fI6KdbkpIPPGn46RzoFRxDfff0juDhqSxl1egl-brQliqyZETYZN6fJxG9t3u-4pdA1ro_xS5EagXYuIwy4rd3pkqjbYmsxchq4sykqFmM-9DgbMj8KXTjc0cADi8Kmntg7ZtoXeOxULTRSpombLG5BTTGyMApzAbOEZS-ecpkWIyZqKqdh2CwGQNflz1o7dP85psROpdvsC7VhnjwQhR5J3yD_olighs1jaoAEzvqOeo-amvIwM9hayS8ML1va_eQQfy8ixD5zy0L108BVSYnRunV9X2w_9BUG4RtTh1gsySoxvNG9lo0qakK7Wxp9ONiLXq24qXS0jtFFUHf2plXa1T-Xf5bZjhoihC-0OEE8UxXLIUPu6HhSc6uFqY7d3BLKzAyFbgMh9YqXLyjcuFaVNQX0y11RwyeIUKVBh4AW5-KUSkcXjxXM-EOyflZNHdQLhQ30t_f4y0rFcx8Ge0Cm-HXHxbjIj3OC_do6YEywBELKK6bQdkR5kgqpU2guAC9bTZG7raJYzZPqQcKg1Xs0d5nGo6zVbBtasot-xQ0j4spwb3_DKHPOfbcF1fRCgMVKehWmmP5Hq6Hy2JIWfqlREmeSbcy3ybyMl4GVg2NTk6oV5-2ct9m-1ob81oXffH0jfAjgZsStD9yx2NsjtfAbEo_bCC2HHetKx-9IAJZ6gPni0NWzV612h4lFWxMI_syht4tpOE6ohtbMIz_8eiD2_JPELNG-ilzyXYUkKgb-2mqFJHyyk2D7R4ZBJ5OsK_tPL5KYlO-Y8KY65hQ11GsVNlZbuQKWAMD9Ul53OuHIZkmi6Uf-_hlYuG9E2muhKpWb1sbZlsP11ORrcbJ7xi8M99BG2RyBa7xXRGqK7B_SRBrWQziZ38mUTqbYElgtlrU60Amy9J0-QTsLvS_nCLYKo3sjunQnoeBj2zNJPePu7aJtrVUPRn05UZ6etjWAMPcXfHPLLC8o0U1diLFsTszt9S5i7xbpdRhWtbpvXY7-SkTL00eUu1rw-8V2Q5VfYO7jBKsDI4TNknfhnCfG1Lt77-mUm2pZFAOI1Jc4RdYmwB8NXyZmAo0zQcnnWxt2i-G5FOXMo3OeiYEDgkcjeDntxnTWRzRF-mNZBGypRkqdJuQGLSbkLvWFE2_BeVPB3BIKgGFi3TPrZoKfz8cKH0tsmcvV_JEf7PvT9ZEspoBL3mVeQOEp5qd7H7jDhhwrNi7S9blU30SZ_O8Tjw2Y5_5_bTY1MFohecJkk4p5rxfXajrCUeCpZF36f7urDumobhIOyPR3ex7tMjchYQ_0s-ZmTwk=",
+            "id": "rs_06684a8aac40601f006afc8532d8e887d2a5dae6f632618c5c",
+            "summary": [],
+            "type": "reasoning"
+          },
+          {
+            "arguments": "{\"claims\":[{\"intent_id\":\"REQ-1\",\"status\":\"not_done\",\"effect_ids\":[],\"note\":\"Purchase attempt A-0002 failed with precondition_failed and no effect. S-1 is the cheapest acceptable allowlisted supplier at USD 5.40/unit (USD 540 for 100 units). Refreshed CC-OPS budget shows USD 260 available (USD 1,000 limit less USD 740 committed), insufficient to place this order.\"}]}",
+            "call_id": "call_t1Th1jF2QuNJwKPrYpuPqD6Z",
+            "id": "fc_06684a8aac40601f006afc85339e5087d29543a886f383d200",
+            "name": "submit_final_report",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794934064.0,
+          "id": "resp_06684a8aac40601f006afc8530748487d2b04b6b4f134ac542",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "tool_calls": [
+          {
+            "args": {
+              "claims": [
+                {
+                  "effect_ids": [],
+                  "intent_id": "REQ-1",
+                  "note": "Purchase attempt A-0002 failed with precondition_failed and no effect. S-1 is the cheapest acceptable allowlisted supplier at USD 5.40/unit (USD 540 for 100 units). Refreshed CC-OPS budget shows USD 260 available (USD 1,000 limit less USD 740 committed), insufficient to place this order.",
+                  "status": "not_done"
+                }
+              ]
+            },
+            "id": "call_t1Th1jF2QuNJwKPrYpuPqD6Z",
+            "name": "submit_final_report",
+            "type": "tool_call"
+          }
+        ],
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 385,
+            "cache_read": 1569
+          },
+          "input_tokens": 1957,
+          "output_token_details": {
+            "reasoning": 23
+          },
+          "output_tokens": 135,
+          "total_tokens": 2092
+        }
+      },
+      "worker": "agent-1"
+    },
+    {
+      "request": "4f26efaa89920532feeb3ab3de8017a817bd9a208cbade41a6685d14cdfa56b2",
+      "response": {
+        "content": [
+          {
+            "annotations": [],
+            "id": "msg_06684a8aac40601f006afc8538a09c87d2bb89cfd547606bf9",
+            "phase": "final_answer",
+            "text": "REQ-1 was **not completed** due to insufficient budget.\n\n- Cheapest acceptable supplier: **S-1**, at **$5.40/unit**\n- Order total: **$540** for 100 units\n- The purchase attempt failed. A refreshed budget check showed only **$260 available** in CC-OPS.\n\nFinal report submitted with REQ-1 marked **not done**.",
+            "type": "text"
+          }
+        ],
+        "response_metadata": {
+          "created_at": 1794934071.0,
+          "id": "resp_06684a8aac40601f006afc8536e7d887d2a8ba752c54786ad7",
+          "metadata": {},
+          "model": "gpt-6.1-sol",
+          "model_name": "gpt-6.1-sol",
+          "model_provider": "openai",
+          "object": "response",
+          "service_tier": "default",
+          "status": "completed"
+        },
+        "usage_metadata": {
+          "input_token_details": {
+            "cache_creation": 153,
+            "cache_read": 1954
+          },
+          "input_tokens": 2110,
+          "output_token_details": {
+            "reasoning": 0
+          },
+          "output_tokens": 84,
+          "total_tokens": 2194
+        }
+      },
+      "worker": "agent-1"
+    }
+  ],
+  "format": "fivefold-cassette/1",
+  "model": {
+    "adapter": "live",
+    "name": "openai:gpt-6.1-sol",
+    "params": {
+      "max_tokens": 16000
+    }
+  },
+  "run": {
+    "config": "G1",
+    "contract": "C3",
+    "params": {
+      "agent_workers": 1,
+      "params": {
+        "approval_poll_interval_ms": 500,
+        "commit_deadline_ms": 10000,
+        "dispatch_timeout_ms": 2000,
+        "max_attempts": 5,
+        "max_hop_latency_ms": 50,
+        "max_probes": 20,
+        "max_wait_ms": 60000,
+        "status_lag_ms": 0,
+        "status_probe_interval_ms": 1000,
+        "think_ms": 1000,
+        "tool_wait_ms": 2500
+      },
+      "plan": [
+        {
+          "at": {
+            "match": {
+              "tool": "submit_purchase_order"
+            },
+            "occurrence": 1,
+            "point": "agent.after_tool_call"
+          },
+          "fault": "F11",
+          "params": {},
+          "variant": "after_tool_call"
+        }
+      ],
+      "workers": 1
+    },
+    "run_id": "dev-001-single-po.G1.C3.7",
+    "scenario_digest": "9c7dd96902f0c2e9d3e52375e0ec418cec26da74728d9e985f9b4208571d1e4e",
+    "scenario_id": "dev-001-single-po",
+    "seed": 7,
+    "topology": "inproc"
+  }
+}
