@@ -217,11 +217,14 @@ class Outbox:
         def arrive(envelope: Envelope) -> None:
             delivered = item
             if kind == "request":
-                key, message = message_id, item.message
+                # Deliver the transport's copied JSON, the same body that was logged.
+                # The sender's object can have a different mapping order or change in flight.
+                key = message_id
+                message = type(item.message).model_validate(envelope.body)
                 if envelope.copy_of is not None:
                     key = _copy_id(envelope.seq)
                     message = message.model_copy(update={"id": key})
-                    delivered = SessionMessage(message, metadata=item.metadata)
+                delivered = SessionMessage(message, metadata=item.metadata)
                 self._own.arrived.setdefault(key, deque()).append(envelope)
                 if self._receiver == self._link.gateway:
                     metadata = ServerMessageMetadata(request_context=Delivery(envelope.seq))

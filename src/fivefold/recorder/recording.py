@@ -2,8 +2,10 @@
 records each request and response into a cassette.
 
 The wrapper hands every call to the wrapped model's `ainvoke`, with the same messages and
-arguments, and returns the reply unchanged, so the run behaves exactly as without it. It
-takes no virtual time of its own: the wrapped model takes its `think_ms` (0009). A call
+arguments. It returns the same reply values, with tool argument object keys ordered as in
+the cassette's canonical JSON. This keeps validation errors stable when a cassette is
+reloaded; the cassette format and request-hashing algorithm stay the same. It takes no virtual
+time of its own: the wrapped model takes its `think_ms` (0009). A call
 that raises records nothing. Each worker incarnation gets its own wrapper, and all of a
 run's wrappers share one `CassetteRecorder`, which keeps the calls in the order they are
 answered.
@@ -23,6 +25,7 @@ returns a `Runnable` of the model with the tools bound.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -39,6 +42,7 @@ from fivefold.recorder.cassette import (
     ModelInfo,
     RunHeader,
     Tool,
+    canonical_json,
     plain_object,
     request_hash,
     request_params,
@@ -112,6 +116,12 @@ class RecordingModel(BaseChatModel):
         request = request_hash(messages, tools=self._tools, params=params)
         reply = await self._bound.ainvoke(messages, stop=stop, **kwargs)
         self._recorder.record(self._worker, request, reply)
+        if reply.tool_calls:
+            calls = [
+                {**call, "args": json.loads(canonical_json(call["args"]))}
+                for call in reply.tool_calls
+            ]
+            reply = reply.model_copy(update={"tool_calls": calls})
         return ChatResult(generations=[ChatGeneration(message=reply)])
 
     def bind_tools(self, tools: Sequence[Tool], **kwargs: Any) -> RecordingModel:
