@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.1 (18 Nov 2026)
+
+### Security
+
+- Demos replace their own databases on rerun. Recorder, playback, branching and split start require `--replace`. Replacement requires FiveFold's marker or its complete matching migration history. Playback validates the original run before provisioning.
+- Evaluator CSVs mark formula-like values in text columns with a leading apostrophe.
+- Split start creates a fresh owner-only run directory and creates each token file exclusively. A failed start removes the files it created and the directory if it is empty.
+- Worker checkpoints use an explicit allowlist for message types.
+
+### Docs
+
+- The README compares configurations over the same fault cells (#102).
+
+### Known issue
+
+A split worker can stop with `MCPError: Session not found` when it loses its MCP session. The recovery fix is slated for 0.1.2. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
+
 ## 0.1.0 (18 Nov 2026)
 
 FiveFold's first full release is a test suite and reference gateway for agents that take actions in a procurement simulator. It scores five properties from the simulator ledger and harness records.
