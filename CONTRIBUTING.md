@@ -1,6 +1,6 @@
 # Contributing
 
-FiveFold's first full release is `0.1.0`. The Status section of [README.md](README.md) says what is built and what is left. Open an issue to report a bug or question a design. Comment on a pull request to review a change. To report a vulnerability, follow [SECURITY.md](SECURITY.md).
+FiveFold's first full release is `0.1.0`. The Status section of [README.md](README.md) says what is built and what is left. Open an issue to report a bug or question a design. Comment on a pull request to review a change. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
 
 Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the community.
 
