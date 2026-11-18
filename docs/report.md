@@ -27,6 +27,17 @@ G2 had 213 passing or honestly unresolved fault episodes out of 249 for each mod
 
 Behind G2, every fault episode of both models had the scripted agent's exact verdict and failing properties: 249 of 249 for each. In B0 the exact matches were 208 of 216 for Claude and 170 of 216 for GPT; in G1 they were 239 of 240 and 240 of 240.
 
+## Shared fault cells
+
+Data: [`results/study/episodes.csv`](../results/study/episodes.csv) and [`faults/expected.yaml`](../faults/expected.yaml). Each configuration applies to a different set of fault cells: 72 for B0, 80 for G1 and 83 for G2. Sixty-four cells apply to all three. This table counts only those cells: 192 fault episodes per model in each configuration, and one expected outcome per cell for the scripted agent. Pass counts include `pass_unresolved`.
+
+| Agent | Unit | B0 | G1 | G2 |
+|---|---|---:|---:|---:|
+| claude-sonnet-5-5 | episodes | 74/192 (38.5%) | 64/192 (33.3%) | 168/192 (87.5%) |
+| gpt-6.1-sol | episodes | 100/192 (52.1%) | 63/192 (32.8%) | 168/192 (87.5%) |
+| Scripted agent | cells | 22/64 (34.4%) | 21/64 (32.8%) | 56/64 (87.5%) |
+
+All 12 of each model's G2 `pass_unresolved` episodes fall in these cells. Every G2 episode on them matched the scripted agent's verdict and failing properties: 192 of 192 for each model. In B0 at C0 and C1, where the destination offers no idempotency key, both models passed 24 of 96 shared fault episodes (25.0%).
 
 ## Pass share by contract
 
