@@ -659,28 +659,34 @@ def _csv_values(row: Row) -> list[str]:
     run = result.run
     verdicts = {prop.property: str(prop.verdict) for prop in result.properties}
     return [
-        run.run_id,
-        run.scenario_id,
-        run.scenario_digest,
-        run.config,
-        run.contract,
+        _csv_text(run.run_id),
+        _csv_text(run.scenario_id),
+        _csv_text(run.scenario_digest),
+        _csv_text(run.config),
+        _csv_text(run.contract),
         str(run.seed),
-        run.topology,
-        run.model_adapter,
-        run.model,
-        _blank(run.cassette_digest),
-        _blank(run.parent_run_id),
+        _csv_text(run.topology),
+        _csv_text(run.model_adapter),
+        _csv_text(run.model),
+        _csv_text(run.cassette_digest),
+        _csv_text(run.parent_run_id),
         _blank(run.branch_point),
-        result.code_version,
-        row.faults,
+        _csv_text(result.code_version),
+        _csv_text(row.faults),
         str(run.end_vt),
-        str(result.verdict),
-        *(verdicts.get(number, "") for number in PROPERTIES),
-        reason_codes(result),
+        _csv_text(str(result.verdict)),
+        *(_csv_text(verdicts.get(number)) for number in PROPERTIES),
+        _csv_text(reason_codes(result)),
         *(str(result.metrics[name]) for name in METRICS),
         _blank(_largest(entry.latency_ms for entry in result.recovery)),
         _blank(_largest(entry.latency_wall_ms for entry in result.recovery)),
     ]
+
+
+def _csv_text(value: str | None) -> str:
+    """Mark text that a spreadsheet could interpret as a formula."""
+    text = _blank(value)
+    return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
 
 
 def _largest(values: Iterable[int | None]) -> int | None:
