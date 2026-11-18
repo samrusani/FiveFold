@@ -74,6 +74,12 @@ describe("alignment by virtual time", () => {
 });
 
 describe("pairs of runs a demo shows side by side", () => {
+  it("pairs both sides of demo 1 in their shared experiment cell", () => {
+    const b0 = listedRun("demo_1_b0", "B0");
+    const g2 = listedRun("demo_1_g2", "G2");
+    expect(pairs([b0, g2])).toEqual([{ b0, g2 }]);
+  });
+
   it("pairs B0 with the G2 run named after it", () => {
     const runs = [
       listedRun("demo_2a_b0", "B0"),
@@ -87,6 +93,33 @@ describe("pairs of runs a demo shows side by side", () => {
     const runs = [listedRun("study_0001", "B0"), listedRun("study_0002", "G2"), listedRun("x", "G1")];
     expect(pairs(runs).map((p) => p.g2.database)).toEqual(["study_0002"]);
     expect(pairs([listedRun("a_b0", "B0"), { ...listedRun("a_g2", "G2"), seed: "8" }])).toEqual([]);
+  });
+
+  it("pairs each model, fault and variant only within its own cell", () => {
+    const cells = [
+      ["first", "F2", null],
+      ["second", "F2", null],
+      ["first", "F7", "early_price_up"],
+      ["first", "F7", "late_price_up"],
+    ] as const;
+    const matches = cells.map(([model, fault, variant], index) => {
+      const fields = {
+        model_adapter: "live",
+        model,
+        planned_faults: [{ fault, variant }],
+        cell_key: JSON.stringify([model, fault, variant]),
+      };
+      return {
+        b0: { ...listedRun(`run_${index}_b0`, "B0"), ...fields },
+        g2: { ...listedRun(`study_${index}_g2`, "G2"), ...fields },
+      };
+    });
+    const wrongTwin = { ...listedRun("run_0_g2", "G2"), cell_key: '["second","F2",null]' };
+    const unreadable = { ...listedRun("unreadable", "G2"), cell_key: null };
+    const runs = [wrongTwin, unreadable, ...matches.flatMap(({ b0, g2 }) => [b0, g2])];
+    const pairsForFirst = pairs(runs).filter(({ b0 }) => b0.database === "run_0_b0");
+    expect(pairsForFirst).toEqual([matches[0]]);
+    expect(pairs(matches.flatMap(({ b0, g2 }) => [b0, g2]))).toEqual(matches);
   });
 
   it("never pairs runs whose seeds differ only past 2**53, where JavaScript numbers round", () => {
@@ -109,7 +142,7 @@ describe("an experimental branch (record 0009)", () => {
   });
 
   it("is never paired with B0, though it has its parent's scenario, contract and seed", () => {
-    const branch = listedRun("study_0003", "G2", parent);
+    const branch = { ...listedRun("study_0003", "G2", parent), cell_key: "demo-1-cell" };
     const runs = [listedRun("study_0001", "B0"), listedRun("study_0002", "G2"), branch];
     expect(pairs(runs).map((p) => p.g2.database)).toEqual(["study_0002"]);
     expect(pairs([listedRun("study_0001", "B0"), branch])).toEqual([]);

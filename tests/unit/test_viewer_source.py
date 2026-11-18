@@ -4,20 +4,18 @@ ff_viewer, and it names the same registry as the harness."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
 from fivefold.harness import migrations
-from fivefold.harness.models import Parent, branch_run_id
 from fivefold.viewer.source import (
-    BRANCH_MARK,
     CONNECT_TIMEOUT_S,
     DEFAULT_REGISTRY,
     REGISTRY_ENV,
     VIEWER_ROLE,
     RunSource,
+    _comparison_fields,
     jsonable,
     registry_name,
 )
@@ -57,30 +55,44 @@ def test_without_one_the_viewer_sets_its_own_connect_timeout() -> None:
     assert params["connect_timeout"] == str(CONNECT_TIMEOUT_S)
 
 
-def test_the_branch_mark_is_what_the_harness_puts_in_a_branchs_run_id() -> None:
-    run_id = branch_run_id(Parent("dev-001-single-po.G2.C2.7", 4))
-    assert run_id == "dev-001-single-po.G2.C2.7" + BRANCH_MARK + "4"
+def test_cell_key_uses_the_recorded_model_parameters_and_catalog_variants() -> None:
+    def run(fault: str, variant: str | None, point: str, wait: int = 2**53) -> dict[str, object]:
+        return {
+            "scenario_digest": "same",
+            "topology": "inproc",
+            "model_adapter": "live",
+            "model": "first",
+            "parent_run_id": None,
+            "branch_point": None,
+            "params": {
+                "params": {"approval_wait_ms": wait},
+                "workers": 1,
+                "plan": [{"fault": fault, "variant": variant, "at": {"point": point}}],
+            },
+        }
 
-
-def test_the_run_list_reads_the_records_of_branch_shaped_runs_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rows = [
-        {"database": "demo_1_g2", "run_id": "dev-001-single-po.G2.C2.7"},
-        {"database": "branched", "run_id": "dev-001-single-po.G2.C2.7.branch-4"},
-    ]
-    read: list[str] = []
-
-    def branch_of(self: RunSource, database: str) -> dict[str, Any]:
-        read.append(database)
-        return {"parent_run_id": "dev-001-single-po.G2.C2.7", "branch_point": 4}
-
-    monkeypatch.setattr(RunSource, "_registry_rows", lambda self, where, args: rows)
-    monkeypatch.setattr(RunSource, "branch_of", branch_of)
-    listed = RunSource("postgresql://postgres@db.example/postgres").runs()
-    assert read == ["branched"], "a run that is no branch costs no connection"
-    assert (listed[0]["parent_run_id"], listed[0]["branch_point"]) == (None, None)
-    assert (listed[1]["parent_run_id"], listed[1]["branch_point"]) == (rows[0]["run_id"], 4)
+    early = run("F7", "price_up", "gw.dispatch.before_check")
+    key = _comparison_fields(early)["cell_key"]
+    assert key is not None
+    assert _comparison_fields(run("F7", "price_up", "net.agent_sim.answer"))["cell_key"] == key
+    assert _comparison_fields(run("F7", "price_up", "net.gw_sim.request"))["cell_key"] != key
+    assert _comparison_fields(run("F7", "harmless", "gw.dispatch.before_check"))["cell_key"] != key
+    assert _comparison_fields({**early, "model": "second"})["cell_key"] != key
+    assert _comparison_fields({**early, "model_adapter": "replay"})["cell_key"] != key
+    assert _comparison_fields({**early, "topology": "split"})["cell_key"] != key
+    assert _comparison_fields({**early, "scenario_digest": "other"})["cell_key"] != key
+    assert (
+        _comparison_fields(run("F7", "price_up", "gw.dispatch.before_check", 2**53 + 1))["cell_key"]
+        != key
+    )
+    for fault in ("F4", "F12"):
+        direct = _comparison_fields(run(fault, None, "net.agent_sim.request"))
+        forwarded = _comparison_fields(run(fault, None, "net.gw_sim.request"))
+        gateway = _comparison_fields(run(fault, None, "net.agent_gw.request"))
+        assert direct["planned_faults"] == [{"fault": fault, "variant": "agent_sim"}]
+        assert forwarded["planned_faults"] == [{"fault": fault, "variant": "gw_sim"}]
+        assert gateway["planned_faults"] == [{"fault": fault, "variant": "agent_gw"}]
+        assert len({direct["cell_key"], forwarded["cell_key"], gateway["cell_key"]}) == 3
 
 
 def test_wall_clock_times_become_iso_text_and_everything_else_stays() -> None:

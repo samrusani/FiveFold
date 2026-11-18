@@ -150,25 +150,28 @@ export interface Pair {
 }
 
 /**
- * B0 and G2 runs of one scenario, contract level and seed: the runs a demo shows side by
- * side (record 0006). When the G2 run's database is named as the B0 run's with g2 for b0,
- * as the demos name theirs, that run is the only one paired; otherwise every G2 run that
- * fits is. A branch is a new experiment, not one of a demo's runs, so it is never paired.
- * Seeds are compared as text: two seeds past 2**53 - 1 can be one JavaScript number.
+ * B0 and G2 runs of the same experiment cell. Prefer the named demo twin when it
+ * also belongs to the same cell. Compare seeds as decimal text to preserve precision.
  */
 export function pairs(listed: ListedRun[]): Pair[] {
   const found: Pair[] = [];
-  const runs = listed.filter((run) => run.parent_run_id === null);
+  const runs = listed.filter((run) => run.parent_run_id === null &&
+    run.branch_point === null && run.cell_key);
+  const g2ByCell = new Map<string, ListedRun[]>();
+  for (const run of runs.filter((run) => run.config === "G2")) {
+    const key = cellOf(run);
+    const matches = g2ByCell.get(key);
+    if (matches === undefined) g2ByCell.set(key, [run]);
+    else matches.push(run);
+  }
   for (const b0 of runs.filter((run) => run.config === "B0")) {
-    const fits = runs.filter(
-      (run) =>
-        run.config === "G2" &&
-        run.scenario_id === b0.scenario_id &&
-        run.contract === b0.contract &&
-        run.seed === b0.seed,
-    );
+    const fits = g2ByCell.get(cellOf(b0)) ?? [];
     const twin = fits.filter((run) => run.database === b0.database.replace(/b0$/, "g2"));
     for (const g2 of twin.length > 0 ? twin : fits) found.push({ b0, g2 });
   }
   return found;
+}
+
+function cellOf(run: ListedRun): string {
+  return JSON.stringify([run.scenario_id, run.contract, run.seed, run.cell_key]);
 }

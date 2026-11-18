@@ -341,10 +341,21 @@ export function listedRun(
   parent?: { run_id: string; branch_point: number },
 ): ListedRun {
   const run = registryRun(database, config);
+  const experiment = {
+    scenario_digest: "demo-digest",
+    topology: "inproc",
+    model_adapter: "scripted",
+    model: "scripted",
+    planned_faults: [{ fault: "F2", variant: null }, { fault: "F11", variant: "after_tool_call" }],
+    params: { workers: 1, agent_workers: 1 },
+    cell_key: "demo-1-cell",
+  };
   return parent === undefined
-    ? { ...run, parent_run_id: null, branch_point: null }
+    ? { ...run, ...experiment, parent_run_id: null, branch_point: null }
     : {
         ...run,
+        ...experiment,
+        cell_key: null,
         run_id: `${parent.run_id}.branch-${parent.branch_point}`,
         parent_run_id: parent.run_id,
         branch_point: parent.branch_point,

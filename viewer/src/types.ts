@@ -14,13 +14,19 @@ export interface RegistryRun {
 }
 
 /**
- * A run in the run list: its registry row, with its parent and branch point from its own
- * `harness.run`. Both are set for an experimental branch, a new experiment of its parent
- * (record 0009), and null for any other run.
+ * The registry row plus branch and experiment fields from its own `harness.run`.
  */
 export interface ListedRun extends RegistryRun {
   parent_run_id: string | null;
   branch_point: number | null;
+  scenario_digest: string | null;
+  topology: string | null;
+  model_adapter: string | null;
+  model: string | null;
+  planned_faults: { fault: string; variant: string | null }[] | null;
+  params: { [key: string]: Json } | null;
+  /** Exact digest of the experiment fields above. Null for branches or missing data. */
+  cell_key: string | null;
 }
 
 export interface RunList {
