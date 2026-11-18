@@ -54,6 +54,7 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 
+from fivefold.agents.checkpoint import checkpoint_serializer
 from fivefold.agents.connection import within
 from fivefold.agents.policy import Mode, scripted_policy
 from fivefold.agents.scripted import ScriptedModel
@@ -276,7 +277,7 @@ async def run_remote_agent(agent: RemoteAgent) -> tuple[WorkerEnd, str]:
             graph = build_graph(
                 model,
                 tools,
-                InMemorySaver(),
+                InMemorySaver(serde=checkpoint_serializer()),
                 max_steps=spec.max_steps,
                 max_tokens=spec.max_tokens,
             )
@@ -291,7 +292,11 @@ async def run_remote_agent(agent: RemoteAgent) -> tuple[WorkerEnd, str]:
             api, scheduler, timeouts, worker=WORKER, status=agent.contract.has(Capability.STATUS)
         )
         graph = build_graph(
-            model, tools, InMemorySaver(), max_steps=spec.max_steps, max_tokens=spec.max_tokens
+            model,
+            tools,
+            InMemorySaver(serde=checkpoint_serializer()),
+            max_steps=spec.max_steps,
+            max_tokens=spec.max_tokens,
         )
         return await run_worker(graph, spec, resume=False)
 
