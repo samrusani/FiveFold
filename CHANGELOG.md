@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 (release date pending)
+
+### Fixed
+
+- Split G1 and G2 workers open a fresh MCP session when the gateway reports that the previous one is gone. G2 attaches an identical retry to the same action. G1 follows its timeout retry rules. A write whose reply was lost can be placed twice, as specified in record 0008. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
+- The viewer suggests B0 and G2 pairs only for runs from the same experiment cell. Any two runs can still be compared manually.
+
 ## 0.1.1 (18 Nov 2026)
 
 ### Security
@@ -15,7 +22,7 @@
 
 ### Known issue
 
-A split worker can stop with `MCPError: Session not found` when it loses its MCP session. The recovery fix is slated for 0.1.2. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
+A split worker can stop with `MCPError: Session not found` when it loses its MCP session. Fixed in 0.1.2. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
 
 ## 0.1.0 (18 Nov 2026)
 
