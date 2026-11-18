@@ -1,8 +1,7 @@
 # 0017: End of the approval wait
 
 Status: Accepted on 18 Nov 2026 by the maintainer
-
-Date: 2026-11-18  
+Date: 2026-11-18
 Spec sections affected: approval and grant lifecycle, PendingApproval, property 4
 
 ## Context
@@ -50,10 +49,12 @@ gateway have separate clocks.
 
 Keep T4 (`approved`, PendingApproval to Ready) and T5
 (`approval_timeout` and the other existing rejection events) as they are.
-The grants keep their current transitions. The simulator still checks the
-approval at commit for property 2. A late approval can enable an acceptable
-effect under property 4, as in the reproduction. There are no changes to
-`faults/expected.yaml` because the implementation stays as it is.
+The grants keep their current transitions. Property 2 still checks, from the
+ledger, that the approval was valid when the effect committed. Only at C3
+does the destination also check it at commit (record 0002, rule 11).
+A late approval can enable an acceptable effect under property 4, as in the
+reproduction. There are no changes to `faults/expected.yaml` because the
+implementation stays as it is.
 
 ### B. Make the authority's decision time the cutoff
 
