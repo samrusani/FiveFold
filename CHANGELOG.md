@@ -34,7 +34,7 @@ The release also includes the admin API for resolving unknown outcomes, experime
 
 In the split topology, an agent worker can end with `MCPError: Session not found` when its MCP session is lost. This happened once in about 40 CI runs. All 30 targeted runs passed. The demos, the 235 expected outcomes, and the full study use the in-process topology, which uses a separate transport. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
 
-Fixed in 0.1.1. G1 now recovers from session loss in the same way it recovers from a timeout. A write whose reply was lost can be placed twice, as specified by record 0008. G2 attaches an identical proposal to the same action.
+Fixed in 0.1.2. G1 recovers from session loss in the same way it recovers from a timeout. A write whose reply was lost can be placed twice, as specified by record 0008. G2 attaches an identical proposal to the same action.
 
 ## 0.1.0a1 (17 Nov 2026)
 
