@@ -12,7 +12,8 @@
    is made (`fivefold.harness.migrations.create_run_database`). The template is
    FIVEFOLD_TEMPLATE_DB, or `fivefold_template`, unless the start names another. A
    database that already has the run's name is refused; with replace it is dropped
-   first, but only if it is this run's: its `harness.run` holds this run, or no run yet,
+   first, but only if FiveFold marked it at creation and its `harness.run` holds this run
+   or no run yet,
    as a copy of the template whose start failed before recording its run. Run ids that
    differ only in case or punctuation, such as those of scenarios `sample-a` and
    `sample_a`, get one default name, so replace never drops a database that holds
@@ -64,10 +65,10 @@ from fivefold.harness.log import RunRecord, SharedPgHarnessLog
 from fivefold.harness.migrations import (
     Connection,
     DatabaseExists,
+    MigrationError,
     bootstrap_server,
     check_database_name,
     create_run_database,
-    drop_database_locked,
     template_database,
 )
 from fivefold.harness.registry import RegistryEntry, register
@@ -223,34 +224,41 @@ def _run_database(admin_dsn: str, name: str, template: str, *, run_id: str, repl
     component roles and the run registry are made first, if they are missing.
 
     The template is made or migrated forward, the run database is replaced, when asked
-    and when it is run `run_id`'s (`_drop_this_runs`), and the template is copied, in one
+    and when it is run `run_id`'s (`_check_this_runs`), and the template is copied, in one
     hold of the database lock that every create and drop takes
     (`fivefold.harness.migrations.create_run_database`), so a study's cleanup never sees
     the name half changed, and no other start makes it in between.
     """
     bootstrap_server(admin_dsn, DB_DIR)
 
-    def drop_this_runs(conn: Connection) -> None:
+    def check_this_runs(conn: Connection) -> None:
         if replace:
-            _drop_this_runs(conn, admin_dsn, name, run_id)
+            _check_this_runs(conn, admin_dsn, name, run_id)
 
     try:
         created = create_run_database(
-            admin_dsn, name, DB_DIR / "migrations", template=template, before_copy=drop_this_runs
+            admin_dsn,
+            name,
+            DB_DIR / "migrations",
+            template=template,
+            replace=replace,
+            before_copy=check_this_runs,
         )
     except DatabaseExists:
         raise RunDirError(f"database {name} already exists: replace it, or name another") from None
+    except MigrationError as error:
+        raise RunDirError(str(error)) from error
     return created.dsn
 
 
-def _drop_this_runs(conn: Connection, admin_dsn: str, name: str, run_id: str) -> None:
-    """Drop the database `name` for a start with replace, if it is run `run_id`'s: its
-    `harness.run` holds that run, or no run yet. `conn` holds the database lock.
+def _check_this_runs(conn: Connection, admin_dsn: str, name: str, run_id: str) -> None:
+    """Allow replacement if `harness.run` holds this run or no run yet.
+    `conn` holds the database lock.
 
     Raises `RunDirError`, and keeps the database, when it holds another run or is no run
     database: it has no `harness.run`.
     """
-    row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
+    row = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
     if row is None:
         return
     with psycopg.connect(make_conninfo(admin_dsn, dbname=name), autocommit=True) as found:
@@ -267,7 +275,6 @@ def _drop_this_runs(conn: Connection, admin_dsn: str, name: str, run_id: str) ->
             f"database {name} holds run {others[0]}, and replace drops only this run's:"
             " name another"
         )
-    drop_database_locked(conn, name, oid=int(row[0]))
 
 
 async def end_run(

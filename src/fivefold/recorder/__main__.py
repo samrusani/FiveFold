@@ -42,9 +42,10 @@ touches any database, `branch` refuses a K beyond the parent's cassette, a scena
 than the one the parent was recorded on, a live run without the flag, the spend cap or the
 price file, and outputs that name the parent's cassette or each other.
 
-Each command drops the database it runs in, if it exists, and makes it again as a copy of
-the migrated template database (`fivefold.harness.migrations.create_run_database`), as the
-demos do; a database named as the template is refused. The admin connection comes from
+Each command copies the migrated template database. A taken destination needs
+`--replace`, which drops only a run database with FiveFold's marker or its complete
+matching migration history. Use an unused name for an unrelated database. The
+template and the original or parent run cannot be replaced. The admin connection comes from
 `--dsn`, or `FIVEFOLD_ADMIN_DSN`. Only a live model's provider can need a key, and it
 reads the key from the environment, never from this command. A refused input, such as a
 scenario that changed or a fault plan the configuration does not have, ends the command
@@ -57,7 +58,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -73,6 +74,7 @@ from fivefold.harness.demo import DEMO_BY_KEY, verdict_line
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
+    Connection,
     MigrationError,
     bootstrap_server,
     create_run_database,
@@ -86,6 +88,7 @@ from fivefold.recorder.playback import (
     VIEWER,
     PlaybackError,
     branch_spec,
+    check_original,
     play,
     record,
     replay_spec,
@@ -96,10 +99,19 @@ REPLAYED = "fivefold_replayed"
 BRANCHED = "fivefold_branched"
 
 
-def _fresh_database(admin_dsn: str, name: str) -> str:
-    """Drop the database `name` if it exists, make it again as a copy of the migrated
-    template database, and return its DSN."""
-    return create_run_database(admin_dsn, name, DB_DIR / "migrations", replace=True).dsn
+def _fresh_database(
+    args: argparse.Namespace, before_copy: Callable[[Connection], None] | None = None
+) -> str:
+    """Copy the migrated template into the chosen destination."""
+
+    def prepare(conn: Connection) -> None:
+        if before_copy is not None:
+            before_copy(conn)
+        bootstrap_server(args.dsn, DB_DIR)
+
+    return create_run_database(
+        args.dsn, args.database, DB_DIR / "migrations", replace=args.replace, before_copy=prepare
+    ).dsn
 
 
 def _record(args: argparse.Namespace, live: Live | None) -> int:
@@ -110,7 +122,7 @@ def _record(args: argparse.Namespace, live: Live | None) -> int:
         spec = RunSpec(scenario, args.config, Contract(args.contract), args.seed)
     if live is not None:
         spec = replace(spec, model=live)
-    dsn = _fresh_database(args.dsn, args.database)
+    dsn = _fresh_database(args)
     run, cassette = record(spec, dsn)
     cassette.save(args.cassette)
     print(f"Recorded {spec.run_id} in {args.database}: {len(cassette.calls)} model calls.")
@@ -150,26 +162,38 @@ def _branch_spec(args: argparse.Namespace, live: Live | None) -> tuple[Cassette,
 
 
 def _holds_run(admin_dsn: str, name: str, run_id: str) -> bool:
-    """Whether the database `name` exists and holds the run `run_id`, read as `ff_viewer`.
-    A database that does not exist, or holds no run records, holds no run."""
+    """Whether the existing destination holds `run_id`, read as `ff_viewer`."""
     try:
         with psycopg.connect(make_conninfo(admin_dsn, dbname=name, user=VIEWER)) as conn:
             conn.read_only = True
             found = conn.execute(
                 "SELECT 1 FROM harness.run WHERE run_id = %s", (run_id,)
             ).fetchone()
-    except (psycopg.OperationalError, psycopg.errors.UndefinedTable):
-        return False
+    except (
+        psycopg.OperationalError,
+        psycopg.errors.UndefinedTable,
+        psycopg.errors.InsufficientPrivilege,
+    ):
+        raise ValueError(
+            f"the database {name} could not be checked for the parent run. Use an unused name"
+        ) from None
     return found is not None
 
 
 def _branch(args: argparse.Namespace, parent: Cassette, spec: RunSpec, live: Live | None) -> int:
-    if _holds_run(args.dsn, args.database, parent.run.run_id):
-        raise ValueError(
-            f"the database {args.database} holds the parent run {parent.run.run_id};"
-            " give --database another name, so the branch does not replace its parent"
-        )
-    dsn = _fresh_database(args.dsn, args.database)
+    def check_parent(conn: Connection) -> None:
+        if not args.replace:
+            return
+        taken = conn.execute(
+            "SELECT 1 FROM pg_catalog.pg_database WHERE datname = %s", (args.database,)
+        ).fetchone()
+        if taken is not None and _holds_run(args.dsn, args.database, parent.run.run_id):
+            raise ValueError(
+                f"the database {args.database} holds the parent run {parent.run.run_id};"
+                " give --database another name, so the branch does not replace its parent"
+            )
+
+    dsn = _fresh_database(args, check_parent)
     run, cassette = record(spec, dsn)
     evaluation = run.result.evaluation
     if evaluation is None:
@@ -196,7 +220,8 @@ def _play(args: argparse.Namespace) -> int:
     scenario = load_scenario_file(args.scenario)
     replay_spec(cassette, scenario)  # refuse a scenario that does not fit before any change
     original = make_conninfo(args.dsn, dbname=args.original)
-    replay = _fresh_database(args.dsn, args.database)
+    check_original(original, cassette)
+    replay = _fresh_database(args, lambda _conn: check_original(original, cassette))
     playback = play(cassette, scenario, original=original, replay=replay)
     print(
         f"Replayed {playback.run_id} in {args.database} from the cassette"
@@ -282,6 +307,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--database", default=BRANCHED, help=f"the branch's database (default {BRANCHED})"
     )
     add_live_options(branching)
+    for command in (recording, playing, branching):
+        command.add_argument(
+            "--replace",
+            action="store_true",
+            help="replace a run database with FiveFold's marker or matching migration history",
+        )
 
     args = parser.parse_args(argv)
     if args.command == "record" and args.scenario is not None and args.contract is None:
@@ -295,10 +326,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         live = live_from_args(args, os.environ) if args.command in ("record", "branch") else None
         branch = _branch_spec(args, live) if args.command == "branch" else None
-        bootstrap_server(args.dsn, DB_DIR)
+        if args.command == "play":
+            return _play(args)
         if branch is not None:
             return _branch(args, *branch, live)
-        return _record(args, live) if args.command == "record" else _play(args)
+        return _record(args, live)
     except (OSError, MigrationError, PlaybackError, ReplayError, ValueError) as error:
         print(f"{args.command} failed: {error}", file=sys.stderr)
         return 1

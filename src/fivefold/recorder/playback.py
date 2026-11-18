@@ -187,7 +187,7 @@ def play(cassette: Cassette, scenario: Scenario, *, original: str, replay: str) 
     `ReplayError` if the replay fails (0009).
     """
     spec = replay_spec(cassette, scenario)
-    _check_original(original, cassette)
+    check_original(original, cassette)
     _check_fresh(replay)
     run = InprocRun(spec, replay)
     asyncio.run(run.execute())
@@ -263,14 +263,21 @@ def _viewer(dsn: str) -> psycopg.Connection[Any]:
     return conn
 
 
-def _check_original(dsn: str, cassette: Cassette) -> None:
+def check_original(dsn: str, cassette: Cassette) -> None:
     """Refuse unless the run in the database `dsn` recorded `cassette`."""
-    with _viewer(dsn) as conn:
-        rows = conn.execute(
-            "SELECT run_id, scenario_id, scenario_digest, config, contract, seed, topology,"
-            " params, model_adapter, model, cassette_digest, parent_run_id, branch_point"
-            " FROM harness.run"
-        ).fetchall()
+    try:
+        with _viewer(dsn) as conn:
+            rows = conn.execute(
+                "SELECT run_id, scenario_id, scenario_digest, config, contract, seed, topology,"
+                " params, model_adapter, model, cassette_digest, parent_run_id, branch_point"
+                " FROM harness.run"
+            ).fetchall()
+    except (
+        psycopg.OperationalError,
+        psycopg.errors.UndefinedTable,
+        psycopg.errors.InsufficientPrivilege,
+    ):
+        raise PlaybackError("the original database cannot be read as a FiveFold run") from None
     if len(rows) != 1:
         raise PlaybackError("the original run's database holds no run")
     row = rows[0]

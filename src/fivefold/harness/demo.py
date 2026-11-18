@@ -14,8 +14,10 @@ Each demo runs B0 and G2 on the same scenario and seed and shows them side by si
    resolver attests what happened.
 
 Every run gets its own database, as role `ff_*` connections need (0008): a fresh copy of
-the migrated template database (0009, `fivefold.harness.migrations.create_run_database`),
-which replaces the database of the demo's last run. Each run writes its row in the run
+the migrated template database (0009, `fivefold.harness.migrations.create_run_database`).
+Rerunning a demo replaces its fixed-name databases if they have FiveFold's marker
+or its complete matching migration history. Unrelated databases are refused. Each
+run writes its row in the run
 registry, so the viewer lists it (0012). The admin connection comes from
 `FIVEFOLD_ADMIN_DSN`, as for the tests. A demo needs no API key: the model is scripted
 (0009).
@@ -48,7 +50,10 @@ from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import result_json
 from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
+    Connection,
+    MigrationError,
     bootstrap_server,
+    check_run_destinations,
     create_run_database,
 )
 from fivefold.harness.run import GATEWAY_CONFIGS, Config, InprocRun, RunSpec
@@ -295,13 +300,32 @@ def save_result(
     return path
 
 
+def _demo_database(demo: Demo, config: Config) -> str:
+    return f"fivefold_demo_{demo.key}_{config.lower()}"
+
+
 def run_demo(
-    admin_dsn: str, demo: Demo, config: Config, seed: int, *, out: Path | None = None
+    admin_dsn: str,
+    demo: Demo,
+    config: Config,
+    seed: int,
+    *,
+    out: Path | None = None,
 ) -> Summary:
     """Run one demo in one configuration, in a fresh copy of the template database, and
     summarize it. With `out`, also save the run's result JSON there."""
-    name = f"fivefold_demo_{demo.key}_{config.lower()}"
-    dsn = create_run_database(admin_dsn, name, DB_DIR / "migrations", replace=True).dsn
+    name = _demo_database(demo, config)
+
+    def prepare(_conn: Connection) -> None:
+        bootstrap_server(admin_dsn, DB_DIR)
+
+    dsn = create_run_database(
+        admin_dsn,
+        name,
+        DB_DIR / "migrations",
+        replace=True,
+        before_copy=prepare,
+    ).dsn
     run = InprocRun(demo.spec(config, seed), dsn)
     result = asyncio.run(run.execute())
     if out is not None:
@@ -382,14 +406,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     if unknown:
         parser.error(f"no demo {', '.join(unknown)}; choose from {', '.join(DEMO_BY_KEY)}")
     chosen = [DEMO_BY_KEY[key] for key in args.demos] or list(DEMOS)
-    bootstrap_server(args.dsn, DB_DIR)
-    for demo in chosen:
-        scenario = load_scenario_file(demo.scenario)
-        print(f"Demo {demo.key}: {demo.title} ({scenario.id}, {demo.contract}, seed {args.seed})")
-        print(f"{demo.faults}\n")
-        for config in ("B0", "G2"):
-            print(render(run_demo(args.dsn, demo, config, args.seed, out=args.out)))
-            print()
+    configs: tuple[Config, ...] = ("B0", "G2")
+    try:
+        check_run_destinations(
+            args.dsn,
+            [_demo_database(demo, config) for demo in chosen for config in configs],
+            DB_DIR / "migrations",
+            replace=True,
+        )
+        for demo in chosen:
+            scenario = load_scenario_file(demo.scenario)
+            print(
+                f"Demo {demo.key}: {demo.title} ({scenario.id}, {demo.contract}, seed {args.seed})"
+            )
+            print(f"{demo.faults}\n")
+            for config in configs:
+                summary = run_demo(args.dsn, demo, config, args.seed, out=args.out)
+                print(render(summary))
+                print()
+    except MigrationError as error:
+        print(f"demo failed: {error}", file=sys.stderr)
+        return 1
     return 0
 
 

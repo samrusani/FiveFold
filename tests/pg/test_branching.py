@@ -548,7 +548,7 @@ def test_the_command_refuses_to_replace_the_database_that_holds_the_parent(
     capsys.readouterr()
     second_args = [str(first), "--at", "5", "--cassette", str(second)]
     second_args += ["--result", str(tmp_path / "second-result.json"), *to_db]
-    assert main(["--dsn", admin_dsn, "branch", *second_args]) == 1
+    assert main(["--dsn", admin_dsn, "branch", *second_args, "--replace"]) == 1
     assert capsys.readouterr().err == (
         f"branch failed: the database {branched} holds the parent run {PARENT_ID}.branch-4;"
         " give --database another name, so the branch does not replace its parent\n"

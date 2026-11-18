@@ -23,6 +23,7 @@ from fivefold.domain.contracts import Contract
 from fivefold.harness import demo
 from fivefold.harness.demo import DEMO_BY_KEY, DEV_001
 from fivefold.harness.migrations import (
+    RUN_DATABASE_COMMENT,
     TEMPLATE_ENV,
     CreatedDatabase,
     MigrationError,
@@ -130,6 +131,187 @@ def test_each_recorder_command_runs_in_a_copy_of_the_template(
     branch += ["--cassette", str(tmp_path / "branch.json"), "--result", str(tmp_path / "r.json")]
     assert recorder_main([*branch, "--database", branched]) == 0
     assert [copied(admin_dsn, name) for name in (recorded, replayed, branched)] == [True] * 3
+
+
+@pytest.mark.parametrize("replace_existing", [False, True])
+def test_run_commands_keep_a_database_they_did_not_create(
+    admin_dsn: str,
+    db_prefix: str,
+    marked_template: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drop_after: list[str],
+    capsys: pytest.CaptureFixture[str],
+    replace_existing: bool,
+) -> None:
+    original, foreign = f"{db_prefix}_guard_orig", f"{db_prefix}_guard_foreign"
+    drop_after.extend((original, foreign))
+    foreign_dsn = recreate_database(admin_dsn, foreign)
+    with psycopg.connect(foreign_dsn, autocommit=True) as conn:
+        conn.execute("CREATE TABLE public.sentinel (value integer)")
+        conn.execute("INSERT INTO public.sentinel VALUES (17)")
+
+    cassette = tmp_path / "original.json"
+    common = ["--dsn", admin_dsn]
+    record = ["record", "--demo", "1", "--config", "G2", "--cassette", str(cassette)]
+    assert recorder_main([*common, *record, "--database", original]) == 0
+    capsys.readouterr()
+    options = ["--replace"] if replace_existing else []
+    for argv in (
+        record,
+        ["play", str(cassette), "--scenario", str(DEV_001), "--original", original],
+        [
+            "branch",
+            str(cassette),
+            "--scenario",
+            str(DEV_001),
+            "--at",
+            "1",
+            "--cassette",
+            str(tmp_path / "branch.json"),
+            "--result",
+            str(tmp_path / "result.json"),
+        ],
+    ):
+        assert recorder_main([*common, *argv, "--database", foreign, *options]) == 1
+        error = capsys.readouterr().err
+        assert foreign in error and "unused" in error
+
+    first_demo = f"{db_prefix}_guard_demo"
+
+    monkeypatch.setattr(
+        demo, "_demo_database", lambda _demo, config: foreign if config == "G2" else first_demo
+    )
+    drop_after.append(first_demo)
+    assert demo.main([*common, "1"]) == 1
+    assert foreign in capsys.readouterr().err
+    assert not exists(admin_dsn, first_demo)
+    with psycopg.connect(foreign_dsn) as conn:
+        assert conn.execute("SELECT value FROM public.sentinel").fetchall() == [(17,)]
+
+
+def test_demo_replaces_legacy_and_marked_databases_on_rerun(
+    admin_dsn: str,
+    db_prefix: str,
+    marked_template: str,
+    monkeypatch: pytest.MonkeyPatch,
+    drop_after: list[str],
+) -> None:
+    names = {config: f"{db_prefix}_demo_{config.lower()}" for config in ("B0", "G2")}
+    drop_after.extend(names.values())
+    monkeypatch.setattr(demo, "_demo_database", lambda _demo, config: names[config])
+    with psycopg.connect(recreate_database(admin_dsn, names["B0"]), autocommit=True) as conn:
+        migrate(conn, MIGRATIONS)
+
+    def databases() -> dict[str, tuple[int, str | None]]:
+        with psycopg.connect(admin_dsn) as conn:
+            rows = conn.execute(
+                "SELECT datname, oid, pg_catalog.shobj_description(oid, 'pg_database')"
+                " FROM pg_catalog.pg_database WHERE datname = ANY(%s)",
+                (list(names.values()),),
+            ).fetchall()
+        return {name: (oid, comment) for name, oid, comment in rows}
+
+    legacy = databases()[names["B0"]]
+    assert legacy[1] is None
+    args = ["--dsn", admin_dsn, "1"]
+    assert demo.main(args) == 0
+    first = databases()
+    assert first[names["B0"]][0] != legacy[0]
+    assert demo.main(args) == 0
+    second = databases()
+    for name in names.values():
+        assert first[name][1] == second[name][1] == RUN_DATABASE_COMMENT
+        assert first[name][0] != second[name][0]
+
+
+@pytest.mark.parametrize("change", ["checksum", "missing_file", "extra_file", "view"])
+def test_replacement_requires_complete_legacy_history_in_a_table(
+    admin_dsn: str,
+    db_prefix: str,
+    marked_template: str,
+    drop_after: list[str],
+    change: str,
+) -> None:
+    name = f"{db_prefix}_legacy_{change}"
+    drop_after.append(name)
+    with psycopg.connect(recreate_database(admin_dsn, name), autocommit=True) as conn:
+        migrate(conn, MIGRATIONS)
+        first = discover(MIGRATIONS)[0].name
+        if change == "checksum":
+            conn.execute(
+                "UPDATE public.schema_migration SET sha256 = 'old' WHERE filename = %s", (first,)
+            )
+        elif change == "missing_file":
+            conn.execute("DELETE FROM public.schema_migration WHERE filename = %s", (first,))
+        elif change == "extra_file":
+            conn.execute(
+                "INSERT INTO public.schema_migration (filename, sha256)"
+                " VALUES ('unrelated.sql', 'extra')"
+            )
+        else:
+            conn.execute("ALTER TABLE public.schema_migration RENAME TO actual_migrations")
+            conn.execute(
+                "CREATE VIEW public.schema_migration AS"
+                " SELECT filename, sha256 FROM public.actual_migrations"
+            )
+    with pytest.raises(MigrationError, match=f"{name} is not a run database"):
+        create_run_database(admin_dsn, name, MIGRATIONS, replace=True)
+    assert exists(admin_dsn, name)
+
+
+def test_run_database_replacement_requires_an_explicit_request(
+    admin_dsn: str, db_prefix: str, marked_template: str, drop_after: list[str]
+) -> None:
+    name = f"{db_prefix}_owned_run"
+    drop_after.append(name)
+    created = create_run_database(admin_dsn, name, MIGRATIONS)
+    with pytest.raises(MigrationError, match=f"{name} already exists.*--replace"):
+        create_run_database(admin_dsn, name, MIGRATIONS)
+    recreated = create_run_database(admin_dsn, name, MIGRATIONS, replace=True)
+    assert recreated.oid != created.oid
+    assert copied(admin_dsn, name)
+
+
+def test_play_checks_the_original_before_touching_the_destination(
+    admin_dsn: str,
+    db_prefix: str,
+    marked_template: str,
+    tmp_path: Path,
+    drop_after: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original, wrong, dest, unused = (f"{db_prefix}_preflight_{key}" for key in "owdu")
+    drop_after.extend((original, wrong, dest, unused))
+    cassette = tmp_path / "original.json"
+    common = ["--dsn", admin_dsn]
+    assert (
+        recorder_main(
+            [
+                *common,
+                "record",
+                "--demo",
+                "1",
+                "--config",
+                "G2",
+                "--cassette",
+                str(cassette),
+                "--database",
+                original,
+            ]
+        )
+        == 0
+    )
+    create_run_database(admin_dsn, wrong, MIGRATIONS)
+    existing = create_run_database(admin_dsn, dest, MIGRATIONS)
+    play = [*common, "play", str(cassette), "--scenario", str(DEV_001), "--original", wrong]
+    for name in (dest, unused):
+        assert recorder_main([*play, "--database", name, "--replace"]) == 1
+        assert "the original run's database holds no run" in capsys.readouterr().err
+    assert not exists(admin_dsn, unused)
+    with psycopg.connect(admin_dsn) as conn:
+        row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (dest,)).fetchone()
+    assert row == (existing.oid,)
 
 
 def test_a_study_episode_runs_in_a_copy_of_the_template(
