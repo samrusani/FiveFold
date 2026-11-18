@@ -1,6 +1,7 @@
 """A split run's directory: what its services and commands share (0009).
 
-`start` writes it; the services, `end` and `score` read it. Its files:
+`start` creates a new owner-only directory (mode 0700). The services, `end` and
+`score` read it. Its files:
 
 - `run.json`: the run's id, its database, configuration, contract level and seed;
 - `scenario.yaml`: the scenario, exactly as the run recorded its digest;
@@ -17,7 +18,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
@@ -35,12 +39,9 @@ CALLERS_FILE = "callers.json"
 ENDED_FILE = "ended"
 TOKEN_SUFFIX = ".token"
 
-FILES = (RUN_FILE, SCENARIO_FILE, CALLERS_FILE, ENDED_FILE)
-"""The directory's files, besides the tokens."""
-
 
 class RunDirError(Exception):
-    """The run directory is missing, incomplete, or holds another run."""
+    """The run directory is missing, incomplete, or already exists."""
 
 
 @dataclass(frozen=True)
@@ -89,20 +90,72 @@ class SplitRun:
         (self.directory / ENDED_FILE).write_text(f"{stopped_vt}\n", encoding="utf-8")
 
 
+@dataclass
+class _ReservedRunDirectory:
+    descriptor: int
+    created: dict[str, os.stat_result] = field(default_factory=dict)
+
+    def rollback(self, error: BaseException) -> None:
+        """Remove only entries this start created. Preserve any replacement files."""
+        for name, original in self.created.items():
+            try:
+                current = os.stat(name, dir_fd=self.descriptor, follow_symlinks=False)
+                if os.path.samestat(current, original):
+                    os.unlink(name, dir_fd=self.descriptor)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup:
+                error.add_note(f"Could not remove {name} from the failed run: {cleanup}")
+
+
+@contextmanager
+def new_run_directory(directory: Path) -> Iterator[_ReservedRunDirectory]:
+    """Reserve a new private directory and roll it back on failure."""
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise RunDirError(
+            f"{directory} already exists: choose a new run directory, or remove this one"
+            " after saving anything you need"
+        ) from error
+    original = directory.lstat()
+    if not stat.S_ISDIR(original.st_mode) or original.st_uid != os.geteuid():
+        raise RunDirError(f"{directory} must be an owner-only run directory")
+    reserved = None
+    try:
+        reserved = _ReservedRunDirectory(
+            os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        )
+        status = os.fstat(reserved.descriptor)
+        if not os.path.samestat(status, original) or stat.S_IMODE(status.st_mode) & 0o077:
+            raise RunDirError(f"{directory} must be an owner-only run directory")
+        os.fchmod(reserved.descriptor, 0o700)
+        yield reserved
+    except BaseException as error:
+        if reserved is not None:
+            reserved.rollback(error)
+        try:
+            if os.path.samestat(directory.lstat(), original):
+                directory.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup:
+            error.add_note(f"Could not remove failed run directory {directory}: {cleanup}")
+        raise
+    finally:
+        if reserved is not None:
+            os.close(reserved.descriptor)
+
+
 def write_run(
-    run: SplitRun, *, scenario_text: str, secrets: dict[str, str], callers: Callers
+    run: SplitRun,
+    reserved: _ReservedRunDirectory,
+    *,
+    scenario_text: str,
+    secrets: dict[str, str],
+    callers: Callers,
 ) -> None:
-    """Write `run`'s directory. The directory must hold no run."""
-    directory = run.directory
-    directory.mkdir(parents=True, exist_ok=True)
-    if (directory / RUN_FILE).exists():
-        raise RunDirError(f"{directory} already holds a run")
-    (directory / SCENARIO_FILE).write_text(scenario_text, encoding="utf-8")
-    (directory / CALLERS_FILE).write_text(
-        json.dumps(dict(callers.digests), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    for holder, secret in sorted(secrets.items()):
-        _write_private(directory / f"{holder}{TOKEN_SUFFIX}", secret + "\n")
+    """Write the reserved directory. Publish the run description last."""
     description = {
         "run_id": run.run_id,
         "database": run.database,
@@ -110,15 +163,33 @@ def write_run(
         "contract": str(run.contract),
         "seed": run.seed,
     }
-    (directory / RUN_FILE).write_text(
-        json.dumps(description, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    files = {
+        SCENARIO_FILE: scenario_text,
+        CALLERS_FILE: json.dumps(dict(callers.digests), indent=2, sort_keys=True) + "\n",
+        **{f"{holder}{TOKEN_SUFFIX}": secret + "\n" for holder, secret in sorted(secrets.items())},
+        RUN_FILE: json.dumps(description, indent=2, sort_keys=True) + "\n",
+    }
+    for name, text in files.items():
+        try:
+            _write_private(reserved, name, text)
+        except FileExistsError as error:
+            raise RunDirError(
+                f"{run.directory} already contains {name}: choose a new run directory,"
+                " or remove this one after saving anything you need"
+            ) from error
+
+
+def _write_private(reserved: _ReservedRunDirectory, name: str, text: str) -> None:
+    """Create a new owner-only file without following links."""
+    descriptor = os.open(
+        name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=reserved.descriptor,
     )
-
-
-def _write_private(path: Path, text: str) -> None:
-    """Write `text` to a file only its owner may read or write."""
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        reserved.created[name] = os.fstat(file.fileno())
+        os.fchmod(file.fileno(), 0o600)
         file.write(text)
 
 
@@ -142,11 +213,3 @@ def read_run(directory: Path) -> SplitRun:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise RunDirError(f"{path} does not describe a run: {error}") from error
-
-
-def clear_run(directory: Path) -> None:
-    """Remove a run's files from `directory`, and nothing else."""
-    for name in FILES:
-        (directory / name).unlink(missing_ok=True)
-    for token in directory.glob(f"*{TOKEN_SUFFIX}"):
-        token.unlink()
