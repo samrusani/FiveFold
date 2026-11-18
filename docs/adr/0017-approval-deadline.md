@@ -1,12 +1,13 @@
 # 0017: End of the approval wait
 
-Status: Proposed  
+Status: Accepted on 18 Nov 2026 by the maintainer
+
 Date: 2026-11-18  
 Spec sections affected: approval and grant lifecycle, PendingApproval, property 4
 
 ## Context
 
-Record 0002, rule 14, describes a timeout when no decision arrives within
+The original text of record 0002, rule 14, describes a timeout when no decision arrives within
 `approval_wait_ms`. Record 0010 requires a last poll and acts on an approval
 decided just before the deadline. The poll can also see an approval decided
 after the deadline. Audit finding 3 concerns that case.
@@ -34,10 +35,14 @@ The run passed properties 2 and 4.
 
 ## Decision
 
-Recommend A. Keep waiting for the result of the first poll completed at or
-after the deadline. Time out only if that result still reads pending. Apply
-the existing decision and freshness checks to an answer with a decision.
-This makes the documented rule match the observed behavior.
+Accept A. Keep waiting for the first status poll answer the gateway reads at
+or after the deadline. Time out only if that answer still reads pending.
+Apply the existing decision and freshness checks when a poll returns a decision.
+
+A uses the gateway's deadline and the status it observes. B compares the
+authority's decision time with the gateway's deadline. In FiveFold they share
+one virtual clock (record 0009). In a real deployment the authority and the
+gateway have separate clocks.
 
 ## Alternatives considered
 
@@ -68,15 +73,20 @@ the timing case that the suite does not cover.
 
 ## Consequences
 
-Under A, a decision after the deadline can still be used if the final poll
-sees it. The interval depends on delivery of the poll and answer. Under B,
-the gateway enforces a strict decision time while a valid simulator approval
-can go unused. Withdrawing or expiring such authority would need a separate
-decision about the grant lifecycle and property 4.
+While the authority is unreachable, `_pending` retries without timing out.
+Under A, the gateway can use a decision made long after `approval_wait_ms`
+if the authority's answer arrives while the run is still open and the approval
+passes the existing checks. This is acceptable because each approval expires
+on its own and property 2 checks that it was valid when the effect committed.
+At C3 the destination enforces that check atomically at commit (record 0002).
+
+Under B, the gateway enforces a strict decision time while a valid simulator
+approval can go unused. Withdrawing or expiring such authority would need a
+separate decision about the grant lifecycle and property 4.
 
 ## Spec changes on acceptance
 
-Update rule 14 of record 0002 and the corresponding wait rule in the
-specification to describe A's final poll. Keep T4, T5 and the properties
-as defined in records 0003 and 0004. Add a regression for the observed
-late approval when implementing the accepted decision.
+Amend the timeout row in record 0002, rule 14, to name the first status poll
+the gateway reads at or after the deadline. This refines the final-poll rule
+in record 0010, rule 14. The spec's T5 row already covers this timeout.
+The late-approval regression belongs in a separate 0.1.2 pull request.
