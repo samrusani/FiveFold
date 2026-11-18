@@ -11,6 +11,10 @@ FiveFold's first full release is a test suite and reference gateway for agents t
 - **M4, live study.** Published the local and API pilots and the full study of 1,482 live episodes. The [report](docs/report.md) links to the raw data and compares the baseline, approval gate and reference gateway.
 - **M5, release.** Published the Python package, the two-minute setup and [twenty-minute tour](docs/tour.md), the overview video, the [limitations](docs/limitations.md) and the [security policy](SECURITY.md).
 
+### Known issue
+
+In the split topology, an agent worker can end with `MCPError: Session not found` when its MCP session is lost. This happened once in about 40 CI runs. All 30 targeted runs passed. The demos, the 235 expected outcomes, and the full study use the in-process topology, which uses a separate transport. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
+
 ## 0.1.0a1 (17 Nov 2026)
 
 First PyPI pre-release. It packaged the demo and its scenario and migration data so demo 1 could run from an installed wheel.
