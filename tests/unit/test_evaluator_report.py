@@ -301,6 +301,18 @@ def save(directory: Path, name: str, result: RunResult) -> Path:
 # The CSV ---------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r"])
+def test_csv_marks_text_with_formula_prefixes_and_preserves_numeric_cells(prefix: str) -> None:
+    value = prefix + "note"
+    original = make_result(seed=-7)
+    result = make_result(seed=-7, model=value, code_version=value)
+
+    (row,) = csv_rows(runs_csv([result]))
+    (normal,) = csv_rows(runs_csv([original]))
+    assert row == {**normal, "model": "'" + value, "code_version": "'" + value}
+    assert row["seed"] == "-7"
+
+
 def test_the_csv_has_a_header_and_one_row_per_run() -> None:
     text = runs_csv([g2_demo_1(), b0_demo_1()])
     assert "\r" not in text
