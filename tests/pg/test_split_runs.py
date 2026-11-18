@@ -35,7 +35,6 @@ import pytest
 import uvicorn
 import yaml
 from mcp.shared.exceptions import MCPError
-from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from starlette.types import Receive, Scope, Send
 
@@ -49,6 +48,7 @@ from fivefold.harness.clock import HostClock
 from fivefold.harness.log import SharedPgHarnessLog
 from fivefold.harness.migrations import (
     create_database,
+    create_run_database,
     database_lock,
     drop_database,
     registry_database,
@@ -63,6 +63,7 @@ from fivefold.harness.split.lifecycle import default_database, end_run, score_ru
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.service import open_run
 from fivefold.harness.split.simulator import SimulatorService
+from fivefold.paths import DB_DIR
 
 pytestmark = pytest.mark.pg
 
@@ -924,12 +925,7 @@ def test_start_refuses_a_database_of_the_same_name_unless_it_may_replace_it(
         _start(split, split.root / "refused", replace=True)
     assert _database_oid(split) == other.oid
     drop_database(split.admin, split.database)
-    with psycopg.connect(split.admin, autocommit=True) as conn:
-        conn.execute(
-            sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                sql.Identifier(split.database), sql.Identifier(split.template)
-            )
-        )
+    create_run_database(split.admin, split.database, DB_DIR / "migrations", template=split.template)
     unrecorded = _database_oid(split)
     _start(split, split.root / "replaced", replace=True)
     replaced = _database_oid(split)

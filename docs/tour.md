@@ -56,6 +56,8 @@ Run these in the same clone, with the same database. The commands take about a m
 
 `make demo` runs the four demos of record 0006 for B0 and G2, on seed 7, in under 10 seconds. `uv run python -m fivefold.harness.demo 2a` runs one of them.
 
+After the quick start, use `make demo` (or `uv run python -m fivefold.harness.demo`) to run all four. Each demo replaces its own existing database on a rerun. Older demo databases with FiveFold's complete matching migration history are included. The demos refuse unrelated databases with those names. Use a different PostgreSQL server or have its administrator rename the unrelated databases before running the demos there.
+
 | Demo | Contract | Faults | B0 | G2 |
 | --- | --- | --- | --- | --- |
 | 1. Order placed, reply lost | C2 | F2 and F11, as above | fail (1, 2, 3) | pass |
@@ -156,6 +158,8 @@ G2's three failures of property 2 are F6 late at C0, C1 and C2. The gateway chec
 ### 3. Recorded playback
 
 A cassette holds every model call of a run. Playback runs the run again from its cassette in a fresh database, then compares every record with the original run, apart from wall-clock times (record 0009). A live run always records a cassette, and its playback needs no API key and no network.
+
+The recorder's `record`, `play` and `branch` commands take `--database NAME` to choose a destination. They refuse a taken name unless you pass `--replace` and the database has FiveFold's marker or its complete matching migration history. Use an unused name for an unrelated database. Playback checks the original run before provisioning its destination. A branch preserves its parent.
 
 ```
 uv run python -m fivefold.recorder record --demo 1 --config G2 --cassette demo-1-g2.json

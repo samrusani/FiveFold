@@ -11,14 +11,15 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from fivefold.evaluator import load_results, markdown_report, runs_csv
 from fivefold.evaluator.__main__ import main as report
 from fivefold.harness import demo
-from fivefold.harness.migrations import CreatedDatabase, create_run_database, drop_database
+from fivefold.harness.demo import Demo
+from fivefold.harness.migrations import drop_database
+from fivefold.harness.run import Config
 
 pytestmark = pytest.mark.pg
 
@@ -28,12 +29,14 @@ def test_demo_1_saves_both_results_and_the_report_counts_them(
 ) -> None:
     made: list[str] = []
 
-    def prefixed(admin: str, name: str, migrations: Path, **options: Any) -> CreatedDatabase:
+    def prefixed(example: Demo, config: Config) -> str:
         """The demo's database, under this test run's prefix like every test database."""
-        made.append(f"{db_prefix}_{name}")
-        return create_run_database(admin, made[-1], migrations, **options)
+        name = f"{db_prefix}_fivefold_demo_{example.key}_{config.lower()}"
+        if name not in made:
+            made.append(name)
+        return name
 
-    monkeypatch.setattr(demo, "create_run_database", prefixed)
+    monkeypatch.setattr(demo, "_demo_database", prefixed)
     results = tmp_path / "results"
     try:
         assert demo.main(["1", "--seed", "7", "--dsn", admin_dsn, "--out", str(results)]) == 0

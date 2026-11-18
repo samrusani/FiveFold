@@ -24,6 +24,8 @@ To run demo 1 in G2 with a local model:
 
 4. Play it back, with no network and no flag: `uv run python -m fivefold.recorder play live-1-g2.json --scenario scenarios/dev/dev-001-single-po.yaml`.
 
+Use `--database NAME` for an unused destination when recording or playing back another run. `--replace` works on destinations with FiveFold's marker or its complete matching migration history. The recorder refuses to replace unrelated databases and verifies playback's original run before creating its replay database.
+
 The record command prints the verdict, the cassette's digest and what the run spent. Each model call takes the scenario's `think_ms` of virtual time, however long the model really takes, and `harness.model_call` logs its tokens. `--param NAME=VALUE`, such as `--param temperature=0`, sets a model parameter; the cassette records it. Before each call, the spend so far is checked against the cap, and a refused call ends that agent worker as `budget`. A call the provider has not answered after `--call-limit-s` wall-clock seconds (default 600) fails, and its worker ends with an error, so a stalled server cannot hold the run.
 
 A live study takes the same options and is refused without them, before it touches any database. It also saves each episode's cassette in `cassettes/`; `python -m fivefold.recorder play` compares a replay with the original run's database, so give `--keep-databases` to play one back. One spend cap holds across the study, and the study stops once the spend reaches it, since every later model call would be refused. An episode the cap cut short keeps its cassette, and its result goes to `spend-cap/`, which a report over the directory leaves out.

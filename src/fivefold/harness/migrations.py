@@ -89,6 +89,9 @@ TEMPLATE_ENV = "FIVEFOLD_TEMPLATE_DB"
 """The environment variable that names another template database. Tests set it, so a test
 run never migrates, copies or drops the template a person's runs are made from."""
 
+RUN_DATABASE_COMMENT = "FiveFold run database"
+"""Shared catalog marker set on each database this module creates for a run."""
+
 Connection = psycopg.Connection[TupleRow]
 
 
@@ -311,14 +314,13 @@ def create_run_database(
 
     Everything happens in one hold of the database lock (`database_lock`):
 
-    1. The template is made if it is missing and migrated forward with the files in
-       `migrations` if it is behind (`prepare_template`). Its connection is closed before
-       the copy: PostgreSQL copies a database only while no other session is connected
-       to it.
-    2. With `replace`, a database named `name` is dropped. `before_copy`, if given, runs
-       next, on the lock's connection: the split topology drops only its own run's
-       database there.
-    3. `CREATE DATABASE name TEMPLATE template` copies the template.
+    1. Check any existing destination's OID and shared catalog comment. If given,
+       `before_copy` checks the request on the lock's connection.
+    2. Make or migrate the template with the files in `migrations` and close its
+       connection. With `replace`, drop the destination only if it bears the marker
+       FiveFold sets on a run database or its full migration history matches. The
+       database must belong to the current administrator and still have the checked OID.
+    3. Copy the template and mark the new run database with its own shared catalog comment.
 
     Without `replace`, a taken name raises `DatabaseExists`, and that database is left as
     it was. The result's OID lets cleanup drop only the database made here
@@ -342,11 +344,14 @@ def create_run_database(
     if name == template:
         raise MigrationError(f"the database {name} is the template run databases are copied from")
     with database_lock(admin_dsn) as conn:
-        _prepare_template(conn, admin_dsn, template, migrations)
-        if replace:
-            drop_database_locked(conn, name)
+        existing = _replacement_oid(conn, admin_dsn, name, migrations, replace=replace)
         if before_copy is not None:
             before_copy(conn)
+        _prepare_template(conn, admin_dsn, template, migrations)
+        if existing is not None and not drop_database_locked(conn, name, oid=existing):
+            raise DatabaseExists(
+                f"the database {name} changed during replacement. Use an unused name"
+            )
         try:
             conn.execute(
                 sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
@@ -360,10 +365,90 @@ def create_run_database(
                 f"the template database {template} is in use by another session, so it cannot"
                 " be copied; close that session and try again"
             ) from None
+        conn.execute(
+            sql.SQL("COMMENT ON DATABASE {} IS {}").format(
+                sql.Identifier(name), sql.Literal(RUN_DATABASE_COMMENT)
+            )
+        )
         row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
     if row is None:
         raise MigrationError(f"the database {name} was dropped as soon as it was created")
     return CreatedDatabase(name=name, oid=int(row[0]), dsn=make_conninfo(admin_dsn, dbname=name))
+
+
+def check_run_destinations(
+    admin_dsn: str, names: Sequence[str], migrations: Path, *, replace: bool
+) -> None:
+    """Refuse a group of runs before provisioning any of them if a name is taken.
+
+    Each create must still recheck its destination after this preflight releases the lock.
+    """
+    template = template_database()
+    with database_lock(admin_dsn) as conn:
+        for name in names:
+            check_database_name(name)
+            if name == template:
+                raise MigrationError(f"the database {name} is the template run databases copy")
+            _replacement_oid(conn, admin_dsn, name, migrations, replace=replace)
+
+
+def _replacement_oid(
+    conn: Connection, admin_dsn: str, name: str, migrations: Path, *, replace: bool
+) -> int | None:
+    """Check an existing destination on the connection that holds the database lock."""
+    row = conn.execute(
+        "SELECT oid, pg_catalog.shobj_description(oid, 'pg_database'),"
+        " pg_catalog.pg_get_userbyid(datdba) = current_user"
+        " FROM pg_catalog.pg_database WHERE datname = %s",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    if not replace:
+        raise DatabaseExists(
+            f"the database {name} already exists. Use an unused name or pass --replace"
+        )
+    if not row[2] or (
+        row[1] != RUN_DATABASE_COMMENT and not _has_migration_history(admin_dsn, name, migrations)
+    ):
+        raise MigrationError(
+            f"the database {name} is not a run database with FiveFold's marker or matching"
+            " migration history and the current database administrator as its owner."
+            " Use an unused database name"
+        )
+    return int(row[0])
+
+
+def _has_migration_history(admin_dsn: str, name: str, migrations: Path) -> bool:
+    """Recognize older runs by their complete on-disk migration history."""
+    expected = {(migration.name, migration.sha256) for migration in discover(migrations)}
+    if not expected:
+        return False
+    try:
+        with psycopg.connect(make_conninfo(admin_dsn, dbname=name)) as target:
+            target.read_only = True
+            target.execute("SET LOCAL search_path = pg_catalog")
+            # Read ordinary heap data only. In particular, a same-named view or
+            # foreign table must never run a query as the provisioning administrator.
+            table = target.execute(
+                "SELECT c.oid FROM pg_catalog.pg_class AS c"
+                " JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace"
+                " JOIN pg_catalog.pg_am AS am ON am.oid = c.relam"
+                " WHERE n.nspname = 'public' AND c.relname = 'schema_migration'"
+                " AND c.relkind = 'r' AND am.amname = 'heap' AND NOT c.relrowsecurity"
+                " AND (SELECT count(*) FROM pg_catalog.pg_attribute AS a"
+                " WHERE a.attrelid = c.oid AND a.attname IN ('filename', 'sha256')"
+                " AND a.atttypid = 'pg_catalog.text'::pg_catalog.regtype) = 2"
+            ).fetchone()
+            if table is None:
+                return False
+            rows = target.execute(
+                "SELECT filename, sha256 FROM ONLY public.schema_migration LIMIT %s",
+                (len(expected) + 1,),
+            ).fetchall()
+    except psycopg.Error:
+        return False
+    return len(rows) == len(expected) and set(rows) == expected
 
 
 def _prepare_template(conn: Connection, admin_dsn: str, template: str, migrations: Path) -> None:
