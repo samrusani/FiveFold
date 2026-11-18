@@ -2,6 +2,7 @@
 
 Status: Accepted (2026-11-14)
 Amended by: 0010 (2026-11-14): rule 17, predictable expiry
+Amended by: 0017 (2026-11-18): rule 14, the final approval status poll
 Date: 2026-11-14
 Spec sections affected: Data model (Grant), Gateway (admin API, policy), Simulator (approvals service), Fault catalog (F6), Evaluator (property 2)
 Resolves M0 questions: 3, 13, 14, 22; parts of 1, 2 and 38
@@ -53,7 +54,7 @@ There is a second problem. If the evaluator judges authority from the gateway's 
 | (new) | pending | Approval request filed |
 | pending | active | The authority approved it |
 | pending | denied | The authority denied it |
-| pending | timed_out | No decision within the scenario's `approval_wait_ms` |
+| pending | timed_out | No decision in the answer to the first status poll the gateway reads at or after `approval_wait_ms` |
 | pending | released | The action ended before a decision, for example on stale input or when the run closed |
 | pending | revoked or expired | The first poll that sees a decision finds the approval already revoked or expired |
 | active | consumed | The action's first attempt is recorded (Authorized to Dispatched) |
