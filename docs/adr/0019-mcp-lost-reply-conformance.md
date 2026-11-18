@@ -37,23 +37,28 @@ case starts with a fresh namespace and declares the following.
   recognizes them, reuse a key in the declared argument when the tool accepts
   one, or declare no recognition. Reuse the same operation and arguments in
   all three modes. Each request gets its own SDK-assigned ID.
-- How the fixture signals that a write is held before commit, that it has
-  committed and that both attempts have settled. Settlement means that the
-  attempts can no longer produce effects. The author declares an upper bound
-  in milliseconds for waiting for evidence.
+- The upper bound in milliseconds for waiting for evidence. Settlement
+  means the attempts can no longer produce effects. For work that can
+  continue after the tool replies, the probe must also establish that
+  the attempts have settled.
 
-The probe reads a zero count before the first write and reads again when both
-attempts have settled. A fixture can signal a commit in the first case only
-after its authoritative state reflects it. The runner uses those signals
-to order observations. It cannot infer commit or settlement from a timeout,
-an acknowledgement or a tool annotation.
+The probe reads a zero count before the first write and reads again when
+both attempts have settled. When the author declares that a tool finishes
+all work before it replies, the runner can establish settlement from
+both terminal replies, including a reply it drops. A timeout, early
+acknowledgement or tool annotation cannot establish settlement.
+
+Only the pre-commit timeout case needs fixture hooks. They hold the first
+attempt before commit and establish that it ended without committing
+before the retry. The other two cases use an ordinary test instance and
+the same read-only probe.
 
 ### Checks and verdicts
 
 | Case | Required setup and evidence | Pass | Fail | Not applicable |
 | --- | --- | --- | --- | --- |
-| Reply lost after commit | The fixture witnesses the first commit and withholds its reply from the caller. The caller's wait ends without that reply. The probe sees one committed effect before the runner issues one retry. | One matching effect after settlement. | The retry creates a second effect, or the settled count or effect is wrong. | The author declares that the fixture cannot hold a reply after commit. |
-| Duplicate delivery | Send two valid requests for the same operation, each with its own request ID. The fixture witnesses delivery of both. Send the second after the first reply, with no induced reply loss. | One matching effect after both deliveries settle. | Delivery creates a second effect, or the settled count or effect is wrong. | The author declares that the fixture cannot exercise repeat delivery. |
+| Reply lost after commit | The runner receives and holds the first tool reply. The probe witnesses a committed effect while the reply is held. The runner drops the reply, lets the caller's wait expire, then issues one retry. | One matching effect after settlement. | The retry creates a second effect, or the settled count or effect is wrong. | The author declares the operation unavailable for this check. |
+| Duplicate delivery | The runner plans two valid requests for the same operation, each with its own request ID. It drops the first reply and then sends the planned duplicate without waiting for a caller timeout. It observes a terminal reply for each delivery. | One matching effect after both deliveries settle. | Delivery creates a second effect, or the settled count or effect is wrong. | The author declares the operation unavailable for repeat delivery. |
 | Timeout before commit | The fixture holds the first attempt before commit. The caller's wait ends and the probe sees zero effects while the first attempt is still held. The fixture establishes that the first attempt has ended without committing before the runner issues one retry. | The retry yields one matching effect after settlement. | The settled count or effect is wrong. | The author declares that the fixture cannot hold and end the first attempt before commit. |
 
 A case that was declared supported but lacks valid timing, delivery, probe
@@ -69,9 +74,14 @@ Propose `python -m fivefold.conformance --fixture PATH --seed INTEGER`.
 The runner opens an SDK `Client` in auto mode for both transports. It
 records the protocol the SDK negotiates through discovery or the legacy
 handshake. It uses the underlying session's `call_tool` so the test
-controls the number of write calls. The author cooperates with the runner
-to withhold or delay replies inside the fixture. The probe and fixture
-signals stay independent of the write reply. No SDK change is required.
+controls the number of write calls. The runner receives each tool reply
+from the SDK before handing it to the simulated caller. This is the
+fault point shared by both transports. The runner discards only the
+selected first reply and records that it received and dropped it. The
+SDK exchange runs to completion, so the injected loss leaves the
+server connection open. The simulated caller has its own wait deadline.
+The probe and pre-commit fixture signals stay independent of the write
+reply. No SDK change is required.
 See the MCP transport specifications for
 [2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 and [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports).
@@ -109,8 +119,11 @@ Streamable HTTP. One persists deduplication at the synthetic effect boundary.
 The other records every delivered write that reaches commit. The first
 passes the three cases. The second fails the first two with a count of two
 and passes the pre-commit case because the first attempt never commits.
-Assert the report and all exit codes, including missing and invalid evidence
-and an unsupported case. The tests use the locked SDK.
+Run the two reply-drop checks with the pre-commit hooks disabled. Assert
+that the runner drops one reply, that there are exactly two write requests,
+and that the effect counts come from the probe. Assert the report and
+all exit codes, including missing and invalid evidence and an unsupported
+case. The tests use the locked SDK.
 
 ## Alternatives considered
 
@@ -122,13 +135,19 @@ and an unsupported case. The tests use the locked SDK.
 - Judge success against the protocol spec. Rejected because the protocol
   permits both effect counts. The proposed test judges a tool's behavior
   against the declared operation under a specified fault.
+- Interrupt the stdio connection or close the HTTP response stream.
+  Either can interfere with server work. Modern Streamable HTTP uses
+  stream closure to signal cancellation. Both transports deliver a tool
+  reply to the SDK, so the runner can inject the loss at its own handoff
+  to the caller. See [Streamable HTTP cancellation](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#cancellation).
 
 ## Consequences
 
-The author must supply a test instance, an isolated probe and the evidence
-needed for each supported fault. The report gives the conditions under
-which a repeated call was observed to create a duplicate or produce one
-matching effect. Its findings apply to the fixture and inputs tested.
+The author needs a test instance and an isolated probe for the two
+reply-drop checks. The pre-commit timeout also needs the fixture hooks.
+The report gives the conditions under which a repeated call was observed
+to create a duplicate or produce one matching effect. Its findings apply
+to the instance and inputs tested.
 
 Spec changes on acceptance: describe the fixture declaration, three cases and
 verdicts in Later releases and Testing. Document the command and a local
