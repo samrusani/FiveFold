@@ -1,7 +1,7 @@
 # 0009: Runs, scenarios and deterministic execution
 
 Status: Accepted (2026-11-14)
-Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too; 0015 (2026-11-16): cap scenario status waits
+Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too; 0015 (2026-11-16): cap scenario status waits; 0018 (2026-11-18): allow Temporal's internal timers in B1
 Date: 2026-11-14
 Spec sections affected: Simulator (determinism, scenarios), Playback and branching, Stack (packaging, `make demo`), Testing, Data model (Run)
 Resolves M0 questions: 29, 31, 32, 33 (MCP transport), 41, 42 (scenario format); part of 38
@@ -43,6 +43,7 @@ Checked in the mcp 2.3.0 source: the client can connect to a server object in-pr
 - One clock per run, owned by the scheduler. Every component, the gateway included, reads time only from it. Grant expiry, timeouts, `action_event.vt`, `attempt.sent_vt` and `effect.committed_vt` are virtual milliseconds.
 - Wall-clock time is recorded next to it for metrics only, and never used for decisions.
 - In the split topology, the virtual clock follows the host's monotonic clock.
+- In B1, Temporal uses its own clock for internal scheduling, retries and infrastructure timers (0018). A real wait for Temporal holds virtual time. The FiveFold clock governs faults, tool timeouts, simulator decisions and every scored record.
 
 ### Randomness
 

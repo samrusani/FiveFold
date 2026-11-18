@@ -1,7 +1,7 @@
 # 0008: Configurations and trust boundaries
 
 Status: Accepted (2026-11-14)
-Amended by: 0011 (2026-11-15): the scripted policy's next step after a `run_closed` rejection; 0015 (2026-11-16): status waits use the scenario limit
+Amended by: 0011 (2026-11-15): the scripted policy's next step after a `run_closed` rejection; 0015 (2026-11-16): status waits use the scenario limit; 0018 (2026-11-18): B1 uses Temporal and the direct evidence route
 Date: 2026-11-14
 Spec sections affected: Baselines, Architecture (trust boundaries), Stack (database roles), CLAUDE.md (hard rules)
 Resolves M0 questions: 1, 37, 39, 40; part of 31
@@ -19,7 +19,7 @@ The benchmark compares an agent stack without a gateway (B0) with stacks that ha
 | B0 | The shared LangGraph agent | The agent calls the simulator API directly | The framework's retries only |
 | G1 | The same agent | Through the gateway | Authorization only |
 | G2 | The same agent | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
-| B1 (v0.2) | Temporal-based agent | Direct, through idempotent activities | As Temporal's docs recommend |
+| B1 (v0.2) | Temporal agent with the same scripted policy | Direct | Activity retries and a stable per-Activity key for C2 and C3 writes (0018) |
 | B2 (v0.2) | DBOS-based agent | Direct | As DBOS's docs recommend |
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. The tool surfaces differ, as listed below, and the report says so.

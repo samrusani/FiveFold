@@ -1,9 +1,9 @@
 # 0018: B1, the Temporal baseline
 
-Status: Proposed
+Status: Accepted on 18 Nov 2026 by the maintainer
 Date: 2026-11-18
 Spec sections affected: Configurations, Simulator (determinism), Testing, Data model (Run)
-Amends on acceptance: 0009 (Temporal scheduling in B1 only)
+Amends: 0008 (B1 configuration) and 0009 (Temporal scheduling in B1 only)
 
 ## Context
 
@@ -92,11 +92,11 @@ completed model and tool results from history. An abandoned Activity has
 no completion to replay.
 
 The injected crash ends the FiveFold worker's current execution and loses
-its local state. The outer Temporal poller stays online in the prototype.
+its local state. The outer Temporal poller stays online.
 The observer substitutes the virtual crash signal for Temporal's normal
 wall-time crash detection. Temporal documents that its server detects a
 lost worker by Start-To-Close timeout. Using that timeout to detect F1,
-F3 or F11 would let host timing affect the measurement. This proposal
+F3 or F11 would let host timing affect the measurement. This design
 measures recovery after a known worker loss. See
 [Activity failure detection](https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout),
 [Asynchronous Activity Completion](https://docs.temporal.io/develop/python/activities/asynchronous-activity)
@@ -119,8 +119,8 @@ lag, message logs and scoring decisions on FiveFold's single virtual
 clock. Keep the existing seeded generators. Temporal history and its
 timestamps are diagnostic data outside the evaluator. A Temporal clock
 change can affect elapsed wall time and therefore its metrics. Under this
-rule it cannot change any scored record or event order. Test that claim
-under deliberate host pauses before accepting B1.
+rule it cannot change any scored record or event order. Repeat the
+digest check under deliberate host pauses when implementing B1.
 
 The scratch tests with both Temporal time-skipping servers ruled them out
 as the run clock. The V1 test server selected by SDK 1.36.1 and the
@@ -144,12 +144,27 @@ committed study exports byte for byte.
 
 Use the stock Temporal CLI dev server on loopback with in-memory
 persistence and a separate task queue per test process. Reuse one server
-for a test session and give each episode a fresh workflow ID. For local
-and CI tests, pin `temporalio` 1.36.1 separately from the implementation
-PR and pin the CLI to 1.10.1, which embeds Server 1.32.2. Provision the
-CLI once from a checksum-verified GitHub release artifact. Start it from
-that local binary so test execution needs only loopback and the existing
-PostgreSQL service. The SDK, CLI and embedded server use MIT licences.
+for a test session and give each episode a fresh workflow ID. Pin
+`temporalio` 1.36.1 in a dependency PR before the implementation. Install
+it through `fivefold[temporal]` or the dev dependency group. The base
+`pip install fivefold` and the existing demos need no Temporal dependency
+or server.
+
+Pin CLI 1.10.1, which embeds Server 1.32.2. Verify the SHA-256 of the
+platform archive before extracting it. Use the local binary so tests
+need only loopback and the existing PostgreSQL service. CI provisions
+the binary before running the tests. `make check` fails with setup
+instructions if the pinned CLI is missing or has the wrong version.
+The B1 tests are required.
+
+| Platform | CLI archive | SHA-256 |
+| --- | --- | --- |
+| Linux amd64 | `temporal_cli_1.10.1_linux_amd64.tar.gz` | `4c1500e2ce2d4de136e5fe8852d9b7f82eb62f19b6b383b3e0c040519a9d20b1` |
+| Linux arm64 | `temporal_cli_1.10.1_linux_arm64.tar.gz` | `2f748e9411b37c9cabb57f1f08e37765388c12b5534432c7aea28b593df9145d` |
+| macOS amd64 | `temporal_cli_1.10.1_darwin_amd64.tar.gz` | `8ec6c513ad2177de4eb15d2cb17a4fe5070e6078afd7f80bdfcc37fae459d3c4` |
+| macOS arm64 | `temporal_cli_1.10.1_darwin_arm64.tar.gz` | `94f7f982b26438e8abbde6000ba471b694be6a2413b31f6162f87a9f9c48c738` |
+
+The SDK, CLI and embedded server use MIT licences.
 The ASF lists MIT as compatible with inclusion in Apache-licensed
 products. Keep their notices with any redistributed copies. The SDK
 wheel includes its licence in the `temporalio-1.36.1.dist-info/licenses`
@@ -157,8 +172,9 @@ directory. See
 [SDK 1.36.1](https://pypi.org/project/temporalio/1.36.1/),
 [CLI licence](https://github.com/temporalio/cli/blob/v1.10.1/LICENSE),
 [Server licence](https://github.com/temporalio/temporal/blob/v1.32.2/LICENSE),
-[ASF third-party licence policy](https://www.apache.org/legal/resolved.html#category-a)
-and the [CLI release](https://github.com/temporalio/cli/releases/tag/v1.10.1).
+[ASF third-party licence policy](https://www.apache.org/legal/resolved.html#category-a),
+the [CLI release](https://github.com/temporalio/cli/releases/tag/v1.10.1)
+and its [published checksums](https://github.com/temporalio/cli/releases/download/v1.10.1/checksums.txt).
 
 The Linux amd64 CLI archive was 38,357,804 bytes and passed its published
 SHA-256 check. Its executable is 125,718,690 bytes. The installed Python
@@ -222,7 +238,7 @@ suite: 235 fault cells plus five catalog checks. Both per-model study CSVs
 and Markdown reports regenerated byte for byte from committed results.
 The implementation gate still covers all committed study exports.
 
-### Proposed B1 cells
+### B1 cells
 
 There are 34 pass, 34 fail and four pass_unresolved cells. The
 table names all applicable fault, variant and contract combinations.
@@ -307,6 +323,26 @@ as described above.
 | F12 | agent_sim | C2 | `pass` | None | The first request never reached the simulator. The retry committed once. |
 | F12 | agent_sim | C3 | `pass` | None | The first request never reached the simulator. The retry committed once. |
 
+### Differences from B0
+
+Thirteen cells change verdict or failing properties.
+
+| Cells | Count | B0 | B1 |
+| --- | ---: | --- | --- |
+| F2, F3, F4 `agent_sim`, and both F11 variants at C2 | 5 | Fail properties 1, 2 and 3 | Pass. The repeated request uses the original key and only one effect commits. |
+| F2, F3 and both F11 variants at C3 | 4 | Fail property 5. The repeat is refused and the report misses the first effect. | Pass. The repeated request returns the committed result. |
+| Both F5 variants at C2 | 2 | Fail properties 1, 2 and 3. Both writes commit. | Pass unresolved. The key limits the operation to one effect, which the report marks unknown. |
+| Both F5 variants at C3 | 2 | Pass | Pass unresolved |
+
+At C3 in both F5 variants, B0's unkeyed retry commits at 7,297 virtual ms
+and the agent reports it as done. The conditional write later rejects
+the delayed original because the approval was used and the budget version
+changed. B1's keyed retry receives `in_progress` while the original is
+pending. The direct policy reports unknown. The original commits once
+during the drain, at 10,311 virtual ms in contract or 25,311 virtual ms
+beyond the deadline. Both baselines have one effect and pass all five
+properties. B1's unknown report makes its verdict `pass_unresolved`.
+
 ## Consequences
 
 B1 compares an agent with persisted Activity results and a per-Activity
@@ -315,8 +351,8 @@ effects where the destination offers no key or where separate Activities
 act on the same intent. It uses no gateway authorization, state or report
 checks.
 
-Spec changes on acceptance: add the B1 execution and identity rules to
-Configurations and record 0008, and the narrow clock exception to
-Simulator and record 0009. Add the expected outcomes, baseline routing
-and digest gate to Testing. Add B1 to the Run configuration list. Apply
-the docs changes as the implementation and its tests land.
+B1 detects worker loss at the virtual restart and keeps the Temporal
+poller alive. It measures recovery after a known loss. For worker-loss
+faults, the measured recovery latency is a lower bound because it
+excludes Temporal's own crash detection. Add this limitation to
+`docs/limitations.md` with the B1 implementation.
