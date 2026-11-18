@@ -7,13 +7,13 @@
    timing (`fivefold.faults.plan`), and the split topology must be able to run it
    (`fivefold.harness.split.faults`). Seeded parameters are drawn from the run's seed, as
    in the inproc topology.
-2. It makes the run's database from the migrated template database (0009), first
-   migrating the template, or making it if it does not exist yet, as every run database
-   is made (`fivefold.harness.migrations.create_run_database`). The template is
+2. It reserves a new owner-only run directory, then copies the migrated template
+   database (0009). It migrates the template or makes it if it does not exist yet
+   (`fivefold.harness.migrations.create_run_database`). The template is
    FIVEFOLD_TEMPLATE_DB, or `fivefold_template`, unless the start names another. A
    database that already has the run's name is refused; with replace it is dropped
-   first, but only if FiveFold marked it at creation and its `harness.run` holds this run
-   or no run yet,
+   first, but only with FiveFold's marker or matching migration history, and if
+   `harness.run` holds this run or no run yet,
    as a copy of the template whose start failed before recording its run. Run ids that
    differ only in case or punctuation, such as those of scenarios `sample-a` and
    `sample_a`, get one default name, so replace never drops a database that holds
@@ -23,7 +23,7 @@
    and the model the user names, and in the run registry, for the viewer (0012). It sets
    up the simulator's run with its credentials: the gateway in G1 and G2, the agent
    worker in B0 (0008).
-4. It makes the run's secrets, and writes the run's directory (`rundir`).
+4. It makes the run's secrets, and writes the files in the run's directory (`rundir`).
 
 `end_run` ends the run once the user's agent is done. It tells both services that the
 agents' phase is over (G2 then closes the run, 0003), waits the drain window in wall
@@ -78,12 +78,10 @@ from fivefold.harness.scheduler import HostScheduler
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, issue
 from fivefold.harness.split.faults import SplitRefused, check_split
 from fivefold.harness.split.rundir import (
-    RUN_FILE,
     Config,
     RunDirError,
     SplitRun,
-    clear_run,
-    read_run,
+    new_run_directory,
     write_run,
 )
 from fivefold.paths import DB_DIR
@@ -139,9 +137,10 @@ def start_run(
     replace: bool = False,
 ) -> SplitRun:
     """Make a split run and its directory; see the module. `plan` defaults to the
-    scenario's fault list, and `template` to `template_database()`. With `replace`, a run
-    already in `run_dir`, and a database of the same name that is this run's, are
-    replaced; without it they are refused."""
+    scenario's fault list, and `template` to `template_database()`. The run directory
+    must be new. With `replace`, the database of the same name may be replaced if
+    it has FiveFold's marker or matching migration history and holds this run or no
+    run yet. A failed start rolls back its directory and files."""
     scenario_text = scenario_path.read_text(encoding="utf-8")
     scenario = load_scenario(scenario_text)
     entries = list(plan) if plan is not None else _plan_of(scenario)
@@ -157,55 +156,53 @@ def start_run(
     check_database_name(template)
     if name == template:
         raise RunDirError(f"database {name} is the template run databases are made from")
-    held_here = (run_dir / RUN_FILE).exists()
-    if held_here and not replace:
-        held = read_run(run_dir)
-        raise RunDirError(
-            f"{run_dir} holds run {held.run_id}: end and score it, then start again with"
-            " replace, or choose another run directory"
-        )
-    dsn = _run_database(admin_dsn, name, template, run_id=run_id, replace=replace)
-    if held_here:
-        clear_run(run_dir)
-    run = SplitRun(run_dir, run_id, name, config, contract, seed)
-    with psycopg.connect(make_conninfo(dsn, user="ff_harness"), autocommit=True) as conn:
-        SharedPgHarnessLog(conn).run_recorded(
-            RunRecord(
+    with new_run_directory(run_dir) as reserved:
+        run = SplitRun(run_dir, run_id, name, config, contract, seed)
+        dsn = _run_database(admin_dsn, name, template, run_id=run_id, replace=replace)
+        with psycopg.connect(make_conninfo(dsn, user="ff_harness"), autocommit=True) as conn:
+            SharedPgHarnessLog(conn).run_recorded(
+                RunRecord(
+                    run_id=run_id,
+                    scenario_id=scenario.id,
+                    scenario_digest=scenario_digest(scenario),
+                    config=config,
+                    contract=str(contract),  # type: ignore[arg-type]
+                    seed=seed,
+                    model_adapter="external",
+                    model=model,
+                    params={
+                        "params": scenario.params.model_dump(mode="json"),
+                        "plan": [entry.model_dump(mode="json") for entry in planned],
+                        "workers": 1,
+                        "agent_workers": 1,
+                    },
+                    topology="split",
+                )
+            )
+        register(
+            dsn,
+            RegistryEntry(
+                database=name,
                 run_id=run_id,
                 scenario_id=scenario.id,
-                scenario_digest=scenario_digest(scenario),
                 config=config,
-                contract=str(contract),  # type: ignore[arg-type]
+                contract=str(contract),
                 seed=seed,
-                model_adapter="external",
-                model=model,
-                params={
-                    "params": scenario.params.model_dump(mode="json"),
-                    "plan": [entry.model_dump(mode="json") for entry in planned],
-                    "workers": 1,
-                    "agent_workers": 1,
-                },
-                topology="split",
-            )
+            ),
         )
-    register(
-        dsn,
-        RegistryEntry(
-            database=name,
-            run_id=run_id,
-            scenario_id=scenario.id,
-            config=config,
-            contract=str(contract),
-            seed=seed,
-        ),
-    )
-    credentials = (GATEWAY,) if config != "B0" else (AGENT,)
-    simulator = SimConfig.preset(
-        contract, credentials=credentials, params=scenario.params.contract_params()
-    )
-    setup_run(make_conninfo(dsn, user="ff_sim"), scenario, simulator, vt=0)
-    secrets = issue()
-    write_run(run, scenario_text=scenario_text, secrets=secrets, callers=Callers.of(secrets))
+        credentials = (GATEWAY,) if config != "B0" else (AGENT,)
+        simulator = SimConfig.preset(
+            contract, credentials=credentials, params=scenario.params.contract_params()
+        )
+        setup_run(make_conninfo(dsn, user="ff_sim"), scenario, simulator, vt=0)
+        secrets = issue()
+        write_run(
+            run,
+            reserved,
+            scenario_text=scenario_text,
+            secrets=secrets,
+            callers=Callers.of(secrets),
+        )
     return run
 
 

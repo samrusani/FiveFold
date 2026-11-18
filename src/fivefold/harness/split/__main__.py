@@ -125,8 +125,8 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument(
         "--replace",
         action="store_true",
-        help="replace a run already in the run directory, and a database of the same name"
-        " if it holds this run, or none yet",
+        help="replace a FiveFold database of the same name if it holds this run or no"
+        " run yet; the run directory must always be new",
     )
 
     service = commands.add_parser("serve", help="run one of the run's services")

@@ -38,7 +38,7 @@ from fivefold.harness.split.rundir import (
     Config,
     RunDirError,
     SplitRun,
-    clear_run,
+    new_run_directory,
     read_run,
     write_run,
 )
@@ -87,14 +87,26 @@ def _run(directory: Path) -> SplitRun:
     )
 
 
+def _write_run(run: SplitRun, secrets: dict[str, str], scenario_text: str = "") -> None:
+    with new_run_directory(run.directory) as reserved:
+        write_run(
+            run,
+            reserved,
+            scenario_text=scenario_text,
+            secrets=secrets,
+            callers=Callers.of(secrets),
+        )
+
+
 def test_a_run_directory_reads_back_as_written(tmp_path: Path) -> None:
     secrets = issue()
     run = _run(tmp_path / "run")
-    write_run(run, scenario_text="id: x\n", secrets=secrets, callers=Callers.of(secrets))
+    _write_run(run, secrets, "id: x\n")
     read = read_run(tmp_path / "run")
     assert read == run
     assert read.secret(AGENT) == secrets[AGENT]
     assert read.callers().identify(f"Bearer {secrets[HARNESS]}") == HARNESS
+    assert stat.S_IMODE(run.directory.stat().st_mode) == 0o700
     for holder in secrets:
         mode = (tmp_path / "run" / f"{holder}.token").stat().st_mode
         assert stat.S_IMODE(mode) == 0o600
@@ -105,14 +117,54 @@ def test_a_run_directory_reads_back_as_written(tmp_path: Path) -> None:
 
 def test_a_run_directory_holds_one_run(tmp_path: Path) -> None:
     secrets = issue()
-    run = _run(tmp_path)
-    write_run(run, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
-    with pytest.raises(RunDirError, match="already holds a run"):
-        write_run(run, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
-    clear_run(tmp_path)
+    run = _run(tmp_path / "run")
+    _write_run(run, secrets)
+    with pytest.raises(RunDirError, match="already exists") as refused:
+        _write_run(run, issue())
+    assert str(run.directory) in str(refused.value)
+    assert read_run(run.directory).secret(AGENT) == secrets[AGENT]
+
+
+@pytest.mark.parametrize("is_link", [False, True])
+def test_existing_tokens_are_left_untouched(tmp_path: Path, is_link: bool) -> None:
+    run = _run(tmp_path / "run")
+    secrets = issue()
+    token = run.directory / f"{AGENT}.token"
+    target = tmp_path / "target" if is_link else token
+    with (
+        pytest.raises(RunDirError, match=f"already contains {AGENT}.token"),
+        new_run_directory(run.directory) as reserved,
+    ):
+        target.write_text("sentinel\n", encoding="utf-8")
+        target.chmod(0o644)
+        if is_link:
+            token.symlink_to(target)
+        write_run(run, reserved, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
+    assert target.read_text(encoding="utf-8") == "sentinel\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    assert token.is_symlink() == is_link
+    assert list(run.directory.iterdir()) == [token]
     with pytest.raises(RunDirError, match="start one first"):
-        read_run(tmp_path)
-    assert list(tmp_path.iterdir()) == []
+        read_run(run.directory)
+    with pytest.raises(RunDirError, match="remove this one") as refused:
+        _write_run(run, secrets)
+    assert str(run.directory) in str(refused.value)
+
+
+def test_a_failed_start_removes_its_files_and_directory(tmp_path: Path) -> None:
+    run = _run(tmp_path / "run")
+    sibling = tmp_path / "sibling"
+    sibling.write_text("keep me", encoding="utf-8")
+    secrets = issue()
+    with (
+        pytest.raises(RuntimeError, match="start failed"),
+        new_run_directory(run.directory) as reserved,
+    ):
+        write_run(run, reserved, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
+        assert list(run.directory.iterdir())
+        raise RuntimeError("start failed")
+    assert not run.directory.exists()
+    assert sibling.read_text(encoding="utf-8") == "keep me"
 
 
 def test_default_database_names_are_safe_and_short() -> None:
@@ -285,7 +337,7 @@ def _started(
         Contract.C2,
         7,
     )
-    write_run(run, scenario_text="", secrets=secrets, callers=Callers.of(secrets))
+    _write_run(run, secrets)
 
     def made(**_: object) -> SplitRun:
         return run

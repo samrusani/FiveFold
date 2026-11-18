@@ -922,7 +922,7 @@ def test_start_refuses_a_database_of_the_same_name_unless_it_may_replace_it(
     with pytest.raises(RunDirError, match="already exists: replace it, or name another"):
         _start(split, split.root / "refused")
     with pytest.raises(RunDirError, match="is not a run database"):
-        _start(split, split.root / "refused", replace=True)
+        _start(split, split.root / "refused-replace", replace=True)
     assert _database_oid(split) == other.oid
     drop_database(split.admin, split.database)
     create_run_database(split.admin, split.database, DB_DIR / "migrations", template=split.template)
@@ -958,8 +958,16 @@ def test_replace_drops_only_a_database_that_holds_this_run(
     with split.connect() as conn:
         assert conn.execute("SELECT run_id FROM harness.run").fetchall() == [(first.run_id,)]
     assert not (split.root / "second" / "run.json").exists()
-    # The run that the database holds may replace it.
-    _start(split, split.root / "first", scenario_id="sample-a", replace=True)
+    # The run that the database holds may replace it, from a fresh directory.
+    with pytest.raises(RunDirError, match="already exists"):
+        _start(split, first.directory, scenario_id="sample-a", replace=True)
+    assert _database_oid(split) == kept
+    retry_dir = split.root / "replacement"
+    with pytest.raises(RunDirError, match="already exists: replace it, or name another"):
+        _start(split, retry_dir, scenario_id="sample-a")
+    assert not retry_dir.exists()
+    assert _database_oid(split) == kept
+    _start(split, retry_dir, scenario_id="sample-a", replace=True)
     assert _database_oid(split) not in (None, kept)
 
 
