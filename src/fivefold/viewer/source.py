@@ -23,11 +23,15 @@ Checked in psycopg 3.3.9: `conninfo_to_dict` and `make_conninfo` (`conninfo.py`)
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from threading import Lock
 from typing import Any, Final, LiteralString
 
 import psycopg
@@ -47,14 +51,13 @@ DATABASE_NAME: Final = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 """A database name the harness can make (`fivefold.harness.migrations`)."""
 
 CONNECT_TIMEOUT_S: Final = 5
-
-BRANCH_MARK: Final = ".branch-"
-"""The part every experimental branch's run id has: its parent's run id, `.branch-` and
-its branch point (`harness.models.branch_run_id`; the viewer may not import the harness,
-so a test checks that the two agree). The run list reads a run's own records only when
-its id has this part; a run that has it without being a branch costs one read and still
-lists no parent."""
 """Seconds to wait for the server before a request fails."""
+
+_RUN_LIST_LOCK = Lock()
+"""Let one request at a time open concurrent run database connections."""
+
+_CELL_FIELDS = ("scenario_digest", "topology", "model_adapter", "model", "planned_faults", "params")
+_RUN_LIST_FIELDS = ("parent_run_id", "branch_point", *_CELL_FIELDS[:4])
 
 Connection = psycopg.Connection[DictRow]
 
@@ -124,32 +127,34 @@ class RunSource:
 
     def runs(self) -> list[dict[str, Any]]:
         """Every run database the registry lists, newest first: by the wall-clock time its
-        row was written, which serves display only (0009). Each row also holds the run's
-        parent and branch point, from its own `harness.run` (`branch_of`)."""
+        row was written, which serves display only (0009). Each row includes comparison
+        fields and branch metadata from its own `harness.run`, when available."""
         rows = self._registry_rows("TRUE", ())
-        return [{**row, **self._branch_fields(row)} for row in rows]
+        with _RUN_LIST_LOCK, ThreadPoolExecutor(max_workers=8) as reads:
+            return list(reads.map(self._listed_run, rows))
 
-    def _branch_fields(self, row: dict[str, Any]) -> dict[str, Any]:
-        """A listed run's parent and branch point. Only a branch's run id has the
-        `.branch-` part (`harness.models.branch_run_id`), so only such a run's own
-        database is read; every other run is no branch, and costs no connection."""
-        if BRANCH_MARK not in str(row["run_id"]):
-            return {"parent_run_id": None, "branch_point": None}
-        return self.branch_of(str(row["database"]))
-
-    def branch_of(self, database: str) -> dict[str, Any]:
-        """`parent_run_id` and `branch_point` from the `harness.run` of the run database
-        `database`, which the registry lists: both set for an experimental branch, which
-        the viewer labels a new experiment (0009), and both null for any other run. Both
-        are null too when the database cannot be read; its own page then says why."""
+    def _listed_run(self, registered: dict[str, Any]) -> dict[str, Any]:
+        """Read one registry entry's run metadata. Unavailable runs stay manually listed."""
+        database = str(registered["database"])
         try:
             with self._read(database) as conn:
-                row = conn.execute("SELECT parent_run_id, branch_point FROM harness.run").fetchone()
-        except (psycopg.OperationalError, psycopg.errors.UndefinedTable):
+                row = conn.execute(
+                    "SELECT run_id, scenario_id, config, contract, seed::text AS seed,"
+                    " parent_run_id, branch_point, scenario_digest, topology, model_adapter,"
+                    " model, params FROM harness.run"
+                ).fetchone()
+        except (
+            psycopg.OperationalError,
+            psycopg.errors.UndefinedTable,
+            psycopg.errors.InsufficientPrivilege,
+        ):
             row = None
-        if row is None:
-            return {"parent_run_id": None, "branch_point": None}
-        return {"parent_run_id": row["parent_run_id"], "branch_point": row["branch_point"]}
+        if row is None or any(
+            row[field] != registered[field]
+            for field in ("run_id", "scenario_id", "config", "contract", "seed")
+        ):
+            row = {}
+        return {**registered, **_comparison_fields(row)}
 
     def registered(self, database: str) -> dict[str, Any]:
         """The registry's row for `database`; `ViewerError` 404 if it has none."""
@@ -194,3 +199,60 @@ class RunSource:
             raise ViewerError(
                 404, "not_a_run", f"{database} is not a migrated run database: {error}"
             ) from error
+
+
+def _comparison_fields(run: dict[str, Any]) -> dict[str, Any]:
+    fields = dict.fromkeys((*_RUN_LIST_FIELDS, "planned_faults", "params", "cell_key"))
+    fields.update((field, run.get(field)) for field in _RUN_LIST_FIELDS)
+    raw_params = run.get("params")
+    if not isinstance(raw_params, dict) or not isinstance(raw_params.get("params"), dict):
+        return fields
+    faults = _planned_faults(raw_params.get("plan"))
+    if faults is None:
+        return fields
+    fields["planned_faults"] = faults
+    fields["params"] = {key: value for key, value in raw_params.items() if key != "plan"}
+    if run["parent_run_id"] is None and run["branch_point"] is None:
+        # Canonicalize and hash before JSON reaches JavaScript, which can round integers.
+        data = [fields[key] for key in _CELL_FIELDS]
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        fields["cell_key"] = hashlib.sha256(encoded).hexdigest()
+    return fields
+
+
+def _planned_faults(plan: object) -> list[dict[str, str | None]] | None:
+    if not isinstance(plan, list):
+        return None
+    faults = []
+    for entry in plan:
+        if not isinstance(entry, dict) or not isinstance(fault := entry.get("fault"), str):
+            return None
+        variant = entry.get("variant")
+        if variant is not None and not isinstance(variant, str):
+            return None
+        # The saved plan encodes these catalog variants partly in the selector (0006).
+        if (fault == "F7" and variant in {"price_up", "harmless"}) or (
+            fault in {"F4", "F12"} and variant is None
+        ):
+            variant = _selector_variant(fault, variant, entry.get("at"))
+            if variant is None:
+                return None
+        faults.append({"fault": fault, "variant": variant})
+    return faults
+
+
+def _selector_variant(fault: str, variant: str | None, at: object) -> str | None:
+    if not isinstance(at, dict):
+        return None
+    match at.get("point"):
+        case "net.agent_gw.request" if fault in {"F4", "F12"}:
+            return "agent_gw"
+        case "net.agent_sim.request" if fault in {"F4", "F12"}:
+            return "agent_sim"
+        case "net.gw_sim.request" if fault in {"F4", "F12"}:
+            return "gw_sim"
+        case "net.agent_sim.request" | "net.gw_sim.request" if fault == "F7":
+            return f"late_{variant}"
+        case "gw.dispatch.before_check" | "net.agent_sim.answer" if fault == "F7":
+            return f"early_{variant}"
+    return None

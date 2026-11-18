@@ -90,6 +90,15 @@ def test_the_run_list_lists_both_runs_of_the_demo_from_the_registry(
         assert (run["contract"], run["seed"]) == ("C2", "7")
         assert run["created_wall_at"].startswith("20"), "wall-clock time, as ISO 8601 text"
         assert (run["parent_run_id"], run["branch_point"]) == (None, None), "no branch"
+        assert (run["model_adapter"], run["model"], run["topology"]) == (
+            "scripted",
+            "scripted",
+            "inproc",
+        )
+        assert run["planned_faults"][0] == {"fault": "F2", "variant": None}
+        assert run["params"]["workers"] == 1
+    assert runs[demo_1["B0"]]["cell_key"] == runs[demo_1["G2"]]["cell_key"]
+    assert runs[demo_1["B0"]]["cell_key"] is not None
 
 
 def test_a_seed_goes_as_its_exact_decimal_text_even_the_largest_a_study_takes(
@@ -275,6 +284,7 @@ def test_a_registered_database_that_was_dropped_or_holds_no_run_is_404(
         assert (response.status_code, response.json()["error"]) == (404, "not_a_run")
         listed = {run["database"]: run for run in get(client, "/api/runs")["runs"]}
         for database in (dropped, empty):
+            assert listed[database]["cell_key"] is None
             assert (listed[database]["parent_run_id"], listed[database]["branch_point"]) == (
                 None,
                 None,

@@ -284,6 +284,8 @@ def test_the_viewer_lists_a_branch_as_a_new_experiment_of_its_parent(
         None,
         None,
     )
+    assert branch["cell_key"] is None
+    assert parent["cell_key"] is not None
     summary = client.get(f"/api/runs/{database_of(dsn)}").json()
     assert (summary["run"]["parent_run_id"], summary["run"]["branch_point"]) == (PARENT_ID, 4)
     assert summary["scorecard"]["verdict"] == "pass"
