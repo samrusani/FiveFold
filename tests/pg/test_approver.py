@@ -62,6 +62,46 @@ def test_an_approver_that_approves_after_two_seconds_lets_the_order_through(
     assert claims(dsn) == [("done", ["PO-0001"])]
 
 
+def test_the_final_poll_can_use_an_approval_decided_after_the_deadline(
+    run_database: Callable[[str], str], dev_data: dict[str, Any]
+) -> None:
+    """Record 0017's reproduction, with the decision 8 virtual ms after the deadline."""
+    dsn = run_database("approval_final_poll")
+    wait_ms = 1_000
+    data = queued(dev_data, [{"match": {}, "decision": "approve", "after_ms": 1_030}])
+    data["authority"]["approval_wait_ms"] = wait_ms
+    evaluation = run(dsn, data, "G2").result.evaluation
+
+    ((requested_vt,),) = rows(dsn, "SELECT requested_vt FROM gw.grant")
+    deadline = requested_vt + wait_ms
+    ((approval_id, decided_vt, expires_at),) = rows(
+        dsn, "SELECT approval_id, decided_vt, expires_at FROM sim.approval"
+    )
+    polls = rows(
+        dsn,
+        "SELECT delivered_vt, body->>'status' FROM harness.message_log"
+        " WHERE kind = 'answer' AND hop = 'gw_sim' AND api = 'get_approval_status'"
+        " AND fate = 'delivered' ORDER BY delivered_vt, seq",
+    )
+    final_poll = next(((vt, status) for vt, status in polls if vt >= deadline), None)
+    assert final_poll is not None
+    observed_vt, status = final_poll
+    assert status == "approved"
+    assert deadline < decided_vt <= observed_vt
+    assert rows(
+        dsn, "SELECT reason FROM gw.action_event WHERE reason IN ('approved', 'approval_timeout')"
+    ) == [("approved",)]
+
+    ((cited_approval, committed_vt),) = rows(
+        dsn, "SELECT approval_id, committed_vt FROM sim.effect"
+    )
+    assert cited_approval == approval_id
+    assert observed_vt < committed_vt < expires_at
+    assert evaluation is not None
+    verdicts = {prop.property: prop.verdict for prop in evaluation.properties}
+    assert (verdicts[2], verdicts[4]) == ("pass", "pass")
+
+
 @pytest.mark.parametrize("config", ["B0", "G2"])
 def test_a_denial_stops_the_intent_with_no_order(
     run_database: Callable[[str], str], dev_data: dict[str, Any], config: Config
