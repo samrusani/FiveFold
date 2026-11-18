@@ -14,6 +14,11 @@ Checked in langgraph-checkpoint-postgres 3.2.1 and langgraph-checkpoint 4.3.2: t
 `prepare_threshold=0` and `row_factory=dict_row` (as its `from_conn_string` makes one),
 and `setup()` creates its tables; the base saver's async methods raise
 `NotImplementedError` until a subclass provides them.
+
+JsonPlusSerializer in langgraph-checkpoint 4.3.2 accepts types in
+`allowed_msgpack_modules`. An explicit list selects strict decoding with the SDK's
+built-in safe types and the listed types. It returns an unlisted constructor's
+encoded arguments as data without constructing the object (`serde/jsonplus.py`).
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import psycopg
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     ChannelVersions,
@@ -30,12 +36,18 @@ from langgraph.checkpoint.base import (
     CheckpointTuple,
 )
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg.rows import DictRow, dict_row
 
 
 def connect(conninfo: str) -> psycopg.Connection[DictRow]:
     """A connection as the saver needs it."""
     return psycopg.connect(conninfo, autocommit=True, prepare_threshold=0, row_factory=dict_row)
+
+
+def checkpoint_serializer() -> JsonPlusSerializer:
+    """Allow the message types observed in FiveFold checkpoints and the SDK safe types."""
+    return JsonPlusSerializer(allowed_msgpack_modules=(AIMessage, HumanMessage, ToolMessage))
 
 
 class InlinePostgresSaver(PostgresSaver):

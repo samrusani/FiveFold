@@ -78,7 +78,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from psycopg.conninfo import make_conninfo
 
-from fivefold.agents.checkpoint import InlinePostgresSaver, connect
+from fivefold.agents.checkpoint import InlinePostgresSaver, checkpoint_serializer, connect
 from fivefold.agents.connection import GatewayConnection
 from fivefold.agents.live import Think, refusal
 from fivefold.agents.policy import Mode, scripted_policy
@@ -373,7 +373,7 @@ class InprocRun:
             self.transport.serve(REPORT_SINK, sink_endpoint(self.sink))
         checkpoint_conn = connect(self._conninfo("ff_agent"))
         self._closing.append(checkpoint_conn)
-        self.checkpointer = InlinePostgresSaver(checkpoint_conn)
+        self.checkpointer = InlinePostgresSaver(checkpoint_conn, serde=checkpoint_serializer())
         self.checkpointer.setup()
         self.timeouts = Timeouts(
             t_ms=params.dispatch_timeout_ms,
