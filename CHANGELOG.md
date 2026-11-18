@@ -1,11 +1,15 @@
 # Changelog
 
-## 0.1.2 (release date pending)
+## 0.1.2 (18 Nov 2026)
 
 ### Fixed
 
 - Split G1 and G2 workers open a fresh MCP session when the gateway reports that the previous one is gone. G2 attaches an identical retry to the same action. G1 follows its timeout retry rules. A write whose reply was lost can be placed twice, as specified in record 0008. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
 - The viewer suggests B0 and G2 pairs only for runs from the same experiment cell. Any two runs can still be compared manually.
+
+### Docs
+
+- Record 0017 (accepted): the approval wait ends with the first status poll the gateway reads at or after the deadline. A regression test pins it (#114).
 
 ## 0.1.1 (18 Nov 2026)
 
