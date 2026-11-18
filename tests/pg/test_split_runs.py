@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -34,9 +34,11 @@ import psycopg
 import pytest
 import uvicorn
 import yaml
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import MCPError
 from psycopg.conninfo import make_conninfo
-from starlette.types import Receive, Scope, Send
+from starlette.requests import Request
+from starlette.types import Message, Receive, Scope, Send
 
 from fivefold.agents.remote import HttpGatewayConnection, RemoteAgent, RunOver, run_remote_agent
 from fivefold.agents.worker import WorkerEnd
@@ -398,6 +400,108 @@ def test_a_fault_fires_on_its_counter(split: Split) -> None:
     assert quotes[1][1:] == ("dropped", "fault")
     # A read names no intent, so the fault touched none (0014).
     assert faults == [("F12", 2, quotes[1][0], None)]
+
+
+@pytest.mark.parametrize(("config", "effects"), [("G2", 1), ("G1", 2)])
+def test_a_lost_reply_then_a_lost_session_reaches_the_gateway_once_per_live_session(
+    split: Split, monkeypatch: pytest.MonkeyPatch, config: Config, effects: int
+) -> None:
+    """The old session rejects a retry before the tool sees it. G2 matches the action."""
+    original_scenario = Split.scenario
+
+    def funded(s: Split, scenario_id: str | None = None, **params: int) -> Path:
+        path = original_scenario(s, scenario_id, **params)
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data["facts"]["budget/CC-OPS"]["limit_minor"] = 200_000
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(Split, "scenario", funded)
+    control = replace(split, root=split.root / "control")
+    control.root.mkdir()
+    ordinary = run_split(control, config, [])
+    _check_records(control, ordinary)
+    ordinary_verdict = score_run(ordinary.run, admin_dsn=split.admin).verdict
+    assert str(ordinary_verdict) == "pass"
+    drop_database(split.admin, split.database)
+    forget(split.admin, split.database)
+
+    serve_request = StreamableHTTPSessionManager._handle_stateful_request
+    write_sessions: list[str] = []
+    rejections: list[int] = []
+    retry_arrived = asyncio.Event()
+
+    async def lose_session(
+        manager: StreamableHTTPSessionManager, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        request = Request(scope, receive)
+        session = request.headers.get("Mcp-Session-Id")
+        if request.method != "POST" or session is None:
+            await serve_request(manager, scope, receive, send)
+            return
+        body = await request.body()
+        first_message = True
+
+        async def replay_body() -> Message:
+            nonlocal first_message
+            if first_message:
+                first_message = False
+                return {"type": "http.request", "body": body}
+            return await receive()
+
+        message = json.loads(body)
+        if message.get("method") != "tools/call" or message["params"]["name"] != ORDER:
+            await serve_request(manager, scope, replay_body, send)
+            return
+        write_sessions.append(session)
+        if len(write_sessions) == 1:
+
+            async def withhold_reply(response: Message) -> None:
+                if response["type"] == "http.response.body" and response.get("body"):
+                    # Keep the reply off the wire until the agent times out and tries again.
+                    await retry_arrived.wait()
+                    return
+                await send(response)
+
+            await serve_request(manager, scope, replay_body, withhold_reply)
+        elif len(write_sessions) == 2:
+            retry_arrived.set()
+            # MCP 2.3.0 removes this registered transport before the next dispatch.
+            await manager._discard_session(session, manager._server_instances[session])
+
+            async def record_rejection(response: Message) -> None:
+                if response["type"] == "http.response.start":
+                    rejections.append(response["status"])
+                await send(response)
+
+            await serve_request(manager, scope, replay_body, record_rejection)
+        else:
+            await serve_request(manager, scope, replay_body, send)
+
+    monkeypatch.setattr(StreamableHTTPSessionManager, "_handle_stateful_request", lose_session)
+    recovered = run_split(split, config, [])
+    _check_records(split, recovered)
+    assert len(write_sessions) == 3
+    assert write_sessions[0] == write_sessions[1] != write_sessions[2]
+    assert rejections == [404]
+    with split.connect() as conn:
+        orders = conn.execute(
+            "SELECT body FROM harness.message_log"
+            " WHERE hop = 'agent_gw' AND kind = 'request' AND api = %s ORDER BY seq",
+            (ORDER,),
+        ).fetchall()
+        rows = conn.execute("SELECT count(*) FROM gw.action").fetchone()
+        committed = conn.execute("SELECT count(*) FROM sim.effect").fetchone()
+    assert len(orders) == 2, "the manager's 404 never reached the tool"
+    first, resumed = (order[0] for order in orders)
+    assert first["id"] != resumed["id"], "each session has its own request IDs"
+    assert first["params"] == resumed["params"], "the retry carries the same tool and arguments"
+    assert rows == committed == (effects,)
+    evaluation = score_run(recovered.run, admin_dsn=split.admin)
+    if config == "G2":
+        assert evaluation.verdict == ordinary_verdict
+    else:
+        assert str(evaluation.verdict) == "fail"
 
 
 @pytest.mark.parametrize("hop", ["gw_sim", "agent_gw"])

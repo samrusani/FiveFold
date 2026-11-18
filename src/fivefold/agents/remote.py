@@ -12,7 +12,8 @@ wall time. A model call takes no time: `think_ms` is virtual time the inproc sch
 spends, and no clock here moves for it. It keeps its checkpoints in memory.
 
 As in the inproc topology, a call whose connection to the gateway closes raises
-`ConnectionError`, and the next call opens a new connection; a call with no answer within
+`ConnectionError`. A session-bound HTTP 404 has the same result. The next call opens a
+new session. A call with no answer within
 its timeout raises `TransportTimeout`; and a server error raises `ServerError`. LangGraph's
 default retry policy retries all three (0008). A call the gateway refuses because the
 run's agents' phase is over raises `RunOver`, which it does not retry: the run has nothing
@@ -107,23 +108,32 @@ class HttpGatewayConnection:
     async def list_tools(self) -> types.ListToolsResult:
         """The gateway's tools, from `tools/list`."""
         session = await self._session()
-        return await self._ask(session.list_tools(), self._timeout_ms, "tools/list")
+        return await self._ask(session, session.list_tools(), self._timeout_ms, "tools/list")
 
     async def call_tool(
         self, name: str, arguments: dict[str, Any], timeout_ms: int
     ) -> types.CallToolResult:
         """Call a tool, waiting at most `timeout_ms` for its result."""
         session = await self._session()
-        return await self._ask(session.call_tool(name, arguments), timeout_ms, name)
+        return await self._ask(session, session.call_tool(name, arguments), timeout_ms, name)
 
-    async def _ask[T](self, call: Awaitable[T], timeout_ms: int, what: str) -> T:
+    async def _ask[T](
+        self, session: ClientSession, call: Awaitable[T], timeout_ms: int, what: str
+    ) -> T:
         try:
             return await within(self._scheduler, call, timeout_ms, what)
         except MCPError as error:
             if error.code == SERVICE_STOPPED:
                 raise RunOver(f"{what}: {error.message}") from error
-            if error.code == types.CONNECTION_CLOSED:
-                self.close()
+            # MCP 2.3.0 forwards the manager's JSON-RPC error without the HTTP status.
+            # Its fallback for a session-bound 404 without that body is "Session terminated".
+            session_lost = error.code == types.INVALID_REQUEST and error.message in {
+                "Session not found",
+                "Session terminated",
+            }
+            if error.code == types.CONNECTION_CLOSED or session_lost:
+                if self._current is not None and self._current.session is session:
+                    self.close()
                 raise ConnectionError(f"{what}: the connection to the gateway closed") from error
             if error.code == types.INTERNAL_ERROR:
                 raise ServerError(f"{what}: {error.message}") from error
