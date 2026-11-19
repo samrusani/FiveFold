@@ -26,7 +26,7 @@ Read these before writing code, in this order:
 - **The gateway and the simulator never share a database transaction.** They connect with separate roles that cannot touch each other's tables (0008).
 - **The evaluator never calls a model.** It decides pass or fail only from simulator and harness records, and reads the gateway's tables only to explain failures (0004).
 - **Every state transition is one database transaction** with row locks, and is logged append-only in ActionEvent. No network call happens inside a database transaction (0003).
-- **Determinism:** every component, the gateway included, reads time only from the run's virtual clock and randomness only from the run's seeded generators (0009). Wall-clock time is recorded for metrics only. Lint bans wall-clock calls and global randomness outside the clock and generator modules (0007).
+- **Determinism:** every FiveFold component, the gateway included, reads time only from the run's virtual clock and randomness only from the run's seeded generators (0009). Wall-clock time is recorded for metrics only. B1 allows Temporal's own clock for internal scheduling, retries and infrastructure timers (0018). FiveFold's clock governs every scored record. Lint bans wall-clock calls and global randomness outside the clock and generator modules (0007).
 - **Held-out scenarios are off-limits.** They live outside this repo. Never search for, read or recreate them.
 - **No live model calls in CI.** Live runs sit behind an explicit flag and a budget cap.
 - **No secrets in the repo.** Keys come from environment variables.

@@ -43,14 +43,14 @@ In the baseline configurations, the agent calls the simulator API directly and t
 
 ## Configurations
 
-Detail: 0008.
+Detail: 0008 and 0018.
 
 | Config | Write path | Features |
 | --- | --- | --- |
 | B0 | The agent calls the simulator API directly | The framework's retries only |
 | G1 | Through the gateway | Authorization only: one approval per call, checked before a single send |
 | G2 | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
-| B1 (v0.2) | A Temporal-based agent, through idempotent activities | As Temporal's docs recommend |
+| B1 (v0.2) | A Temporal agent calls the simulator API directly | Scripted policy, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
 | B2 (v0.2) | A DBOS-based agent | As DBOS's docs recommend |
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. B0, G1 and G2 share one LangGraph agent: a model node and the prebuilt tool node, with the library's default error handling and a retry policy with library defaults. 0008 lists the facts behind that choice, checked in library source, and the scripted agent policy used by deterministic tests.
@@ -325,9 +325,10 @@ Detail: 0004. The evaluator reads simulator and harness records, the scenario an
 Detail: 0009.
 
 - A run is a scenario, a configuration, a contract level, a seed and a model. It has one agent worker, or two when F9 starts a second.
-- The **inproc** topology runs everything in one process under a deterministic scheduler: one component step at a time, messages delivered in a fixed order with seeded latency of 5 to 50 virtual ms, timers in virtual time, and `think_ms` (1,000) of virtual time per model call. Tests, demos and the live study use it.
+- The **inproc** topology runs the FiveFold components in one process under a deterministic scheduler: one component step at a time, messages delivered in a fixed order with seeded latency of 5 to 50 virtual ms, timers in virtual time, and `think_ms` (1,000) of virtual time per model call. Tests, demos and the live study use it.
 - A live model call first takes its `think_ms`, then waits for its provider in wall time inside the scheduler's real wait. While a real wait is in flight the scheduler fires no event, so virtual time stands still and every timer fires at the virtual time it would with the scripted model.
 - The **split** topology runs the gateway, the simulator and Postgres as separate Compose services, for people who bring their own agent. It is not deterministic. Its virtual time follows the host's monotonic clock, and faults fire on counters at the network's points and the simulator's only. `python -m fivefold.harness.split` starts, serves, ends and scores a split run.
+- B1 lets Temporal use its own clock for internal scheduling, retries and infrastructure timers (0018). Waiting for Temporal holds FiveFold virtual time. FiveFold's clock governs faults, tool timeouts, simulator decisions and scoring. The evaluator uses the same direct evidence route as B0. Temporal history is diagnostic.
 - Determinism contract: the same scenario, configuration, contract level, seed and model outputs produce byte-identical logs, ledgers and results, ignoring wall-clock columns and fields. CI runs each demo twice and compares digests.
 - The agents' phase ends when every worker has reported, errored or used up its budget. The scheduler then drains for `2 × (D + max_hop_latency) + L` virtual ms, and the run ends. "Run end" in the property checks means this point, so late commits during the drain count.
 - A worker's budget is counted from its conversation, so it holds across a crash and a replay counts it the same way. Steps are the model's replies. Tokens are each reply's input and output tokens, from its usage; scripted replies report none. Before each model call, a worker whose steps or tokens reached its budget ends as `budget`. The live adapter's spend cap ends a worker the same way: once the spend so far reaches the cap, the next call is refused.
@@ -350,6 +351,7 @@ Detail: 0009.
 
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every fault variant, contract level and configuration on the standard development scenario, and deterministic tests assert each cell (0006).
+- **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). The implementation must also pass the 235 existing expected-outcome cells unchanged and regenerate the committed study exports byte for byte.
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.
 - **CI:** deterministic suites and the determinism check on every pull request. Live runs are manual and capped by budget.
