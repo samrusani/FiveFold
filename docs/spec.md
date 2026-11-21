@@ -352,6 +352,7 @@ Detail: 0009.
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every fault variant, contract level and configuration on the standard development scenario, and deterministic tests assert each cell (0006).
 - **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). The implementation must also pass the 235 existing expected-outcome cells unchanged and regenerate the committed study exports byte for byte.
+- **MCP conformance tests:** run the three cases in record 0019 against two local synthetic fixtures over both stdio and Streamable HTTP. One fixture deduplicates at the effect boundary. The other records both effects when both delivery attempts write. Run both reply-drop cases with the pre-commit hooks disabled. Assert that the runner drops one reply, sends two write requests and takes its effect counts from the probe. Test the report and exit codes, including missing or invalid evidence and an unsupported case.
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.
 - **CI:** deterministic suites and the determinism check on every pull request. Live runs are manual and capped by budget.
@@ -359,7 +360,11 @@ Detail: 0009.
 
 ## Later releases
 
-- **MCP lost-reply conformance test (v0.2):** the harness acts as an MCP client, drops a reply after the server commits, and checks for duplicates through a probe read the server author declares. The design is still open; it is tied to MCP issue #3394.
+- **MCP lost-reply conformance test (v0.2, record 0019):** the server author declares a disposable local test instance with synthetic state, a write tool and its arguments, the expected effect, retry identity, supported cases, an evidence deadline and a read-only probe. The probe counts committed effects in a fresh namespace and verifies their contents. If work continues after a reply, it also establishes when the attempts have settled.
+  - **Reply lost after commit:** the probe witnesses a commit while the runner holds the first reply. The runner drops the reply at the handoff to the simulated caller and retries once after the caller's wait expires.
+  - **Duplicate delivery:** the runner drops the first reply and sends a planned second request for the same operation with a fresh MCP request ID. It sends the duplicate without waiting for the caller's deadline.
+  - **Timeout before commit:** fixture hooks hold and end the first attempt before it commits. The probe confirms zero effects while it is held. The runner then retries once.
+  - The check passes when one matching effect remains after settlement. A wrong count or effect fails. A declared unsupported case is not applicable. Missing evidence for a supported case is inconclusive. Reports give the application-level result in text and JSON. The command exits with 1 on any observed failure, otherwise with 2 on inconclusive or invalid results or when no cases apply. It exits with 0 when at least one case applies and every applicable case passes.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
 ## Repo layout
