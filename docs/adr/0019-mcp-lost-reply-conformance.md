@@ -1,6 +1,6 @@
 # 0019: MCP lost-reply conformance
 
-Status: Proposed
+Status: Accepted on 19 Nov 2026 by the maintainer
 Date: 2026-11-18
 Spec sections affected: Later releases (MCP lost-reply conformance test), Testing
 
@@ -70,7 +70,7 @@ lost-reply case produces the reason `a retry places a second effect`.
 
 ### Transports, command and output
 
-Propose `python -m fivefold.conformance --fixture PATH --seed INTEGER`.
+Use `python -m fivefold.conformance --fixture PATH --seed INTEGER`.
 The runner opens an SDK `Client` in auto mode for both transports. It
 records the protocol the SDK negotiates through discovery or the legacy
 handshake. It uses the underlying session's `call_tool` so the test

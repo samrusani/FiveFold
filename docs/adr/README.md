@@ -35,7 +35,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | [0016](0016-simulator-schema-writer.md) | Simulator schema writer and migration ownership | Accepted |
 | [0017](0017-approval-deadline.md) | End of the approval wait | Accepted |
 | [0018](0018-temporal-baseline.md) | B1, the Temporal baseline and its timer exception | Accepted |
-| [0019](0019-mcp-lost-reply-conformance.md) | MCP lost-reply conformance for author-supplied test fixtures | Proposed |
+| [0019](0019-mcp-lost-reply-conformance.md) | MCP lost-reply conformance for author-supplied test fixtures | Accepted |
 
 ## Suggested reading order
 
