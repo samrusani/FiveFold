@@ -38,7 +38,7 @@ def display(report: Report) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m fivefold.conformance", description=__doc__)
     parser.add_argument(
         "--fixture", type=Path, required=True, help="local fixture declaration JSON"
     )

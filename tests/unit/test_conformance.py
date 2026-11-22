@@ -86,6 +86,17 @@ def command(
     )
 
 
+def test_help_names_module() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "fivefold.conformance", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=True,
+    )
+    assert result.stdout.splitlines()[0].startswith("usage: python -m fivefold.conformance ")
+
+
 @pytest.mark.parametrize("kind", ["stdio", "streamable_http"])
 @pytest.mark.parametrize("server", ["deduplicating", "repeating"])
 def test_reply_drops_need_no_fixture_hooks(kind: str, server: str, tmp_path: Path) -> None:
