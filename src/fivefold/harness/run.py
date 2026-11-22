@@ -71,7 +71,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import psycopg
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -120,6 +120,7 @@ from fivefold.harness.models import (
     ModelSpec,
     Parent,
     RunModels,
+    Scripted,
     branch_run_id,
     parent_of,
 )
@@ -133,13 +134,17 @@ from fivefold.recorder.cassette import RunHeader, plain_object
 from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
-Config = Literal["B0", "G1", "G2"]
+if TYPE_CHECKING:
+    from fivefold.harness.temporal_worker import TemporalHost, TemporalWorkers
+
+Config = Literal["B0", "B1", "G1", "G2"]
 
 GATEWAY_CONFIGS = ("G1", "G2")
 """The configurations that write through the gateway (0008). G1 is authorization only."""
 
-CONFIGS: tuple[Config, ...] = ("B0", "G1", "G2")
-"""Every configuration a run can have (0008)."""
+ORIGINAL_CONFIGS: tuple[Config, ...] = ("B0", "G1", "G2")
+CONFIGS: tuple[Config, ...] = (*ORIGINAL_CONFIGS, "B1")
+"""Every configuration the in-process harness can run (0008, 0018)."""
 
 GATEWAY = "gateway"
 SIMULATOR = "simulator"
@@ -251,7 +256,7 @@ def run_plan(spec: RunSpec) -> tuple[PlannedFault, ...]:
         )
     else:
         plan = parse_plan(faults)
-        check_configuration(plan, gateway=spec.config != "B0")
+        check_configuration(plan, gateway=spec.config in GATEWAY_CONFIGS)
         check_run(plan, params=spec.scenario.params, contract=spec.contract)
     return seed_parameters(plan, draws)
 
@@ -259,10 +264,16 @@ def run_plan(spec: RunSpec) -> tuple[PlannedFault, ...]:
 class InprocRun:
     """One run of a scenario on one scheduler, in a migrated run database."""
 
-    def __init__(self, spec: RunSpec, dsn: str) -> None:
+    def __init__(
+        self, spec: RunSpec, dsn: str, *, temporal_host: TemporalHost | None = None
+    ) -> None:
         """`dsn` names the run database; each component connects with its own role."""
-        if spec.config not in ("B0", *GATEWAY_CONFIGS):
-            raise ValueError(f"this build runs B0, G1 and G2, not {spec.config}")
+        if spec.config not in CONFIGS:
+            raise ValueError(f"this build runs {', '.join(CONFIGS)}, not {spec.config}")
+        if spec.config == "B1" and (not isinstance(spec.model, Scripted) or spec.model.record):
+            raise ValueError("B1 runs the scripted model without a cassette (0018)")
+        self._temporal_host = temporal_host
+        self._temporal_workers: TemporalWorkers | None = None
         self.spec = spec
         self._plan = run_plan(spec)
         self._dsn = dsn
@@ -294,6 +305,31 @@ class InprocRun:
 
     async def execute(self) -> RunResult:
         """Run to the end of the drain window; return how each worker ended."""
+        if self.spec.config != "B1":
+            return await self._run_and_score()
+        try:
+            from fivefold.harness.temporal_worker import TemporalHost, TemporalWorkers
+        except ModuleNotFoundError as error:
+            if error.name != "temporalio":
+                raise
+            raise RuntimeError("Install fivefold[temporal] to run B1") from error
+        if self._temporal_host is not None:
+            self._temporal_workers = TemporalWorkers(self, self._temporal_host)
+            return await self._run_and_score()
+        with TemporalHost() as host:
+            self._temporal_workers = TemporalWorkers(self, host)
+            return await self._run_and_score()
+
+    async def _run_and_score(self) -> RunResult:
+        try:
+            await self._run()
+        finally:
+            await self._stop()
+        self.models.check()
+        self.result.evaluation = evaluate_run(self._conninfo("ff_eval"), self.spec.scenario)
+        return self.result
+
+    async def _run(self) -> None:
         spec, scenario = self.spec, self.spec.scenario
         params = scenario.params
         harness_conn = psycopg.connect(self._conninfo("ff_harness"), autocommit=True)
@@ -369,12 +405,13 @@ class InprocRun:
         intents = {intent.id: str(intent.operation) for intent in scenario.intents}
         self._intents = intents
         self.sink = ReportSink(self.scheduler, self.log, intents)
-        if spec.config == "B0":
+        if not gateway:
             self.transport.serve(REPORT_SINK, sink_endpoint(self.sink))
-        checkpoint_conn = connect(self._conninfo("ff_agent"))
-        self._closing.append(checkpoint_conn)
-        self.checkpointer = InlinePostgresSaver(checkpoint_conn, serde=checkpoint_serializer())
-        self.checkpointer.setup()
+        if self._temporal_workers is None:
+            checkpoint_conn = connect(self._conninfo("ff_agent"))
+            self._closing.append(checkpoint_conn)
+            self.checkpointer = InlinePostgresSaver(checkpoint_conn, serde=checkpoint_serializer())
+            self.checkpointer.setup()
         self.timeouts = Timeouts(
             t_ms=params.dispatch_timeout_ms,
             tool_wait_ms=params.tool_wait_ms,
@@ -395,10 +432,6 @@ class InprocRun:
         self.result.stopped_vt = self.scheduler.now
         self.log.run_stopped(self.scheduler.now)
         self._models_stopped()
-        await self._stop()
-        self.models.check()
-        self.result.evaluation = evaluate_run(self._conninfo("ff_eval"), scenario)
-        return self.result
 
     def _agents_done(self) -> bool:
         return len(self.result.ends) == len(self._workers)
@@ -560,7 +593,7 @@ class InprocRun:
         (0008). B0 has no gateway, so nothing there escalates.
         """
         rule = self.spec.scenario.authority.resolver
-        if self.spec.config == "B0" or rule == "none":
+        if self.spec.config not in GATEWAY_CONFIGS or rule == "none":
             return None
         settle_ms = self.spec.scenario.params.contract_params().settle_ms
         return ScriptedResolver(
@@ -585,6 +618,9 @@ class InprocRun:
         self.scheduler.spawn(worker, self._worker(worker, resume=resume), name=f"{worker} {label}")
 
     async def _worker(self, worker: str, *, resume: bool) -> None:
+        if self._temporal_workers is not None:
+            await self._temporal_workers.work(worker, resume=resume)
+            return
         scenario = self.spec.scenario
         model = self._chat_model(worker)
         budget = scenario.budget

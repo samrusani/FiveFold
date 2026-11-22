@@ -145,7 +145,9 @@ def load_expected(path: Path = EXPECTED) -> Expected:
 
 def cell_plan(cell: Cell) -> list[dict[str, Any]]:
     """The fault plan that puts a run in this cell."""
-    hop = "agent_sim" if cell.config == "B0" else "gw_sim"
+    # B1 injects the same faults on the same direct route as B0 (0018).
+    config = "B0" if cell.config == "B1" else cell.config
+    hop = "agent_sim" if config == "B0" else "gw_sim"
     if cell.fault == "F2":
         return [
             {
@@ -170,7 +172,7 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             }
         ]
     if cell.fault == "F6":
-        point, match = _timing(cell, str(cell.variant))
+        point, match = _timing(cell, config, str(cell.variant))
         return [
             {
                 "fault": "F6",
@@ -182,7 +184,7 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
         timing, _, change = str(cell.variant).partition("_")
         if change not in F7_CHANGES:
             raise ValueError(f"F7 has no variant {cell.variant!r}")
-        point, match = _timing(cell, timing)
+        point, match = _timing(cell, config, timing)
         return [
             {
                 "fault": "F7",
@@ -191,7 +193,7 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             }
         ]
     if cell.fault == "F12":
-        if cell.variant not in F12_HOPS.get(cell.config, frozenset()):
+        if cell.variant not in F12_HOPS.get(config, frozenset()):
             raise ValueError(f"F12 cannot drop the order on {cell.variant!r} in {cell.config}")
         return [
             {
@@ -206,7 +208,7 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
     if cell.fault == "F1":
         if cell.variant not in F1_POINTS:
             raise ValueError(f"F1 has no variant {cell.variant!r}")
-        if cell.config == "B0":
+        if config == "B0":
             point, match = "agent.before_tool_call", {"tool": ORDER}
         else:
             point, match = F1_POINTS[cell.variant], {"api": ORDER}
@@ -218,7 +220,7 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             }
         ]
     if cell.fault == "F3":
-        if cell.config == "B0":
+        if config == "B0":
             point, match = "agent.after_tool_result", {"tool": ORDER}
         else:
             point, match = "gw.dispatch.after_answer", {"api": ORDER}
@@ -234,7 +236,7 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
             }
         ]
     if cell.fault == "F4":
-        if cell.variant not in F12_HOPS.get(cell.config, frozenset()):
+        if cell.variant not in F12_HOPS.get(config, frozenset()):
             raise ValueError(f"F4 cannot copy the order on {cell.variant!r} in {cell.config}")
         return [
             {
@@ -262,11 +264,11 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
         plan = F10_PLANS.get(str(cell.variant))
         if plan is None:
             raise ValueError(f"F10 has no variant {cell.variant!r}")
-        if cell.config == "B0":
+        if config == "B0":
             raise ValueError(
                 "B0's scripted agent never calls the status tool, so F10 has no answer to change"
             )
-        if cell.config == "G1":
+        if config == "G1":
             raise ValueError(
                 "G1 never asks for the destination's status (0008), so F10 has no answer to change"
             )
@@ -294,10 +296,10 @@ def cell_scenario(cell: Cell, scenario: Scenario) -> Scenario:
     return scenario
 
 
-def _timing(cell: Cell, timing: str) -> tuple[str, dict[str, str]]:
+def _timing(cell: Cell, config: str, timing: str) -> tuple[str, dict[str, str]]:
     """Where an F6 or F7 cell fires: its point and match."""
     points = TIMINGS.get(timing)
-    if points is None or cell.config not in points:
+    if points is None or config not in points:
         raise ValueError(f"{cell.fault} cannot fire {timing!r} in {cell.config}")
-    point, match = points[cell.config]
+    point, match = points[config]
     return point, dict(match)
