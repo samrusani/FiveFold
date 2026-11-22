@@ -20,7 +20,7 @@ from fivefold.domain.scenario import load_scenario_file, scenario_from_data
 from fivefold.harness.cells import load_expected
 from fivefold.harness.demo import DEV_001, DEV_002
 from fivefold.harness.models import SCRIPTED
-from fivefold.harness.run import CONFIGS
+from fivefold.harness.run import CONFIGS, ORIGINAL_CONFIGS
 from fivefold.harness.study import (
     MAX_SEED,
     Episode,
@@ -67,7 +67,7 @@ def test_all_names_every_expected_cell_of_the_configurations_and_levels() -> Non
 
 
 def test_none_names_one_cell_with_no_fault_per_configuration_and_level() -> None:
-    assert names(["none"], contracts=(Contract.C0, Contract.C2)) == [
+    assert names(["none"], ORIGINAL_CONFIGS, contracts=(Contract.C0, Contract.C2)) == [
         "none-C0-B0",
         "none-C0-G1",
         "none-C0-G2",
@@ -78,7 +78,11 @@ def test_none_names_one_cell_with_no_fault_per_configuration_and_level() -> None
 
 
 def test_a_fault_a_variant_or_a_cell_names_its_cells() -> None:
-    assert names(["F2"], contracts=(Contract.C2,)) == ["F2-C2-B0", "F2-C2-G1", "F2-C2-G2"]
+    assert names(["F2"], ORIGINAL_CONFIGS, contracts=(Contract.C2,)) == [
+        "F2-C2-B0",
+        "F2-C2-G1",
+        "F2-C2-G2",
+    ]
     assert names(["F11-after_tool_call"], ("G2",), (Contract.C0, Contract.C3)) == [
         "F11-after_tool_call-C0-G2",
         "F11-after_tool_call-C3-G2",
@@ -89,6 +93,15 @@ def test_a_fault_a_variant_or_a_cell_names_its_cells() -> None:
         "F10-stale_beyond_lag-C1-G2",
         "F10-stale_within_lag-C1-G2",
     ], "F10 has G2 cells only"
+
+
+def test_b1_can_be_selected_alongside_the_original_baselines() -> None:
+    assert names(["none", "F2"], ("B0", "B1"), (Contract.C3,)) == [
+        "none-C3-B0",
+        "none-C3-B1",
+        "F2-C3-B0",
+        "F2-C3-B1",
+    ]
 
 
 def test_cells_come_in_one_order_whatever_the_order_they_are_named_in() -> None:
@@ -109,8 +122,8 @@ def test_cells_come_in_one_order_whatever_the_order_they_are_named_in() -> None:
         "F10-stale_beyond_lag-C1-G2",
         "F10-stale_within_lag-C1-G2",
     ]
-    assert names(picked, contracts=(Contract.C1,)) == expected
-    assert names(list(reversed(picked)), contracts=(Contract.C1,)) == expected
+    assert names(picked, ORIGINAL_CONFIGS, contracts=(Contract.C1,)) == expected
+    assert names(list(reversed(picked)), ORIGINAL_CONFIGS, contracts=(Contract.C1,)) == expected
 
 
 @pytest.mark.parametrize(
@@ -165,7 +178,7 @@ def test_every_episode_of_every_cell_has_its_own_name() -> None:
         EXPECTED.cells, ["all", "none"], configs=list(CONFIGS), contracts=list(ALL_LEVELS)
     )
     episodes = study_episodes(cells, study_seeds(7, 3))
-    assert len(episodes) == 3 * (len(EXPECTED.cells) + 12)
+    assert len(episodes) == 3 * (len(EXPECTED.cells) + len(CONFIGS) * len(ALL_LEVELS))
     assert len({episode.name for episode in episodes}) == len(episodes)
     with pytest.raises(ValueError, match="share a name"):
         study_episodes([*cells, cells[0]], (7,))

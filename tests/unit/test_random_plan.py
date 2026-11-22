@@ -33,7 +33,7 @@ from fivefold.faults.plan import (
 )
 from fivefold.harness.demo import DEV_001, DEV_002
 from fivefold.harness.rng import Generator, Generators
-from fivefold.harness.run import CONFIGS, RunSpec, run_plan
+from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS, RunSpec, run_plan
 
 DEV = load_scenario_file(DEV_001)
 HUMAN = load_scenario_file(DEV_002)
@@ -151,7 +151,7 @@ def test_a_drawn_plan_is_a_fixed_plan_the_run_accepts(config: str, contract: Con
         most = seed % len(faults) + 1
         plan = drawn(random(*faults, most=most), seed, config=config, contract=contract)
         again = parse_plan(as_text(plan))
-        check_configuration(again, gateway=config != "B0")
+        check_configuration(again, gateway=config in GATEWAY_CONFIGS)
         check_run(again, params=DEV.params, contract=contract)
         assert 1 <= len(plan) <= most
         assert len({entry.fault for entry in plan}) == len(plan)
@@ -206,7 +206,7 @@ def test_every_variant_and_point_the_run_has_is_drawn(config: str) -> None:
                     {"fault": str(fault), "variant": variant, "at": {"point": point}}
                 )
                 try:
-                    check_configuration([planned], gateway=config != "B0")
+                    check_configuration([planned], gateway=config in GATEWAY_CONFIGS)
                 except ValueError:
                     continue
                 if fault is FaultId.F10 and variant == "stale_within_lag":
