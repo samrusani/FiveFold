@@ -155,6 +155,24 @@ Ran all 36 episodes. Results are in study. Report them with: python -m fivefold.
 
 G2's three failures of property 2 are F6 late at C0, C1 and C2. The gateway checked the approval, then the approval was revoked before the order committed. That race is a documented limit (records 0002 and 0006). At C3 the destination checks the approval when it commits, and every configuration passes. [limitations.md](limitations.md) lists what each guarantee depends on.
 
+#### Compare B0 and B1
+
+In a dev checkout, run `make temporal-setup` once to install the pinned CLI.
+B1 uses the same scripted policy as B0. Try the lost-reply and late-commit
+cells at C3.
+
+```sh
+uv run python -m fivefold.harness.study --out study-b1 \
+    --cells F2 F5-beyond_deadline --configs B0 B1 --contracts C3
+uv run python -m fivefold.evaluator report study-b1 --markdown study-b1.md
+```
+
+In F2, B1 retries the write Activity with its original key and observes the
+committed effect. In late F5, the keyed retry sees an order in progress. B1
+reports the outcome as unknown and the original order commits during the
+drain. That cell passes all five properties with verdict `pass_unresolved`.
+See [record 0018](adr/0018-temporal-baseline.md) for all 13 differences.
+
 ### 3. Recorded playback
 
 A cassette holds every model call of a run. Playback runs the run again from its cassette in a fresh database, then compares every record with the original run, apart from wall-clock times (record 0009). A live run always records a cassette, and its playback needs no API key and no network.
