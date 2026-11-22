@@ -32,7 +32,7 @@ DETERMINISM_CELLS = {
 }
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def temporal_host() -> Iterator[TemporalHost]:
     with TemporalHost() as host:
         yield host
