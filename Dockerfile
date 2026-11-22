@@ -17,6 +17,9 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project
 
+COPY scripts/temporal_cli.py scripts/temporal_cli.py
+RUN python3 scripts/temporal_cli.py install
+
 COPY . .
 RUN uv sync --locked
 

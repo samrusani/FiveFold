@@ -2,10 +2,11 @@
 
 UV ?= uv
 FIVEFOLD_ADMIN_DSN ?= postgresql://postgres@127.0.0.1:5432/postgres
-export FIVEFOLD_ADMIN_DSN
+FIVEFOLD_TEMPORAL_CLI ?= $(CURDIR)/.temporal/temporal
+export FIVEFOLD_ADMIN_DSN FIVEFOLD_TEMPORAL_CLI
 
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
+.PHONY: help setup temporal-setup check-temporal fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
 	viewer-build viewer viewer-e2e clean
 
 help: ## List the targets
@@ -13,6 +14,12 @@ help: ## List the targets
 
 setup: ## Install the locked dependencies into .venv
 	$(UV) sync --locked
+
+temporal-setup: ## Install the checksum-verified Temporal CLI for B1 tests
+	python3 scripts/temporal_cli.py install
+
+check-temporal: ## Check the Temporal CLI version required by B1
+	python3 scripts/temporal_cli.py check
 
 fmt: ## Format the code and apply safe lint fixes
 	$(UV) run ruff format .
@@ -34,7 +41,8 @@ test-fast: ## Run the tests that need no database
 test-pg: ## Run only the tests that need PostgreSQL
 	$(UV) run pytest -m pg
 
-check: lint typecheck test ## Lint, type check and run every test
+check: check-temporal ## Lint, type check and run every test
+	$(MAKE) lint typecheck test
 
 db-up: ## Start PostgreSQL 16 on 127.0.0.1:5432 (Docker Compose)
 	docker compose up --detach --wait postgres
