@@ -124,6 +124,7 @@ The scripted agent's 235 expected outcomes are checked by CI on every change. Th
 | [Local pilot](docs/report/pilot-ollama.md) and [API pilot](docs/report/pilot-api.md) | Findings and raw data from 18 episodes per model |
 | [Full study](docs/report.md) | Results and raw data from the development study |
 | [Bring your own agent](docs/your-own-agent.md) | The gateway and the simulator as services, for your agent over MCP or HTTP |
+| [MCP lost-reply conformance](docs/conformance.md) | Check a test tool for duplicate effects after a retry |
 | [Admin API](docs/admin-api.md) | How a person resolves an action whose outcome is unknown |
 | [Limitations](docs/limitations.md) | What each guarantee depends on, and the known limits |
 | [Product](docs/product.md), [spec](docs/spec.md) and [decision records](docs/adr/README.md) | The why, the contracts and the decisions behind them |
