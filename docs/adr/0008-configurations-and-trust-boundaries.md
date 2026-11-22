@@ -1,7 +1,7 @@
 # 0008: Configurations and trust boundaries
 
 Status: Accepted (2026-11-14)
-Amended by: 0011 (2026-11-15): the scripted policy's next step after a `run_closed` rejection; 0015 (2026-11-16): status waits use the scenario limit; 0018 (2026-11-18): B1 uses Temporal and the direct evidence route
+Amended by: 0011 (2026-11-15): the scripted policy's next step after a `run_closed` rejection; 0015 (2026-11-16): status waits use the scenario limit; 0018 (2026-11-18): B1 uses Temporal and the direct evidence route; 0020 (2026-11-22): B2 uses DBOS and the direct evidence route
 Date: 2026-11-14
 Spec sections affected: Baselines, Architecture (trust boundaries), Stack (database roles), CLAUDE.md (hard rules)
 Resolves M0 questions: 1, 37, 39, 40; part of 31
@@ -20,7 +20,7 @@ The benchmark compares an agent stack without a gateway (B0) with stacks that ha
 | G1 | The same agent | Through the gateway | Authorization only |
 | G2 | The same agent | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
 | B1 (v0.2) | Temporal agent with the same scripted policy | Direct | Activity retries and a stable per-Activity key for C2 and C3 writes (0018) |
-| B2 (v0.2) | DBOS-based agent | Direct | As DBOS's docs recommend |
+| B2 (v0.2) | DBOS agent with the same scripted policy | Direct | Durable Step results, Step retries and a stable per-Step key for C2 and C3 writes (0020) |
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. The tool surfaces differ, as listed below, and the report says so.
 
@@ -93,7 +93,7 @@ The policy is code in `agents/`, reviewed like a contract. Changing it needs a d
 | Boundary | Rule | Enforced by |
 | --- | --- | --- |
 | Agent | In G modes, holds no simulator credential and has no route to the simulator | Inproc: the agent receives only an MCP client bound to the gateway. Split: the agent's container is only on a network it shares with the gateway. Test: in G modes, the simulator refuses a write from the agent's identity. |
-| Baselines | B0 to B2 hold a simulator credential, by design | The run config; the credential is created per run |
+| Baselines | B0 to B2 use a simulator credential, by design | The run config creates the credential per run. In B2 the harness holds it for the direct API calls. |
 | Gateway | The only writer in G modes; no access to simulator tables | Role `ff_gw` has no privileges on schema `sim`; all simulator access goes through its API |
 | Simulator | The only owner of ground truth | Role `ff_sim` owns schema `sim`; no other role can write it |
 | Evaluator and viewer | Read-only outside their own results | `ff_eval` writes only `eval`; `ff_viewer` can only select |
@@ -111,6 +111,7 @@ Database privileges per run database:
 
 - `ff_harness` can read `sim` so the scripted resolver can check the ledger out of band, as a human would.
 - `ff_agent`'s `search_path` points at schema `agent`, where LangGraph's checkpointer keeps its tables.
+- B2 gives each invocation a separate DBOS system database with one schema per worker (0020). `ff_dbos` connects to that database and creates and uses its own objects in those schemas. It has no privileges in `sim`. The worker child receives only its DBOS credential.
 - The gateway reaches the harness report sink through the harness's API, not its tables.
 - The gateway and the simulator connect with different roles and cannot touch each other's tables, so they can never share a database transaction. Without this rule, exactly-once would be trivial, and the results would be meaningless.
 - A test asserts every cell of the privilege table.

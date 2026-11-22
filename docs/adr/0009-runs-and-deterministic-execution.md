@@ -1,7 +1,7 @@
 # 0009: Runs, scenarios and deterministic execution
 
 Status: Accepted (2026-11-14)
-Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too; 0015 (2026-11-16): cap scenario status waits; 0018 (2026-11-18): allow Temporal's internal timers in B1
+Amended by: 0014 (2026-11-15): the determinism contract ignores wall-clock fields too; 0015 (2026-11-16): cap scenario status waits; 0018 (2026-11-18): allow Temporal's internal timers in B1; 0020 (2026-11-22): allow DBOS's internal clock and scheduling jitter in B2
 Date: 2026-11-14
 Spec sections affected: Simulator (determinism, scenarios), Playback and branching, Stack (packaging, `make demo`), Testing, Data model (Run)
 Resolves M0 questions: 29, 31, 32, 33 (MCP transport), 41, 42 (scenario format); part of 38
@@ -44,11 +44,13 @@ Checked in the mcp 2.3.0 source: the client can connect to a server object in-pr
 - Wall-clock time is recorded next to it for metrics only, and never used for decisions.
 - In the split topology, the virtual clock follows the host's monotonic clock.
 - In B1, Temporal uses its own clock for internal scheduling, retries and infrastructure timers (0018). A real wait for Temporal holds virtual time. The FiveFold clock governs faults, tool timeouts, simulator decisions and every scored record.
+- In B2, DBOS uses its own clock for internal wall-time scheduling only (0020). The harness holds virtual time during DBOS waits and processes handoffs in a fixed order. The FiveFold clock governs faults, tool timeouts, simulator decisions and every scored record.
 
 ### Randomness
 
 - The run seed feeds independent named generators: latency, fault plans, data generation and scripted variation. Adding a new consumer does not shift another's numbers.
-- No code uses the global `random` module or random UUIDs (0007).
+- FiveFold code uses neither the global `random` module nor random UUIDs (0007).
+- DBOS uses Python's global `random` to jitter internal waits in B2. This exception covers wall-time scheduling only (0020).
 
 ### Models
 
@@ -64,7 +66,7 @@ Checked in the langchain-core 1.8.0 source: a base chat model class and several 
 
 The same scenario, configuration, contract level, seed and model outputs produce byte-identical message logs, effects ledgers, action events, approval events and evaluation JSON, ignoring wall-clock columns and fields. CI runs every demo scenario twice and compares digests.
 
-We accept one known source of nondeterminism: LangGraph's retry backoff sleeps in wall time with jitter from the global generator (0008). It changes wall-clock metrics only.
+LangGraph's retry backoff sleeps in wall time with jitter from the global generator (0008). It changes wall-clock metrics only.
 
 ### Playback and branching
 
