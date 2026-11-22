@@ -173,6 +173,25 @@ reports the outcome as unknown and the original order commits during the
 drain. That cell passes all five properties with verdict `pass_unresolved`.
 See [record 0018](adr/0018-temporal-baseline.md) for all 13 differences.
 
+#### Compare B0 and B2
+
+Use a development checkout on Linux or macOS, with the same PostgreSQL service
+as the rest of the tour. The dev group includes the DBOS SDK. The database
+administrator creates and removes DBOS state on that service for each run.
+If the PostgreSQL login for `ff_dbos` needs a password, set
+`FIVEFOLD_DBOS_PASSWORD` to that role's password.
+
+```sh
+uv run python -m fivefold.harness.study --out study-b2 \
+    --cells F2 --configs B0 B2 --contracts C2
+uv run python -m fivefold.evaluator report study-b2 --markdown study-b2.md
+```
+
+F2 drops the reply after the order commits. B0 places a second order and fails
+properties 1, 2 and 3. B2 retries the write Step with the original key and
+recovers the first result. It passes all five properties.
+See [record 0020](adr/0020-dbos-baseline.md) for the full matrix.
+
 ### 3. Recorded playback
 
 A cassette holds every model call of a run. Playback runs the run again from its cassette in a fresh database, then compares every record with the original run, apart from wall-clock times (record 0009). A live run always records a cassette, and its playback needs no API key and no network.

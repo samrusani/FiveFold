@@ -51,7 +51,7 @@ Detail: 0008, 0018 and 0020.
 | G1 | Through the gateway | Authorization only: one approval per call, checked before a single send |
 | G2 | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
 | B1 (0.2.0a1) | A Temporal agent calls the simulator API directly | Shared scripted policy, durable Activity results, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
-| B2 (later v0.2 release) | A DBOS agent calls the simulator API directly through the harness | Shared scripted policy, durable Step results, up to three attempts per Step and a stable key per write Step at C2 and C3 (0020) |
+| B2 (0.2.0a2) | A DBOS agent calls the simulator API directly through the harness | Shared scripted policy, durable Step results, up to three attempts per Step and a stable key per write Step at C2 and C3 (0020) |
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. B0, G1 and G2 share one LangGraph agent: a model node and the prebuilt tool node, with the library's default error handling and a retry policy with library defaults. 0008 lists the facts behind that choice, checked in library source, and the scripted agent policy used by deterministic tests.
 
@@ -128,7 +128,7 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | sim | Effect | effect_id, intent_id, operation, args, approval_id, basis, idempotency_key, client_ref, commit_seq, committed_vt | The ground-truth ledger |
 | sim | Approval, ApprovalEvent | approval_id, intent_id, scope, expires_at; requested, approved, denied, revoked | The authority record (0002) |
 | sim | ReadLog | seq, key, version, caller, vt | Every read served |
-| harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009). Configuration is B0, B1, G1 or G2. Add B2 when implemented (0020). |
+| harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009). Configuration is B0, B1, B2, G1 or G2. |
 | harness | MessageLog | seq, hop, kind, sender, receiver, api, correlation id, intent_id, idempotency_key, sent_vt, fate, drop reason, delivered_seq, delivered_vt, delivered_wall_at, answer class, body, copy_of | Every message and its fate (0004). One counter numbers every harness event, so `seq` and `delivered_seq` order sends and deliveries. When F4 delivers a request twice, the second delivery is a copy that names the request in `copy_of`; the answer to a copy is dropped with reason `answer_to_copy` (0006) |
 | harness | FaultLog, ActorLog, FinalReport | | Faults fired, the deliveries they voided and the intent each fault touched, with one row per status answer F10 changes (0014); scripted human actions; submitted reports |
 | harness | ModelCall | call_no, worker, asked_vt, answered_vt, model, input_tokens, output_tokens, refused, wall_ms | One row per model call once it is answered, numbered in the run in cassette order, outside the harness's event counter. Tokens come from the reply's usage and are null when it reports none, as scripted replies do. `refused` is `spend_cap` when the live adapter refused to send the call. Record 0004's token and cost metrics read it; `ff_eval` can select it |
@@ -353,9 +353,9 @@ Detail: 0009, 0018 and 0020.
 ## Testing
 
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
-- **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006) and 72 for B1 (0018).
+- **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006), 72 for B1 (0018) and 72 for B2 (0020).
 - **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). Use `FIVEFOLD_B1_REPEATS=20 uv run pytest tests/pg/test_b1.py`. The implementation must also pass the 235 original cells and regenerate the committed study exports byte for byte.
-- **B2 acceptance check:** add the 72 scripted cells in 0020. Run each at least 20 times, including host pauses, and compare all playback record digests with the same wall-clock exclusions. Test clean worker startup, per-invocation state and teardown, and denial of reads and writes in `sim` as `ff_dbos`. Retain all existing expected-outcome checks.
+- **B2 acceptance check:** run each of the 72 scripted cells in 0020 at least 20 times, including host pauses, and compare all playback record digests with the same wall-clock exclusions. Use `FIVEFOLD_B2_REPEATS=20 uv run pytest tests/pg/test_b2.py`. Test clean worker startup, per-invocation state and teardown, and denial of reads and writes in `sim` as `ff_dbos`. Retain all existing expected-outcome checks.
 - **MCP conformance tests:** run the three cases in record 0019 against two local synthetic fixtures over both stdio and Streamable HTTP. One fixture deduplicates at the effect boundary. The other records both effects when both delivery attempts write. Run both reply-drop cases with the pre-commit hooks disabled. Assert that the runner drops one reply, sends two write requests and takes its effect counts from the probe. Test the report and exit codes, including missing or invalid evidence and an unsupported case.
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.
@@ -372,7 +372,7 @@ Detail: 0009, 0018 and 0020.
 
 ## Later releases
 
-- The DBOS baseline B2 (0020), the TLA+ model, run shrinking and F8 are planned for later v0.2 releases.
+- The DBOS baseline B2 (0020) is slated for 0.2.0a2. The TLA+ model, run shrinking and F8 are planned for later v0.2 releases.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
 ## Repo layout
