@@ -36,6 +36,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | [0017](0017-approval-deadline.md) | End of the approval wait | Accepted |
 | [0018](0018-temporal-baseline.md) | B1, the Temporal baseline and its timer exception | Accepted |
 | [0019](0019-mcp-lost-reply-conformance.md) | MCP lost-reply conformance for author-supplied test fixtures | Accepted |
+| [0020](0020-dbos-baseline.md) | B2, the DBOS baseline and its timer exception | Proposed |
 
 ## Suggested reading order
 
