@@ -16,6 +16,7 @@ You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and Post
 
 ```
 make setup      # install the locked dependencies into .venv
+make temporal-setup  # install the pinned Temporal CLI for the test suite
 make db-up      # start PostgreSQL 16 on 127.0.0.1:5432
 make check      # lint, type check and every test
 make test-fast  # only the tests that need no database

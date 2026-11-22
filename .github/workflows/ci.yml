@@ -38,6 +38,8 @@ jobs:
         run: pip install uv==0.13.8
       - name: Install locked dependencies
         run: uv sync --locked
+      - name: Install the pinned Temporal CLI
+        run: make temporal-setup check-temporal
       - name: Lint
         run: make lint
       - name: Type check
