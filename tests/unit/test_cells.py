@@ -30,7 +30,7 @@ def cell(fault: str, variant: str | None, config: str, contract: Contract = Cont
 def test_every_committed_cells_plan_is_one_the_catalog_and_the_run_accept(expected: Cell) -> None:
     planned = parse_plan(cell_plan(expected))
     assert expected.fault in {str(entry.fault) for entry in planned}
-    check_configuration(planned, gateway=expected.config != "B0")
+    check_configuration(planned, gateway=expected.config in GATEWAY_CONFIGS)
     scenario = cell_scenario(expected, load_scenario_file(DEV_001))
     check_run(planned, params=scenario.params, contract=expected.contract)
 
@@ -112,6 +112,7 @@ variant, and the catalog gives them a point on each hop (`net.{hop}.request`).""
 
 NO_CELLS: dict[tuple[FaultId, str], str] = {
     (FaultId.F10, "B0"): "B0's scripted agent never calls the status tool (0008)",
+    (FaultId.F10, "B1"): "B1 shares B0's scripted policy and fault points (0018)",
     (FaultId.F10, "G1"): "G1 never asks for the destination's status (0008)",
 }
 """Where a fault's points exist but it has nothing to act on, so it has no cells: F10

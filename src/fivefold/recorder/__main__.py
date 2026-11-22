@@ -80,7 +80,7 @@ from fivefold.harness.migrations import (
     create_run_database,
 )
 from fivefold.harness.models import SCRIPTED, Live
-from fivefold.harness.run import CONFIGS, RunResult, RunSpec
+from fivefold.harness.run import ORIGINAL_CONFIGS, RunResult, RunSpec
 from fivefold.paths import DB_DIR
 from fivefold.recorder.cassette import Cassette
 from fivefold.recorder.playback import (
@@ -264,7 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     recording.add_argument(
         "--contract", choices=[str(level) for level in Contract], help="for a scenario file"
     )
-    recording.add_argument("--config", choices=CONFIGS, required=True)
+    recording.add_argument("--config", choices=ORIGINAL_CONFIGS, required=True)
     recording.add_argument("--seed", type=int, default=7, help="the run seed (default 7)")
     recording.add_argument("--cassette", type=Path, required=True, help="where to write it")
     recording.add_argument(

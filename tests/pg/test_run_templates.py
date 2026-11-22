@@ -190,18 +190,27 @@ def test_run_commands_keep_a_database_they_did_not_create(
         assert conn.execute("SELECT value FROM public.sentinel").fetchall() == [(17,)]
 
 
+@pytest.mark.parametrize("legacy", ["0.1.0", "current"])
 def test_demo_replaces_legacy_and_marked_databases_on_rerun(
+    legacy: str,
     admin_dsn: str,
     db_prefix: str,
     marked_template: str,
     monkeypatch: pytest.MonkeyPatch,
     drop_after: list[str],
+    tmp_path: Path,
 ) -> None:
     names = {config: f"{db_prefix}_demo_{config.lower()}" for config in ("B0", "G2")}
     drop_after.extend(names.values())
     monkeypatch.setattr(demo, "_demo_database", lambda _demo, config: names[config])
+    migrations = MIGRATIONS
+    if legacy == "0.1.0":
+        for migration in discover(MIGRATIONS):
+            if migration.number <= 14:
+                shutil.copyfile(migration.path, tmp_path / migration.name)
+        migrations = tmp_path
     with psycopg.connect(recreate_database(admin_dsn, names["B0"]), autocommit=True) as conn:
-        migrate(conn, MIGRATIONS)
+        migrate(conn, migrations)
 
     def databases() -> dict[str, tuple[int, str | None]]:
         with psycopg.connect(admin_dsn) as conn:
@@ -212,12 +221,12 @@ def test_demo_replaces_legacy_and_marked_databases_on_rerun(
             ).fetchall()
         return {name: (oid, comment) for name, oid, comment in rows}
 
-    legacy = databases()[names["B0"]]
-    assert legacy[1] is None
+    old_oid, old_comment = databases()[names["B0"]]
+    assert old_comment is None
     args = ["--dsn", admin_dsn, "1"]
     assert demo.main(args) == 0
     first = databases()
-    assert first[names["B0"]][0] != legacy[0]
+    assert first[names["B0"]][0] != old_oid
     assert demo.main(args) == 0
     second = databases()
     for name in names.values():
@@ -225,7 +234,9 @@ def test_demo_replaces_legacy_and_marked_databases_on_rerun(
         assert first[name][0] != second[name][0]
 
 
-@pytest.mark.parametrize("change", ["checksum", "missing_file", "extra_file", "view"])
+@pytest.mark.parametrize(
+    "change", ["checksum", "missing_file", "extra_file", "view", "arbitrary_prefix"]
+)
 def test_replacement_requires_complete_legacy_history_in_a_table(
     admin_dsn: str,
     db_prefix: str,
@@ -244,6 +255,8 @@ def test_replacement_requires_complete_legacy_history_in_a_table(
             )
         elif change == "missing_file":
             conn.execute("DELETE FROM public.schema_migration WHERE filename = %s", (first,))
+        elif change == "arbitrary_prefix":
+            conn.execute("DELETE FROM public.schema_migration WHERE filename >= '0014_'")
         elif change == "extra_file":
             conn.execute(
                 "INSERT INTO public.schema_migration (filename, sha256)"

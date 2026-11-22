@@ -132,7 +132,7 @@ class RunRecord:
     run_id: str
     scenario_id: str
     scenario_digest: str
-    config: Literal["B0", "G1", "G2"]
+    config: Literal["B0", "B1", "G1", "G2"]
     contract: Literal["C0", "C1", "C2", "C3"]
     seed: int
     model_adapter: Literal["scripted", "live", "replay", "external"]

@@ -113,7 +113,7 @@ from fivefold.harness.migrations import (
 )
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.registry import forget
-from fivefold.harness.run import CONFIGS, Config, InprocRun, RunSpec, run_plan
+from fivefold.harness.run import CONFIGS, ORIGINAL_CONFIGS, Config, InprocRun, RunSpec, run_plan
 from fivefold.paths import DB_DIR, DEV_001
 from fivefold.recorder.cassette import Cassette, response_message
 
@@ -553,9 +553,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--configs",
         nargs="+",
         choices=CONFIGS,
-        default=list(CONFIGS),
+        default=list(ORIGINAL_CONFIGS),
         metavar="CONFIG",
-        help=f"configurations among {', '.join(CONFIGS)} (default: all three)",
+        help=f"configurations among {', '.join(CONFIGS)} (default: B0 G1 G2)",
     )
     levels = [str(contract) for contract in Contract]
     parser.add_argument(

@@ -92,6 +92,9 @@ run never migrates, copies or drops the template a person's runs are made from."
 RUN_DATABASE_COMMENT = "FiveFold run database"
 """Shared catalog marker set on each database this module creates for a run."""
 
+UNMARKED_RELEASE_LAST_MIGRATION = "0014_tool_call_args.sql"
+"""The last migration in 0.1.0, the final release before run databases had a marker."""
+
 Connection = psycopg.Connection[TupleRow]
 
 
@@ -420,10 +423,16 @@ def _replacement_oid(
 
 
 def _has_migration_history(admin_dsn: str, name: str, migrations: Path) -> bool:
-    """Recognize older runs by their complete on-disk migration history."""
-    expected = {(migration.name, migration.sha256) for migration in discover(migrations)}
-    if not expected:
+    """Recognize the complete current or 0.1.0 history using on-disk checksums."""
+    files = discover(migrations)
+    if not files:
         return False
+    expected = [(migration.name, migration.sha256) for migration in files]
+    known = {frozenset(expected)}
+    for end, (filename, _) in enumerate(expected, start=1):
+        if filename == UNMARKED_RELEASE_LAST_MIGRATION:
+            known.add(frozenset(expected[:end]))
+            break
     try:
         with psycopg.connect(make_conninfo(admin_dsn, dbname=name)) as target:
             target.read_only = True
@@ -448,7 +457,8 @@ def _has_migration_history(admin_dsn: str, name: str, migrations: Path) -> bool:
             ).fetchall()
     except psycopg.Error:
         return False
-    return len(rows) == len(expected) and set(rows) == expected
+    applied = frozenset(rows)
+    return len(rows) == len(applied) and applied in known
 
 
 def _prepare_template(conn: Connection, admin_dsn: str, template: str, migrations: Path) -> None:

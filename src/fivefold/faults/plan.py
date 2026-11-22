@@ -277,7 +277,7 @@ def _misfits(plan: Sequence[PlannedFault], *, params: Params, contract: Contract
 
 # Random plans (see the module's docstring) ---------------------------------------------
 
-CONFIGS = ("B0", "G1", "G2")
+CONFIGS = ("B0", "B1", "G1", "G2")
 """The configurations a run can have (0008)."""
 
 AGENT_RESTART_MAX_MS = 10_000
@@ -390,7 +390,7 @@ def draw_plan(
         plan.append(chosen.model_copy(update={"params": drawn}))
     # Every entry was built to pass these; checking again keeps a mistake here from running.
     checked = parse_plan([entry.model_dump(mode="json") for entry in plan])
-    check_configuration(checked, gateway=config != "B0")
+    check_configuration(checked, gateway=config in ("G1", "G2"))
     check_run(checked, params=scenario.params, contract=contract)
     return checked
 
@@ -415,7 +415,7 @@ def _choices(
     for variant in variants:
         points = kind.variants[variant] if variant is not None else None
         for point in sorted(points if points is not None else kind.points):
-            if not point_exists(kind, point, gateway=config != "B0"):
+            if not point_exists(kind, point, gateway=config in ("G1", "G2")):
                 continue
             for match in _targets(kind, point, scenario):
                 at = Trigger(point=point, match=match)

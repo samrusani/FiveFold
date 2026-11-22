@@ -81,13 +81,14 @@ class Config(StrEnum):
     """The configurations the harness runs (0008)."""
 
     B0 = "B0"
+    B1 = "B1"
     G1 = "G1"
     G2 = "G2"
 
     @property
     def has_gateway(self) -> bool:
         """Whether the agent writes through the gateway."""
-        return self is not Config.B0
+        return self in (Config.G1, Config.G2)
 
     @property
     def stack_hop(self) -> str:

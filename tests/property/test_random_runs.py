@@ -50,7 +50,7 @@ from fivefold.harness.cells import load_expected
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.migrations import drop_database
 from fivefold.harness.registry import forget
-from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS, InprocRun, RunSpec, run_plan
+from fivefold.harness.run import GATEWAY_CONFIGS, ORIGINAL_CONFIGS, InprocRun, RunSpec, run_plan
 from fivefold.harness.study import MAX_SEED
 
 DEV = load_scenario_file(DEV_001)
@@ -104,7 +104,7 @@ def test_the_limits_are_the_ones_record_0006_documents() -> None:
 def random_runs(draw: st.DrawFn) -> RunSpec:
     """dev-001 in a configuration and at a contract level, with a random plan of faults
     that can fire there, from a seed."""
-    config = draw(st.sampled_from(CONFIGS))
+    config = draw(st.sampled_from(ORIGINAL_CONFIGS))
     contract = draw(st.sampled_from(DEV.contracts))
     drawable = drawable_faults(scenario=DEV, config=config, contract=contract)
     faults = draw(

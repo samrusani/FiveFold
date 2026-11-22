@@ -31,6 +31,7 @@ from fivefold.harness.run import InprocRun, RunSpec
 pytestmark = pytest.mark.pg
 
 EXPECTED = load_expected()
+ORIGINAL_CELLS = tuple(cell for cell in EXPECTED.cells if cell.config in ("B0", "G1", "G2"))
 
 BELOW_C3 = (Contract.C0, Contract.C1, Contract.C2)
 
@@ -133,7 +134,7 @@ def test_the_cells_agree_with_the_outcomes_record_0006_fixes() -> None:
                 assert outcome == ("pass", ()), cell.name
 
 
-@pytest.mark.parametrize("cell", EXPECTED.cells, ids=lambda cell: cell.name)
+@pytest.mark.parametrize("cell", ORIGINAL_CELLS, ids=lambda cell: cell.name)
 def test_the_cell_gets_its_expected_verdict(run_database: Callable[[str], str], cell: Cell) -> None:
     dsn = run_database(cell.name.lower().replace("-", "_"))
     plan = cell_plan(cell)
