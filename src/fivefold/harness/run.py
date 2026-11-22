@@ -136,16 +136,17 @@ from fivefold.sim import SimConfig, Simulator
 from fivefold.sim.endpoint import endpoint
 
 if TYPE_CHECKING:
+    from fivefold.harness.dbos_worker import DBOSWorkers
     from fivefold.harness.temporal_worker import TemporalHost, TemporalWorkers
 
-Config = Literal["B0", "B1", "G1", "G2"]
+Config = Literal["B0", "B1", "B2", "G1", "G2"]
 
 GATEWAY_CONFIGS = ("G1", "G2")
 """The configurations that write through the gateway (0008). G1 is authorization only."""
 
 ORIGINAL_CONFIGS: tuple[Config, ...] = ("B0", "G1", "G2")
-CONFIGS: tuple[Config, ...] = (*ORIGINAL_CONFIGS, "B1")
-"""Every configuration the in-process harness can run (0008, 0018)."""
+CONFIGS: tuple[Config, ...] = (*ORIGINAL_CONFIGS, "B1", "B2")
+"""Every configuration the in-process harness can run (0008, 0018, 0020)."""
 
 GATEWAY = "gateway"
 SIMULATOR = "simulator"
@@ -266,15 +267,24 @@ class InprocRun:
     """One run of a scenario on one scheduler, in a migrated run database."""
 
     def __init__(
-        self, spec: RunSpec, dsn: str, *, temporal_host: TemporalHost | None = None
+        self,
+        spec: RunSpec,
+        dsn: str,
+        *,
+        temporal_host: TemporalHost | None = None,
+        admin_dsn: str | None = None,
     ) -> None:
         """`dsn` names the run database; each component connects with its own role."""
         if spec.config not in CONFIGS:
             raise ValueError(f"this build runs {', '.join(CONFIGS)}, not {spec.config}")
         if spec.config == "B1" and (not isinstance(spec.model, Scripted) or spec.model.record):
             raise ValueError("B1 runs the scripted model without a cassette (0018)")
+        if spec.config == "B2" and (not isinstance(spec.model, Scripted) or spec.model.record):
+            raise ValueError("B2 runs the scripted model without a cassette (0020)")
+        self._admin_dsn = admin_dsn
         self._temporal_host = temporal_host
         self._temporal_workers: TemporalWorkers | None = None
+        self._dbos_workers: DBOSWorkers | None = None
         self.spec = spec
         self._plan = run_plan(spec)
         self._dsn = dsn
@@ -306,6 +316,8 @@ class InprocRun:
 
     async def execute(self) -> RunResult:
         """Run to the end of the drain window; return how each worker ended."""
+        if self.spec.config == "B2":
+            return await self._execute_dbos()
         if self.spec.config != "B1":
             return await self._run_and_score()
         try:
@@ -329,6 +341,32 @@ class InprocRun:
                 if isinstance(error.__cause__, TemporalInfrastructureError):
                     raise error.__cause__ from None
                 raise
+
+    async def _execute_dbos(self) -> RunResult:
+        import sys
+        from importlib.util import find_spec
+
+        if sys.platform not in ("linux", "darwin"):
+            raise RuntimeError("B2 runs on Linux and macOS (0020)")
+        if find_spec("dbos") is None:
+            raise RuntimeError("Install fivefold[dbos] to run B2")
+        from fivefold.harness.dbos_worker import (
+            DBOSInfrastructureError,
+            DBOSWorkers,
+            state_database,
+        )
+
+        admin = self._admin_dsn or make_conninfo(self._dsn, dbname="postgres")
+        with state_database(admin, _worker_names(self._agent_workers)) as state:
+            self._dbos_workers = DBOSWorkers(self, state)
+            try:
+                return await self._run_and_score()
+            except ComponentFailed as error:
+                if isinstance(error.__cause__, DBOSInfrastructureError):
+                    raise error.__cause__ from None
+                raise
+            finally:
+                await self._dbos_workers.stop()
 
     async def _run_and_score(self) -> RunResult:
         try:
@@ -417,7 +455,7 @@ class InprocRun:
         self.sink = ReportSink(self.scheduler, self.log, intents)
         if not gateway:
             self.transport.serve(REPORT_SINK, sink_endpoint(self.sink))
-        if self._temporal_workers is None:
+        if self._temporal_workers is None and self._dbos_workers is None:
             checkpoint_conn = connect(self._conninfo("ff_agent"))
             self._closing.append(checkpoint_conn)
             self.checkpointer = InlinePostgresSaver(checkpoint_conn, serde=checkpoint_serializer())
@@ -628,8 +666,9 @@ class InprocRun:
         self.scheduler.spawn(worker, self._worker(worker, resume=resume), name=f"{worker} {label}")
 
     async def _worker(self, worker: str, *, resume: bool) -> None:
-        if self._temporal_workers is not None:
-            await self._temporal_workers.work(worker, resume=resume)
+        durable_workers = self._temporal_workers or self._dbos_workers
+        if durable_workers is not None:
+            await durable_workers.work(worker, resume=resume)
             return
         scenario = self.spec.scenario
         model = self._chat_model(worker)

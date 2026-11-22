@@ -82,6 +82,7 @@ class Config(StrEnum):
 
     B0 = "B0"
     B1 = "B1"
+    B2 = "B2"
     G1 = "G1"
     G2 = "G2"
 

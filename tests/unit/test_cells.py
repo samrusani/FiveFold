@@ -113,6 +113,7 @@ variant, and the catalog gives them a point on each hop (`net.{hop}.request`).""
 NO_CELLS: dict[tuple[FaultId, str], str] = {
     (FaultId.F10, "B0"): "B0's scripted agent never calls the status tool (0008)",
     (FaultId.F10, "B1"): "B1 shares B0's scripted policy and fault points (0018)",
+    (FaultId.F10, "B2"): "B2 shares B0's scripted policy and fault points (0020)",
     (FaultId.F10, "G1"): "G1 never asks for the destination's status (0008)",
 }
 """Where a fault's points exist but it has nothing to act on, so it has no cells: F10
