@@ -43,7 +43,7 @@ In the baseline configurations, the agent calls the simulator API directly and t
 
 ## Configurations
 
-Detail: 0008 and 0018.
+Detail: 0008, 0018 and 0020.
 
 | Config | Write path | Features |
 | --- | --- | --- |
@@ -51,7 +51,7 @@ Detail: 0008 and 0018.
 | G1 | Through the gateway | Authorization only: one approval per call, checked before a single send |
 | G2 | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
 | B1 | A Temporal agent calls the simulator API directly | Shared scripted policy, durable Activity results, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
-| B2 (v0.2) | A DBOS-based agent | As DBOS's docs recommend |
+| B2 (later v0.2 release) | A DBOS agent calls the simulator API directly through the harness | Shared scripted policy, durable Step results, up to three attempts per Step and a stable key per write Step at C2 and C3 (0020) |
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. B0, G1 and G2 share one LangGraph agent: a model node and the prebuilt tool node, with the library's default error handling and a retry policy with library defaults. 0008 lists the facts behind that choice, checked in library source, and the scripted agent policy used by deterministic tests.
 
@@ -59,12 +59,12 @@ G1 has G2's tools and schemas. Its gateway files one approval request per write 
 
 ## Trust boundaries
 
-Detail: 0008.
+Detail: 0008 and 0020.
 
 | Boundary | Rule | Enforced by |
 | --- | --- | --- |
 | Agent | In G1 and G2, holds no simulator credential and has no route to the simulator | In-process, the agent receives only an MCP client bound to the gateway. In the split topology, the agent's container shares a network only with the gateway. A test checks that the simulator refuses writes from the agent's identity in G modes. |
-| Baselines | B0 to B2 hold a simulator credential, by design; that is what they measure | The run config creates the credential per run |
+| Baselines | B0 to B2 use a simulator credential for direct API calls | The run config creates the credential per run. In B2 the harness holds it for the direct API calls. |
 | Gateway | The only writer to the simulator in G1 and G2 | Its role has no privileges on schema `sim`; it reaches the simulator only through the simulator's API |
 | Simulator | Owns ground truth | Among component roles, only `ff_sim` writes schema `sim`; the migration role owns every schema (0016) |
 | Evaluator and viewer | Read-only outside their own results | Their roles can only select, except `ff_eval` on schema `eval` |
@@ -81,6 +81,8 @@ Each component connects with its own role in the run's database:
 | `ff_viewer` | select | select | select | none | select |
 
 The gateway and the simulator cannot touch each other's tables, so they can never share a database transaction.
+
+In B2 the administrator creates a fresh database for DBOS on the existing PostgreSQL service, with a schema per worker. Only the DBOS credential goes to the child. `ff_dbos` has `CONNECT` on the system database, `USAGE, CREATE` on the worker schemas and no grants on `sim`. The administrator removes the DBOS database at run end (0020).
 
 The run registry (0009, 0012) is a database of its own, `fivefold_registry`, outside every run database. The harness writes its rows as `ff_registry`, which has no privilege in any run database; `ff_viewer` can only select from it, and no other role has any privilege there.
 
@@ -126,7 +128,7 @@ Times used for decisions are virtual milliseconds; wall-clock columns such as `w
 | sim | Effect | effect_id, intent_id, operation, args, approval_id, basis, idempotency_key, client_ref, commit_seq, committed_vt | The ground-truth ledger |
 | sim | Approval, ApprovalEvent | approval_id, intent_id, scope, expires_at; requested, approved, denied, revoked | The authority record (0002) |
 | sim | ReadLog | seq, key, version, caller, vt | Every read served |
-| harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009) |
+| harness | Run | run_id, scenario, config, contract, seed, topology, model adapter, model, cassette digest, parent_run_id, branch_point | One episode (0009). Configuration is B0, B1, G1 or G2. Add B2 when implemented (0020). |
 | harness | MessageLog | seq, hop, kind, sender, receiver, api, correlation id, intent_id, idempotency_key, sent_vt, fate, drop reason, delivered_seq, delivered_vt, delivered_wall_at, answer class, body, copy_of | Every message and its fate (0004). One counter numbers every harness event, so `seq` and `delivered_seq` order sends and deliveries. When F4 delivers a request twice, the second delivery is a copy that names the request in `copy_of`; the answer to a copy is dropped with reason `answer_to_copy` (0006) |
 | harness | FaultLog, ActorLog, FinalReport | | Faults fired, the deliveries they voided and the intent each fault touched, with one row per status answer F10 changes (0014); scripted human actions; submitted reports |
 | harness | ModelCall | call_no, worker, asked_vt, answered_vt, model, input_tokens, output_tokens, refused, wall_ms | One row per model call once it is answered, numbered in the run in cassette order, outside the harness's event counter. Tokens come from the reply's usage and are null when it reports none, as scripted replies do. `refused` is `spend_cap` when the live adapter refused to send the call. Record 0004's token and cost metrics read it; `ff_eval` can select it |
@@ -322,13 +324,14 @@ Detail: 0004. The evaluator reads simulator and harness records, the scenario an
 
 ## Runs and determinism
 
-Detail: 0009.
+Detail: 0009, 0018 and 0020.
 
 - A run is a scenario, a configuration, a contract level, a seed and a model. It has one agent worker, or two when F9 starts a second.
 - The **inproc** topology runs the FiveFold components in one process under a deterministic scheduler: one component step at a time, messages delivered in a fixed order with seeded latency of 5 to 50 virtual ms, timers in virtual time, and `think_ms` (1,000) of virtual time per model call. Tests, demos and the live study use it.
 - A live model call first takes its `think_ms`, then waits for its provider in wall time inside the scheduler's real wait. While a real wait is in flight the scheduler fires no event, so virtual time stands still and every timer fires at the virtual time it would with the scripted model.
 - The **split** topology runs the gateway, the simulator and Postgres as separate Compose services, for people who bring their own agent. It is not deterministic. Its virtual time follows the host's monotonic clock, and faults fire on counters at the network's points and the simulator's only. `python -m fivefold.harness.split` starts, serves, ends and scores a split run.
 - B1 lets Temporal use its own clock for internal scheduling, retries and infrastructure timers (0018). Waiting for Temporal holds FiveFold virtual time. FiveFold's clock governs faults, tool timeouts, simulator decisions and scoring. The evaluator uses the same direct evidence route as B0. Temporal history is diagnostic.
+- B2 lets DBOS use its own clock and jitter from Python's global `random` for internal wall-time scheduling only (0020). FiveFold holds virtual time during DBOS waits and processes handoffs in a fixed order. It uses its own clock and seeded generators for application behavior and uses B0's direct evidence route. B2 runs on Linux and macOS.
 - Determinism contract: the same scenario, configuration, contract level, seed and model outputs produce byte-identical logs, ledgers and results, ignoring wall-clock columns and fields. CI runs each demo twice and compares digests.
 - The agents' phase ends when every worker has reported, errored or used up its budget. The scheduler then drains for `2 × (D + max_hop_latency) + L` virtual ms, and the run ends. "Run end" in the property checks means this point, so late commits during the drain count.
 - A worker's budget is counted from its conversation, so it holds across a crash and a replay counts it the same way. Steps are the model's replies. Tokens are each reply's input and output tokens, from its usage; scripted replies report none. Before each model call, a worker whose steps or tokens reached its budget ends as `budget`. The live adapter's spend cap ends a worker the same way: once the spend so far reaches the cap, the next call is refused.
@@ -352,6 +355,7 @@ Detail: 0009.
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006) and 72 for B1 (0018).
 - **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). Use `FIVEFOLD_B1_REPEATS=20 uv run pytest tests/pg/test_b1.py`. The implementation must also pass the 235 original cells and regenerate the committed study exports byte for byte.
+- **B2 acceptance check:** add the 72 scripted cells in 0020. Run each at least 20 times, including host pauses, and compare all playback record digests with the same wall-clock exclusions. Test clean worker startup, per-invocation state and teardown, and denial of reads and writes in `sim` as `ff_dbos`. Retain all existing expected-outcome checks.
 - **MCP conformance tests:** run the three cases in record 0019 against two local synthetic fixtures over both stdio and Streamable HTTP. One fixture deduplicates at the effect boundary. The other records both effects when both delivery attempts write. Run both reply-drop cases with the pre-commit hooks disabled. Assert that the runner drops one reply, sends two write requests and takes its effect counts from the probe. Test the report and exit codes, including missing or invalid evidence and an unsupported case.
 - **Live-model study:** a pilot of 10 to 20 episodes to measure real cost, then the full matrix. `python -m fivefold.harness.study` runs a study: chosen cells of `faults/expected.yaml`, or cells with no fault, in chosen configurations and contract levels, each with the seeds S, S+1 and on. It saves each run's result, and each live run's cassette, for `python -m fivefold.evaluator report`. One spend cap holds across a study, and the study stops once its spend reaches the cap.
 - **Held-out scenarios:** written and kept by a separate team, outside the repository.

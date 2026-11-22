@@ -82,7 +82,7 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 | tau2-bench | Business tasks scored on final database state | Fault injection |
 | ActionProxy | Gateway with single-use grants | Fault injection and evaluation |
 
-Two openings remain: an MCP conformance test for lost replies (requested in MCP issue #3394) and published baselines on Temporal and DBOS. Record 0018 defines the Temporal baseline for v0.2.
+Two openings remain: an MCP conformance test for lost replies (requested in MCP issue #3394) and published baselines on Temporal and DBOS. Record 0018 defines the Temporal baseline for v0.2. Record 0020 defines the DBOS baseline for a later v0.2 release.
 
 ## Decisions and open questions
 

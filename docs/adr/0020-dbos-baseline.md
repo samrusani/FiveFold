@@ -1,9 +1,9 @@
 # 0020: B2, the DBOS baseline
 
-Status: Proposed
+Status: Accepted on 22 Nov 2026 by the maintainer
 Date: 2026-11-22
-Spec sections affected: Configurations, Trust boundaries, Runs and determinism, Testing, Data model (Run)
-Proposed amendments: 0008 (B2 configuration) and 0009 (DBOS internal timing)
+Spec sections affected: Configurations, Trust boundaries, Runs and determinism, Testing, Data model (Run), CLAUDE.md (Determinism)
+Amends: 0008 (B2 configuration and trust boundaries) and 0009 (DBOS internal clock and scheduling jitter)
 
 ## Context
 
@@ -57,15 +57,15 @@ FiveFold tool timeouts, as DBOS recommends configured Step retries for
 transient failures. Use the default three attempts total, a 1 s initial
 interval and a 2.0 multiplier. The two waits are 1 s and 2 s. Use a
 `should_retry` predicate for the FiveFold timeout. Ordinary simulator
-refusals return to the model as Step results. A worker that exhausts the
-Step's retries ends with an error, and the usual evidence still applies
-at run end. See the [Step retry documentation](https://docs.dbos.dev/python/tutorials/step-tutorial#configurable-retries).
+refusals return to the model as Step results. If all three attempts fail,
+the worker ends as `error`. After all workers end, the episode drains
+and the evaluator scores it using the usual evidence. See the
+[Step retry documentation](https://docs.dbos.dev/python/tutorials/step-tutorial#configurable-retries).
 
 Application tool timeouts use the existing virtual clock. Leave DBOS
 Workflow and Step timeouts unset. Keep a 30 s host handoff limit for a
-failed prototype or unavailable DBOS database. If it expires, stop the
-episode before scoring. Matching B1's unlimited Activity retries would
-hide a difference in the frameworks' retry behavior.
+failed handoff or unavailable DBOS database. If that limit expires, end
+the episode as an infrastructure failure before scoring.
 
 ### Process crashes and recovery
 
@@ -91,28 +91,32 @@ and [DBOS Python 3.6.0 release notes](https://github.com/dbos-inc/dbos-transact-
 Turning the kill into an ordinary Step exception would use the retry
 budget for a process crash and would leave the old process alive.
 A Conductor would make detection depend on a separate service and host
-time. Use local startup recovery in the prototype.
+time. Use local startup recovery.
+
+B2 is POSIX-only and runs on Linux and macOS, the platforms supported
+by FiveFold's pinned Temporal CLI. The worker restart uses SIGKILL.
+The determinism check uses SIGSTOP and SIGCONT for process pauses.
 
 ### Determinism
 
-DBOS's Step code reads host time for its checkpoints. Its retry helper
-waits in wall time, and recovery uses a queue with a jittered poll
-interval. PostgreSQL records timestamps in the DBOS system database.
-The public configuration offers polling intervals and timeouts, with no
-supported FiveFold clock injection. Changing retry intervals still
-leaves recovery and storage timestamps on host time.
+DBOS reads host time for Step checkpoints and retry waits. PostgreSQL
+records timestamps in the DBOS system database. DBOS jitters queue
+polling, database retry waits and workflow polling with Python's global
+`random` (`dbos/_queue.py`, `dbos/_sys_db.py`, `dbos/_workflow_commands.py`).
+The SDK exposes polling intervals and timeouts. It provides no
+supported way to inject FiveFold's clock.
 
-Propose a narrow amendment to 0009, like the internal Temporal timer
-exception in 0018. Hold FiveFold time while waiting for DBOS and
-serialize handoffs before running virtual work. Fault timing, tool
-timeouts, approvals, commit deadlines, status lag, replies and scored
-records still use FiveFold's virtual clock. DBOS controls how long a
-handoff takes in wall time. Only the FiveFold scheduler sends model,
-tool and report results. Scoring uses FiveFold records.
+Amend 0009 to allow DBOS's own clock and jitter for internal wall-time
+scheduling only. Hold FiveFold time while waiting for DBOS. Serialize
+handoffs before running virtual work, so DBOS queue order cannot set
+FiveFold's event order. Fault timing, tool timeouts, approvals, commit
+deadlines, status lag, replies and scored records use FiveFold's virtual
+clock. FiveFold uses its seeded generators. Only the FiveFold scheduler
+sends model, tool and report results. Scoring uses FiveFold records.
 
 ### Configuration registration
 
-Propose the following implementation changes after acceptance.
+Apply the following changes when B2 is implemented in a later sprint.
 
 1. Register `B2` in `evaluator.records.Config` and in the in-process
    configuration list and `Config` literal in `harness.run`. Add the name
@@ -138,21 +142,77 @@ scoring, reason codes, excuses and fault catalog.
 
 ### Infrastructure and trust boundaries
 
-Run the open-source SDK with a PostgreSQL 16 system database owned by
-`ff_dbos`. Keep it separate from the simulation databases. The prototype
-used a dedicated PostgreSQL service and one state database per test
-process, with a DBOS schema per worker. The DBOS role can create tables in
-its own database. It has no simulator role or connection string. The
-child receives its own database URL and exchanges application messages
-with the harness on local pipes. Simulator effects continue to commit
-in the simulator's own transactions.
+#### Worker environment
 
-The tests install the SDK and its package dependencies and need
-loopback access to PostgreSQL. An external DBOS service would introduce
-another recovery path and another network dependency. SQLite would
-change the persistence mechanism used in this comparison. Use the
-existing PostgreSQL engine for both sides, with separate state databases
-and roles, and keep the boundary in 0008.
+Launch the child with an explicit environment built from an allowlist
+of the settings it needs. Inherit no `DBOS_` or `DBOS__` variables.
+Pass the worker's local connection and identity settings from the
+harness. Set `system_database_url`, `executor_id`, `application_version`
+and the worker's `dbos_system_schema` in `DBOSConfig`. Leave
+`conductor_key` unset and set `enable_otlp=False`. Use the same
+configuration for a replacement process in the same run.
+
+In DBOS 3.6.0, `DBOS__CLOUD=true` selects cloud mode
+(`dbos/_utils.py`). Cloud mode overrides the configured database URL
+with `DBOS_SYSTEM_DATABASE_URL` and enables OTLP, with endpoints
+from `DBOS__OTLP_TRACES_ENDPOINT` and `DBOS__OTLP_LOGS_ENDPOINT`
+(`dbos/_dbos_config.py`). The SDK can also start Conductor using
+`DBOS__CONDUCTOR_APP_NAME`, `DBOS__CONDUCTOR_KEY` and
+`DBOS__CONDUCTOR_URL` (`dbos/_dbos.py`).
+
+Test by setting these variables in the parent with local sentinels.
+Include `DBOS_APP_NAME`, `DBOS__VMID` and `DBOS__APPVERSION` so the
+test exercises the cloud identity overrides too. Assert that the
+initial and replacement child receive none of them, use the configured
+local database, executor and version, and make no connections to the
+sentinel database, OTLP or Conductor endpoints.
+
+#### State lifetime and grants
+
+CI and Compose use the existing PostgreSQL 16 service. Give each B2
+run a fresh DBOS system database on that service, separate from the
+simulator database, and a separate schema for each worker. The
+prototype used a dedicated service and one state database per test
+process, with a schema per worker. The implementation uses a new
+database per invocation, including when the same logical run ID is
+replayed.
+
+A hosted DBOS service adds another recovery path and a network
+dependency. SQLite changes the persistence mechanism compared here.
+
+The FiveFold administrator creates an empty database before any worker
+starts, under the existing database lock. Create it exclusively with
+an internal name unique to this invocation. Refuse a taken name.
+Before launching a worker, save the created database's name and OID in
+the harness's ownership record and create the worker schemas inside it.
+A virtual restart reconnects to the same database and schema with the
+same executor and version.
+
+Use the bootstrap role rules in 0008 and the migration ownership
+boundary in 0016. Create `ff_dbos` as a login role with no memberships,
+superuser privileges, database creation or role creation privileges.
+The administrator owns the database and schemas. Revoke the default
+`PUBLIC` grants on the state database. Grant `ff_dbos` `CONNECT` on
+that database and `USAGE, CREATE` on the worker schemas. DBOS creates
+and owns its tables, indexes and functions inside those schemas.
+Grant `ff_dbos` no privileges on `sim` or its objects. The child gets
+only the DBOS credential. The parent exchanges application messages
+with the child on local pipes and calls the simulator through its
+direct API. Simulator effects commit in the simulator's transactions.
+
+On normal exit or a handled failure, reap the children and drop only
+the owned state database under the database lock, guarded by its
+recorded OID. Dropping it removes all its worker schemas. A hard kill
+of the harness can leave a database behind. Subsequent invocations
+always use fresh databases, so `DBOS.launch` cannot recover an earlier
+run's Workflow. For abandoned state, keep the ownership record for
+administrator cleanup using the same name and OID check.
+
+Test that a replacement recovers its own pending Workflow but a fresh
+invocation with the same logical run ID never resumes abandoned state.
+Assert that teardown removes its state on both success and handled
+failure. As `ff_dbos`, attempt a read and a write in `sim` in a
+migrated simulation database and require PostgreSQL to deny both.
 
 The private prototype used DBOS Python 3.6.0. Its lock added these five
 packages. No existing version changed.
@@ -173,14 +233,16 @@ Checked in installed DBOS Python 3.6.0:
 
 | API or behavior | Source path |
 | --- | --- |
-| `DBOSConfig`, system database URL, system schema, pool | `dbos/_dbos_config.py` |
+| `DBOSConfig`, database URL, schema, executor, version and OTLP | `dbos/_dbos_config.py`, `dbos/_dbos.py` |
+| Cloud flag, environment overrides and Conductor launch | `dbos/_utils.py`, `dbos/_dbos_config.py`, `dbos/_dbos.py` |
 | `DBOS(config=...)`, `launch`, `destroy`, `workflow`, `step` | `dbos/_dbos.py` |
 | `DBOS.step_id`, `step_status`, `StepStatus.current_attempt` | `dbos/_dbos.py`, `dbos/_context.py` |
 | `SetWorkflowID` | `dbos/_context.py` |
 | `retrieve_workflow`, `WorkflowHandle.get_result` | `dbos/_dbos.py` |
 | Local startup recovery and re-enqueue | `dbos/_dbos.py`, `dbos/_recovery.py` |
 | Wall-clock Step checkpoints, retry delays, workflow results | `dbos/_core.py`, `dbos/_sys_db.py` |
-| Jittered polling and queue claim | `dbos/_queue.py`, `dbos/_sys_db.py` |
+| Global `random` for queue, database and workflow wait jitter | `dbos/_queue.py`, `dbos/_sys_db.py`, `dbos/_workflow_commands.py` |
+| PostgreSQL migrations and pre-created schemas | `dbos/_sys_db_postgres.py`, `dbos/_migration.py` |
 
 ## Prototype measurements and expected outcomes
 
@@ -214,13 +276,15 @@ determinism check. Hosted CI time has yet to be measured.
 A separate native DBOS test saw three attempts at the same Step ID,
 with waits of 1,005 ms and 2,007 ms. The DBOS database's PostgreSQL
 clock advanced by 156 ms during a 150 ms host wait. In the matrix,
-DBOS retried 320 Steps and recovered 400 Workflows. Among ordinary
+DBOS retried a Step once in 320 trials and recovered 400 Workflows.
+Zero of the 1,440 matrix trials reached a third attempt. The
+independent 72-cell sweep also had zero third attempts. Among ordinary
 trials, the first retry wait had a median of 1,006 ms (160 samples).
 Process recovery from the known loss through the next Step handoff
 had a median of 1,343.5 ms (200 samples, range 1,237 to 1,545 ms).
 These are local wall-clock observations.
 
-The proposed matrix has 34 `pass`, 34 `fail` and four
+The prototype matrix has 34 `pass`, 34 `fail` and four
 `pass_unresolved` cells. Each row uses the existing evaluator and
 describes what happened in the prototype.
 
@@ -331,12 +395,20 @@ the virtual restart. Its recovery latency is a lower bound because
 it excludes crash detection. Record this limit in
 `docs/limitations.md` with the B2 implementation.
 
+Since no matrix trial reached a third attempt, the matrix does not
+show the difference between B2's three attempts and B1's unlimited
+Activity retries. The separate SDK timing probe succeeded on its
+third attempt.
+
 ## Spec changes on acceptance
 
 - Add B2's direct path and per-Step identity to Configurations and the
   run configuration list in Data model.
-- Describe the DBOS system database and role under Trust boundaries.
-- Add the internal DBOS clock exception and the fixed handoff order
+- Describe the per-run DBOS system database, worker schemas and role
+  under Trust boundaries.
+- Add the DBOS clock and jitter exception and the fixed handoff order
   under Runs and determinism.
+- Update the determinism rule in `CLAUDE.md` with the same wall-time
+  scheduling exception.
 - Add the B2 cells and playback digest checks under Testing. Retain the
   existing expected-outcome checks for B0, B1, G1 and G2.

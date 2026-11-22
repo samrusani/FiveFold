@@ -18,6 +18,7 @@ Status: M0 done, 14 Nov 2026. M1 and M2 done, 15 Nov 2026. M3 done but for T6's 
 After v0.1: Temporal and DBOS baselines, the MCP conformance test, the TLA+ model, run shrinking and the AliceMemory adapter for F8 (v0.2), then receipt export (v0.3).
 
 Record 0018 defines the scripted Temporal baseline. Land its dependency PR first, then the implementation and tests, then the documentation.
+Record 0020 defines the scripted DBOS baseline. Its implementation is scheduled for a later sprint.
 
 ## Teams
 
