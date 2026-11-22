@@ -50,7 +50,7 @@ Detail: 0008, 0018 and 0020.
 | B0 | The agent calls the simulator API directly | The framework's retries only |
 | G1 | Through the gateway | Authorization only: one approval per call, checked before a single send |
 | G2 | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
-| B1 | A Temporal agent calls the simulator API directly | Shared scripted policy, durable Activity results, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
+| B1 (0.2.0a1) | A Temporal agent calls the simulator API directly | Shared scripted policy, durable Activity results, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
 | B2 (later v0.2 release) | A DBOS agent calls the simulator API directly through the harness | Shared scripted policy, durable Step results, up to three attempts per Step and a stable key per write Step at C2 and C3 (0020) |
 
 All configurations in one comparison use the same model, task text, intents, authority policy, token budget and step budget. B0, G1 and G2 share one LangGraph agent: a model node and the prebuilt tool node, with the library's default error handling and a retry policy with library defaults. 0008 lists the facts behind that choice, checked in library source, and the scripted agent policy used by deterministic tests.
@@ -103,7 +103,7 @@ Detail: 0007.
 | Tests | pytest; Hypothesis rule-based state machines |
 | Packaging | Docker Compose; `make demo` runs the four demos of record 0006 (1, 2a, 2b and 3) for B0 and G2 with the scripted model, and needs no API key |
 | Viewer | React and TypeScript (Vite, Vitest, ESLint, npm) over a read-only Starlette API; see 0012 |
-| Formal model (v0.2) | TLA+ checked with TLC |
+| Formal model (later v0.2 release) | TLA+ checked with TLC |
 
 This spec names no library functions. The decision records cite the library facts they rely on, with the versions where they were checked.
 
@@ -296,7 +296,7 @@ This table is a summary. 0006 is the full catalog: fault points, B0 equivalents,
 | F5 | Late commit, after the caller's timeout (in contract, or beyond the deadline) | all | 1, 5 |
 | F6 | Approval revoked before commit (early or late) | all | 2 |
 | F7 | Quote changes after approval (early or late; price up or harmless) | all | 3 |
-| F8 | Memory correction after proposal | v0.2 | 3 |
+| F8 | Memory correction after proposal | Later v0.2 release | 3 |
 | F9 | Two workers on the same task | all | 1, 2 |
 | F10 | Status answer delayed or stale | C1 | 1, 5 |
 | F11 | Agent killed and resumed from checkpoint | all | 1, 2, 5 |
@@ -348,7 +348,7 @@ Detail: 0009, 0018 and 0020.
 - **Branch point:** model calls are the only points where the model can switch, so the branch point K counts them, in the order the cassette and `harness.model_call` number them, from 0 to the cassette's length. The branch adapter serves the parent's first K calls with the replay's checks, then hands every later call to the new model. A live one needs the flag, spend cap and price file of any live run. Every call takes `think_ms` once. A branch that asks for fewer than K calls fails, as a replay does.
 - **Branch run:** it runs its parent's run (the same scenario, configuration, contract level, seed, fault plan and workers) in a database of its own. Its run id is the parent's with `.branch-K` added, such as `dev-001-single-po.G2.C2.7.branch-4`. `harness.run` records `parent_run_id`, `branch_point` (K), the adapter and name of the new model, and the digest of the branch's own cassette. `harness.model_call` logs every call under the new model's name, the replayed calls included.
 - **Branch cassette:** it holds all the branch's calls, the replayed ones included, each hashed with the new model, and its header names the parent's run id and the branch point. The cassettes of other runs leave both fields out, so they read as before, and the format stays `fivefold-cassette/1`. `play` replays a branch's cassette like any other.
-- **Later:** shrink a failing run to the fewest events that still reproduce it.
+- **Run shrinking (later v0.2 release):** shrink a failing run to the fewest events that still reproduce it.
 
 ## Testing
 
@@ -362,13 +362,17 @@ Detail: 0009, 0018 and 0020.
 - **CI:** deterministic suites and the determinism check on every pull request. Live runs are manual and capped by budget.
 - **Live runs:** `python -m fivefold.recorder record --live PROVIDER:MODEL --spend-cap-usd X --prices PATH` runs one, where `PROVIDER` is `ollama`, `anthropic`, `openai` or `google_genai`. It refuses unless the environment sets `FIVEFOLD_LIVE=1` and, for an API provider, the provider's key, and it refuses a run of `google_genai` while `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_ENTERPRISE` is set. It also refuses unless the price file, which records its price date, prices the model. A run's parameters are generation parameters only, so no key, base URL or header can reach a cassette. One spend cap holds across a command's runs, and the spend can pass it by at most the cost of the one call in flight. `prices/example.yaml` shows the format with Ollama models at 0 USD, since they run locally, and lists no API provider. Tests use fake chat models and never reach a provider; they build each API provider's model with a dummy key and never invoke it.
 
-## Later releases
+## MCP conformance test
 
-- **MCP lost-reply conformance test (v0.2, record 0019):** the server author declares a disposable local test instance with synthetic state, a write tool and its arguments, the expected effect, retry identity, supported cases, an evidence deadline and a read-only probe. The probe counts committed effects in a fresh namespace and verifies their contents. If work continues after a reply, it also establishes when the attempts have settled.
+- **MCP lost-reply conformance test (0.2.0a1, record 0019):** the server author declares a disposable local test instance with synthetic state, a write tool and its arguments, the expected effect, retry identity, supported cases, an evidence deadline and a read-only probe. The probe counts committed effects in a fresh namespace and verifies their contents. If work continues after a reply, it also establishes when the attempts have settled.
   - **Reply lost after commit:** the probe witnesses a commit while the runner holds the first reply. The runner drops the reply at the handoff to the simulated caller and retries once after the caller's wait expires.
   - **Duplicate delivery:** the runner drops the first reply and sends a planned second request for the same operation with a fresh MCP request ID. It sends the duplicate without waiting for the caller's deadline.
   - **Timeout before commit:** fixture hooks hold and end the first attempt before it commits. The probe confirms zero effects while it is held. The runner then retries once.
   - The check passes when one matching effect remains after settlement. A wrong count or effect fails. A declared unsupported case is not applicable. Missing evidence for a supported case is inconclusive. Reports give the application-level result in text and JSON. The command exits with 1 on any observed failure, otherwise with 2 on inconclusive or invalid results or when no cases apply. It exits with 0 when at least one case applies and every applicable case passes.
+
+## Later releases
+
+- The DBOS baseline B2 (0020), the TLA+ model, run shrinking and F8 are planned for later v0.2 releases.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
 ## Repo layout
@@ -397,7 +401,7 @@ fivefold/
   scenarios/dev/     development scenarios
   prices/            price files for live runs
   viewer/            the viewer's frontend, React and TypeScript (0012)
-  tla/               formal model (v0.2)
+  tla/               formal model (later v0.2 release)
   docker-compose.yml, Dockerfile, Makefile, pyproject.toml, uv.lock, .python-version
 ```
 

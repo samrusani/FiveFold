@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0a1 (22 Nov 2026)
+
+### Added
+
+- B1, the scripted Temporal baseline. Install the SDK with `fivefold[temporal]`. B1 needs a repository checkout and `make temporal-setup` to install the pinned Temporal CLI.
+- MCP lost-reply conformance. Run `python -m fivefold.conformance` from the installed package. The repository contains the example fixture servers and the [two-minute walkthrough](docs/conformance.md).
+
+### Fixed
+
+- B1's handoff wait covers Temporal's full Activity retry backoff and a scheduling margin. A handoff that exceeds the bound raises `TemporalInfrastructureError` with the Activity ID and attempt and stops the run before scoring (#124).
+
+### Docs
+
+- Records 0018 and 0019 define B1 and the conformance test. Record 0020 (accepted) defines B2 for a later release.
+
 ## 0.1.2 (18 Nov 2026)
 
 ### Fixed

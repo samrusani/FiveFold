@@ -133,7 +133,13 @@ The gateway is a research design, not hardened for production ([SECURITY.md](SEC
 
 ## Status
 
-Version 0.1.0 is the first full release and is available on [PyPI](https://pypi.org/project/fivefold/). The [full study and its raw data](docs/report.md) are available. Planned for v0.2: baselines on Temporal and DBOS, an MCP conformance test for lost replies, a TLA+ model of the gateway's state machine, and F8, a memory correction after a proposal. [docs/plan.md](docs/plan.md) has the milestones.
+Version 0.1.2 is the latest full release. [PyPI](https://pypi.org/project/fivefold/0.1.2/)
+
+The 0.2.0a1 pre-release ships B1, the scripted Temporal baseline, and the MCP lost-reply conformance test. Install it with `pip install --pre fivefold` or pin it with `pip install fivefold==0.2.0a1`. [MCP conformance walkthrough](docs/conformance.md)
+
+B2, the TLA+ model of the gateway's state machine, run shrinking, and F8 (a memory correction after a proposal) are planned for later 0.2 releases. [Milestones](docs/plan.md)
+
+The [full study and its raw data](docs/report.md) are available.
 
 ## Contributing
 
