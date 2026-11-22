@@ -20,7 +20,7 @@ All of this evidence comes from 2026 preprints that have not been peer-reviewed.
 | User | What they do with it |
 | --- | --- |
 | Agent platform engineers | Run the suite against their agent stack before granting write access |
-| MCP server and API authors | Check that their tools survive lost replies (conformance test, v0.2) |
+| MCP server and API authors | Check that their tools survive lost replies (conformance test, 0.2.0a1) |
 | Teams on Temporal, DBOS or LangGraph | Compare their setup against published baselines |
 | Researchers | Reproduce the 2026 failure modes in one place and extend them |
 
@@ -30,7 +30,7 @@ All of this evidence comes from 2026 preprints that have not been peer-reviewed.
 | --- | --- | --- | --- |
 | 1 | Exactly once | Each intent has at most one committed effect, and nothing commits that the task did not intend | Lost reply, redelivery, crash after commit |
 | 2 | Authorized at commit | Each committed effect cites one approval that was valid and in scope when it committed | Revoked approval, expired approval, replayed approval |
-| 3 | Inputs still fresh | Every input the operation depends on was read, and still holds at commit under the dependency rules | Quote change; memory correction in v0.2 |
+| 3 | Inputs still fresh | Every input the operation depends on was read, and still holds at commit under the dependency rules | Quote change, with memory correction planned for a later 0.2 release |
 | 4 | Actually committed | Every required effect exists in the ledger, unless the authority withdrew it or it became infeasible | Crash before dispatch, request lost |
 | 5 | Truthfully reported | The final report matches the ledger and the evidence the stack had, including "outcome unknown" | Success claimed after a lost reply |
 
@@ -82,13 +82,13 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 | tau2-bench | Business tasks scored on final database state | Fault injection |
 | ActionProxy | Gateway with single-use grants | Fault injection and evaluation |
 
-Two openings remain: an MCP conformance test for lost replies (requested in MCP issue #3394) and published baselines on Temporal and DBOS. Record 0018 defines the Temporal baseline for v0.2. Record 0020 defines the DBOS baseline for a later v0.2 release.
+The 0.2.0a1 pre-release ships B1, the scripted Temporal baseline (record 0018), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394. The DBOS baseline B2 (record 0020), the TLA+ model, run shrinking and F8 are planned for later 0.2 releases.
 
 ## Decisions and open questions
 
 - **Name:** FiveFold; the Python package and its commands are `fivefold`. The name was unclaimed on PyPI and npm on 14 Nov 2026. The repository was renamed from AgentCheck to FiveFold on 15 Nov 2026.
 - **License:** Apache-2.0, which includes a patent grant.
-- **AliceMemory:** v0.2. It drives the memory-correction fault (F8), which decision record 0006 defers.
+- **AliceMemory** is planned for a later 0.2 release. It drives the memory-correction fault (F8), which decision record 0006 defers.
 - **Open: live study.** Which models, and the spend cap after the pilot.
 
 ## Sources

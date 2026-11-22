@@ -18,7 +18,7 @@ Eleven faults from the catalog in [record 0006](adr/0006-fault-catalog.md). Each
 | F11 | The agent is killed and resumed from its checkpoint |
 | F12 | The request is lost before it reaches the destination |
 
-F8, a memory correction after a proposal, comes in v0.2.
+F8, a memory correction after a proposal, is planned for a later 0.2 release.
 
 Each applicable fault runs against four kinds of destination ([record 0005](adr/0005-tool-contract-levels.md)) and four configurations ([record 0008](adr/0008-configurations-and-trust-boundaries.md) and [record 0018](adr/0018-temporal-baseline.md)):
 
@@ -36,7 +36,7 @@ Each applicable fault runs against four kinds of destination ([record 0005](adr/
 | G1 | An approval gate: one approval request per write call, checked before each send |
 | G2 | The reference gateway |
 
-CI checks 307 expected outcomes in [faults/expected.yaml](../faults/expected.yaml). The original 235 cover B0, G1 and G2. B1 adds 72, with 34 pass, 34 fail and 4 pass unresolved. B1 uses B0’s direct fault points, so the gateway hops and the F10 status-answer faults do not apply. With the scripted agent, B0 fails 45 of its 72 cells. G2 passes 71 of its 83, and the other 12 are documented limits, such as an approval revoked after the gateway's last check, while the order is already on its way. [limitations.md](limitations.md) says what each guarantee depends on.
+CI checks 307 expected outcomes in [faults/expected.yaml](../faults/expected.yaml). The original 235 cover B0, G1 and G2. B1 adds 72, with 34 pass, 34 fail and 4 pass unresolved. B1 uses B0's direct fault points, so the gateway hops and the F10 status-answer faults do not apply. With the scripted agent, B0 fails 45 of its 72 cells. G2 passes 71 of its 83, and the other 12 are documented limits, such as an approval revoked after the gateway's last check, while the order is already on its way. [limitations.md](limitations.md) says what each guarantee depends on.
 
 ## How the outcomes are tested
 
@@ -49,4 +49,4 @@ make temporal-setup
 FIVEFOLD_B1_REPEATS=20 uv run pytest tests/pg/test_b1.py
 ```
 
-Each cell runs 10 times normally, five times with a 150 ms asynchronous pause and five times with a 150 ms blocked poller. The check uses the same wall-clock exclusions as playback. Set `FIVEFOLD_B1_DIGEST_LOG` to a fresh file path to save each cell’s record digests.
+Each cell runs 10 times normally, five times with a 150 ms asynchronous pause and five times with a 150 ms blocked poller. The check uses the same wall-clock exclusions as playback. Set `FIVEFOLD_B1_DIGEST_LOG` to a fresh file path to save each cell's record digests.
