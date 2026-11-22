@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -127,7 +128,7 @@ from fivefold.harness.models import (
 from fivefold.harness.registry import RegistryEntry, database_of, register
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.rng import Generators
-from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.scheduler import ComponentFailed, Scheduler
 from fivefold.harness.sim_points import SimulatorPoints
 from fivefold.harness.transport import Envelope, Outgoing, Stage, Transport
 from fivefold.recorder.cassette import RunHeader, plain_object
@@ -308,17 +309,26 @@ class InprocRun:
         if self.spec.config != "B1":
             return await self._run_and_score()
         try:
-            from fivefold.harness.temporal_worker import TemporalHost, TemporalWorkers
+            from fivefold.harness.temporal_worker import (
+                TemporalHost,
+                TemporalInfrastructureError,
+                TemporalWorkers,
+            )
         except ModuleNotFoundError as error:
             if error.name != "temporalio":
                 raise
             raise RuntimeError("Install fivefold[temporal] to run B1") from error
-        if self._temporal_host is not None:
-            self._temporal_workers = TemporalWorkers(self, self._temporal_host)
-            return await self._run_and_score()
-        with TemporalHost() as host:
+        host_context = (
+            nullcontext(self._temporal_host) if self._temporal_host is not None else TemporalHost()
+        )
+        with host_context as host:
             self._temporal_workers = TemporalWorkers(self, host)
-            return await self._run_and_score()
+            try:
+                return await self._run_and_score()
+            except ComponentFailed as error:
+                if isinstance(error.__cause__, TemporalInfrastructureError):
+                    raise error.__cause__ from None
+                raise
 
     async def _run_and_score(self) -> RunResult:
         try:

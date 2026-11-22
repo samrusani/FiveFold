@@ -39,6 +39,9 @@ if TYPE_CHECKING:
 
 TASK_QUEUE = "fivefold-b1"
 HOST_WAIT_S = 30
+# Record 0018 keeps Temporal's default Activity policy. Add its largest backoff
+# to the ordinary host wait so failed attempts get the same scheduling margin.
+ACTIVITY_RETRY_BACKOFF_CAP_S = 100
 TIMEOUT_EVENTS = (
     EventType.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT,
     EventType.EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT,
@@ -237,10 +240,7 @@ class TemporalWorkers:
 
         while True:
             command = await run.scheduler.hold(
-                asyncio.wait_for(
-                    self._next(worker, reply, start=not resume and reply is None),
-                    timeout=HOST_WAIT_S,
-                )
+                self._wait_for_handoff(worker, reply, start=not resume and reply is None)
             )
             if isinstance(command, Done):
                 run.result.ends[worker] = (WorkerEnd(command.result[0]), command.result[1])
@@ -289,46 +289,64 @@ class TemporalWorkers:
             except TransportTimeout as error:
                 reply = (command, None, str(error))
 
+    async def _wait_for_handoff(self, worker: str, reply: Reply | None, *, start: bool) -> Delivery:
+        retry = reply is not None and reply[2] is not None
+        limit = HOST_WAIT_S + ACTIVITY_RETRY_BACKOFF_CAP_S if retry else HOST_WAIT_S
+        # Keep handoffs in virtual scheduler order. A worker queued behind another
+        # worker's retry starts its deadline only when it owns the handoff.
+        try:
+            async with self.handoff:
+                return await asyncio.wait_for(self._next(worker, reply, start=start), timeout=limit)
+        except TimeoutError:
+            if reply is None:
+                activity = "waiting for Activity model-1 attempt 1"
+            else:
+                pending = reply[0]
+                if retry:
+                    activity = (
+                        f"waiting for Activity {pending.activity_id} attempt {pending.attempt + 1}"
+                    )
+                else:
+                    activity = f"after Activity {pending.activity_id} attempt {pending.attempt}"
+            raise TemporalInfrastructureError(f"Temporal handoff timed out {activity}") from None
+
     async def _next(self, worker: str, reply: Reply | None, *, start: bool) -> Delivery:
         queue = self.queues[worker]
-        # Reserve the next requested virtual operation before a second worker can
-        # deliver its own handoff. Release the lock before any virtual wait.
-        async with self.handoff:
-            if start:
-                loop = asyncio.get_running_loop()
+        if start:
+            loop = asyncio.get_running_loop()
 
-                def deliver(command: Delivery) -> None:
-                    loop.call_soon_threadsafe(queue.put_nowait, command)
+            def deliver(command: Delivery) -> None:
+                loop.call_soon_threadsafe(queue.put_nowait, command)
 
-                self.host.start(
-                    f"{self.episode}-{worker}",
-                    {
-                        "initial": _encode(HumanMessage(self.run.spec.scenario.task)),
-                        "max_steps": self.run.spec.scenario.budget.max_agent_steps,
-                        "max_tokens": self.run.spec.scenario.budget.max_tokens,
-                    },
-                    deliver,
-                )
-            if reply is not None:
-                pending, result, error = reply
-                await self.host.answer(pending, result, error)
-                self.active.pop(worker)
-            following = await queue.get()
-            if reply is not None and reply[2] is not None:
-                pending = reply[0]
-                if not isinstance(following, Request) or (
-                    following.activity_id != pending.activity_id
-                    or following.attempt != pending.attempt + 1
-                ):
-                    raise TemporalInfrastructureError(
-                        "retry departed from the virtual failure sequence"
-                    )
-            elif isinstance(following, Request) and (
-                following.attempt != 1
-                or (reply is not None and following.activity_id == reply[0].activity_id)
+            self.host.start(
+                f"{self.episode}-{worker}",
+                {
+                    "initial": _encode(HumanMessage(self.run.spec.scenario.task)),
+                    "max_steps": self.run.spec.scenario.budget.max_agent_steps,
+                    "max_tokens": self.run.spec.scenario.budget.max_tokens,
+                },
+                deliver,
+            )
+        if reply is not None:
+            pending, result, error = reply
+            await self.host.answer(pending, result, error)
+            self.active.pop(worker)
+        following = await queue.get()
+        if reply is not None and reply[2] is not None:
+            pending = reply[0]
+            if not isinstance(following, Request) or (
+                following.activity_id != pending.activity_id
+                or following.attempt != pending.attempt + 1
             ):
-                raise TemporalInfrastructureError("unexpected activity retry")
-            return following
+                raise TemporalInfrastructureError(
+                    "retry departed from the virtual failure sequence"
+                )
+        elif isinstance(following, Request) and (
+            following.attempt != 1
+            or (reply is not None and following.activity_id == reply[0].activity_id)
+        ):
+            raise TemporalInfrastructureError("unexpected activity retry")
+        return following
 
 
 def _encode(message: BaseMessage) -> dict[str, Any]:
