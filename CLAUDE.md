@@ -34,7 +34,7 @@ Read these before writing code, in this order:
 
 ## Tests
 
-- Every fault variant has deterministic tests for every applicable (contract, configuration) cell, asserting the verdict and failing properties in `faults/expected.yaml` (0006). For every fault except F1, F10 and F12, at least one cell shows B0 failing where G2 passes.
+- Every fault variant has deterministic tests for every applicable (contract, configuration) cell, asserting the verdict and failing properties in the scenario's expected-outcome file. Use `faults/expected.yaml` for dev-001 (0006) and `faults/expected-f8.yaml` for `dev-001-memory-po` when F8 is built (0023). For every fault except F1, F10 and F12, at least one cell shows B0 failing where G2 passes.
 - Invariants I1 to I7 are asserted in code and exercised by Hypothesis rule-based state machine tests.
 - A PR that changes behaviour includes a test that would have caught the old behaviour.
 

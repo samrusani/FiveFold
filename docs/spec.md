@@ -217,7 +217,7 @@ The invariants are claimed for G2 only (0003). G1's actions are held to the ones
 
 ## Gateway
 
-Tools the agent sees over MCP. 0008 lists the baseline tool surface.
+Tools the agent sees over MCP. 0008 lists the baseline tool surface. With F8 in a later v0.2 release, both the direct and gateway routes will list `get_memory(supplier_id, sku)` only for memory-enabled scenarios. The direct read returns `answer: fact`, `key`, `version` and `data`. The gateway read returns `read_id`, `key`, `version` and `data`. The dev-001 tool list stays the same (0023).
 
 | Tool | Kind | Returns |
 | --- | --- | --- |
@@ -290,6 +290,8 @@ Dependency rules, shared by the gateway, the C3 destination and the evaluator (0
 | submit_purchase_order | `budget/{cost_center}` | sufficient | Limit minus committed, just before this effect, is at least quantity × unit price |
 | reserve_inventory | `inventory/{warehouse_id}/{sku}` | sufficient | Available stock, just before this effect, is at least the quantity |
 
+For F8 in a later v0.2 release, `dev-001-memory-po` adds an exact `order_channel` dependency on `memory/{supplier_id}/{sku}` for the selected supplier and SKU. The simulator stores and serves memory as versioned facts and selects the extra dependency from the scenario (0023).
+
 ## Fault catalog
 
 This table is a summary. 0006 is the full catalog: fault points, B0 equivalents, variants, parameters and expected outcomes.
@@ -310,6 +312,8 @@ This table is a summary. 0006 is the full catalog: fault points, B0 equivalents,
 | F12 | Request lost before it reaches the destination | all | 4, 5 |
 
 Faults fire at named points, on per-point event counters, never on wall-clock time. A fault's action applies at its point, before any further message is delivered. A crash restarts the component after a delay, voids any delivery it had not recorded, and drops later answers to the requests it sent before the crash (0010).
+
+In the later v0.2 release, F8 will apply to memory-dependent orders in `dev-001-memory-po`. An early correction fires on the approved reply on direct routes or before the gateway's send check. A late correction fires as the write leaves for the simulator. Relevant variants change `order_channel`. Harmless variants change `notes` only. Record 0023 names the fault points and the in-repo memory used for scoring.
 
 ## Evaluator
 
@@ -363,6 +367,7 @@ Detail: 0009, 0018 and 0020.
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Run shrinking acceptance checks (0022):** verify the failure signature, fault plan reductions and deterministic candidate order. Check database ownership and cleanup. Repeat a search stopped by the optional wall-time limit with its recorded candidate count and check that it yields the same plan.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006), 72 for B1 (0018) and 72 for B2 (0020).
+- **F8 acceptance checks (0023):** add the 80 `dev-001-memory-po` cells in `faults/expected-f8.yaml` and run them deterministically against the in-repo memory. Keep `faults/expected.yaml` and its 379 cells intact. Check that both routes list `get_memory` only in memory-enabled scenarios. Exercise the optional AliceMemory adapter with synthetic data in a separate operator-provisioned instance outside CI.
 - **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). Use `FIVEFOLD_B1_REPEATS=20 uv run pytest tests/pg/test_b1.py`. The implementation must also pass the 235 original cells and regenerate the committed study exports byte for byte.
 - **B2 acceptance check:** run each of the 72 scripted cells in 0020 at least 20 times, including host pauses, and compare all playback record digests with the same wall-clock exclusions. Use `FIVEFOLD_B2_REPEATS=20 uv run pytest tests/pg/test_b2.py`. Test clean worker startup, per-invocation state and teardown, and denial of reads and writes in `sim` as `ff_dbos`. Retain all existing expected-outcome checks.
 - **MCP conformance tests:** run the three cases in record 0019 against two local synthetic fixtures over both stdio and Streamable HTTP. One fixture deduplicates at the effect boundary. The other records both effects when both delivery attempts write. Run both reply-drop cases with the pre-commit hooks disabled. Assert that the runner drops one reply, sends two write requests and takes its effect counts from the probe. Test the report and exit codes, including missing or invalid evidence and an unsupported case.
@@ -381,7 +386,8 @@ Detail: 0009, 0018 and 0020.
 
 ## Later releases
 
-- The repository checks the TLA+ model and implements run shrinking (record 0022) for a later v0.2 release. F8 is planned for a later v0.2 release.
+- The repository checks the TLA+ model and implements run shrinking (record 0022) for a later v0.2 release.
+- **F8 (later v0.2 release, record 0023):** scored runs use in-repo memory. The optional AliceMemory exercise uses a disposable instance that an operator provisions and removes.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
 ## Repo layout

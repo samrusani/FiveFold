@@ -1,8 +1,9 @@
 # 0023: Memory correction after a proposal
 
-Status: Proposed
+Status: Accepted on 23 Nov 2026 by the maintainer
 Date: 2026-11-23
-Spec sections affected on acceptance: Facts and dependency rules, Tool surfaces, Fault catalog, Testing, Later releases
+Spec sections affected on acceptance: Simulator, Gateway, Fault catalog, Testing, Later releases
+Other documents affected: `docs/product.md`, `docs/plan.md`, `CLAUDE.md` (Tests)
 
 ## Context
 
@@ -11,12 +12,13 @@ property 3. A remembered input can change after an agent uses it to form
 an order. FiveFold can measure whether its declared dependency still
 holds when the write commits. [Fault catalog](0006-fault-catalog.md)
 
-## Proposed decision
+## Decision
 
 ### The memory fact and its read
 
-Use a memory-enabled copy of `dev-001-single-po`. The synthetic supplier
-memory for W-100 is `memory/{supplier_id}/{sku}`. The scripted agent uses
+Use `dev-001-memory-po` in `scenarios/dev/dev-001-memory-po.yaml`, a
+memory-enabled copy of `dev-001-single-po`. The synthetic supplier memory
+for W-100 is `memory/{supplier_id}/{sku}`. The scripted agent uses
 `order_channel` to check that the selected supplier accepts an ordering
 channel it knows. Both `edi` and `portal` qualify. The initial value is
 `edi`. A `notes` field carries a short reminder. The original development
@@ -24,23 +26,28 @@ scenario and its 379 expected cells keep their existing declarations.
 
 For the memory-enabled scenario, declare one additional exact dependency
 for the selected supplier and SKU. `memory_channel_unchanged` compares
-only `order_channel`. The existing basis check verifies that the cited
-version was served and that the rule still holds. The simulator uses the
-same rules in C3's commit transaction. Property 3 reads the same read log,
+only `order_channel`. A committed write using the old value fails property
+3 even when the new channel qualifies, because the dependency is exact on
+the value read, as with F7's price rise within the intent's maximum.
+The existing basis check verifies that the cited version was served and
+that the rule still holds. The simulator uses the same rules in C3's
+commit transaction. Property 3 reads the same read log,
 fact history and committed effect basis under record 0004. Select the
 extra dependency from the scenario on the server, so an agent cannot
 choose to omit it. Existing scenarios use their existing dependencies.
 The operation's business arguments, approval scope and action key stay
 as defined in records 0001 and 0002.
 
-Propose `get_memory` with `supplier_id` and `sku`. On the direct route a
+Add `get_memory` with `supplier_id` and `sku`. On the direct route a
 successful read returns `answer: fact`, `key`, `version` and `data`. On
 the gateway route it returns `read_id`, `key`, `version` and `data`, like
 the other gateway reads. `data` contains `order_channel` and `notes`.
 The simulator records the version it served. The gateway records a read
 ID against that version and resolves it in `based_on`. B0, B1 and B2 cite
 the version in their write basis. A missing key follows the existing
-read-refusal shape. Only memory-enabled scenarios expose this new tool.
+read-refusal shape. The tool list depends on the scenario. Both routes
+list `get_memory` only in memory-enabled scenarios. The dev-001 tool list
+is unchanged.
 
 ### The fault and its points
 
@@ -61,8 +68,8 @@ The interface needs a read by exact key and a correction of that key.
 It represents the same two operations for a local or external backend.
 A fact change and the next delivery have an order on FiveFold's virtual
 clock. The gateway checks the fact via its existing simulator path.
-Neither the agent in G1 or G2 nor the gateway has AliceMemory access
-credentials. The harness owns the optional adapter.
+No agent and no gateway holds AliceMemory credentials. Only the optional
+adapter exercise uses them.
 
 ### AliceMemory adapter and disclosure
 
@@ -94,15 +101,18 @@ instance. Audit is an operator route. The adapter reads the key from its
 environment and sends it as an HTTP bearer credential. Keep the base URL
 and synthetic user ID in the environment too. [Agent keys](https://github.com/samrusani/AliceMemory/blob/v0.24.1/docs/alpha/agent-integration.md)
 
-Provision a new local test instance per adapter exercise. Its private
-PostgreSQL database, Redis instance and synthetic user form the namespace.
-Start the documented local runtime with `DATABASE_URL` and `REDIS_URL`
-pointing to those fresh resources. Disable model and embedding providers.
-Run it on loopback. After the exercise, stop the runtime and remove only
-its database, Redis state and any local files it created. Closing the
-namespace removes the synthetic data and its retained revisions. The
-application's `forget` retires a memory from recall and keeps its history,
-so removing the disposable storage is part of cleanup. [Local runtime](https://github.com/samrusani/AliceMemory/blob/v0.24.1/docs/alpha/local-runtime.md) · [Runtime settings](https://github.com/samrusani/AliceMemory/blob/v0.24.1/apps/api/src/alicebot_api/config.py)
+An operator follows the FiveFold setup and cleanup guide at
+`docs/alicememory.md`, to be written with F8. For each exercise the operator
+provisions a disposable local AliceMemory instance. Its PostgreSQL
+database, Redis instance and synthetic user form the namespace. The
+operator starts the runtime on loopback with `DATABASE_URL` and
+`REDIS_URL` pointing to those fresh resources, with model and embedding
+providers disabled. After the exercise the operator stops the runtime and
+removes its disposable database, Redis state and files. This removes the
+synthetic data and retained revisions. The application's `forget` retires
+a memory from recall and keeps its history. FiveFold's adapter makes only
+the HTTP calls and never starts, stops or deletes AliceMemory's database,
+Redis or files. [Local runtime](https://github.com/samrusani/AliceMemory/blob/v0.24.1/docs/alpha/local-runtime.md) · [Runtime settings](https://github.com/samrusani/AliceMemory/blob/v0.24.1/apps/api/src/alicebot_api/config.py)
 
 Enable this exercise only with an explicit `FIVEFOLD_ALICEMEMORY=1` flag.
 CI and deterministic tests use the in-repo backend and never contact the
@@ -128,10 +138,13 @@ Both licences are Apache Category A. No new package dependency is needed.
   used here is documented over HTTP and the vNext CLI. Use the local
   PostgreSQL HTTP surface for the round trip. [SQLite launcher](https://github.com/samrusani/AliceMemory/blob/v0.24.1/apps/api/src/alicebot_api/onramp.py)
 
-## Proposed expected outcomes
+## Expected outcomes
 
-All 80 cells below apply to the memory-enabled scenario. Each cell runs
-one F8 at occurrence 1. Direct points apply only to B0, B1 and B2.
+All 80 cells below apply to `dev-001-memory-po`. Store them in
+`faults/expected-f8.yaml` with `scenario: dev-001-memory-po`, using the
+same one-scenario format as `faults/expected.yaml` (0006). Keep the
+original file's `scenario` and all 379 existing cells unchanged. Each new
+cell runs one F8 at occurrence 1. Direct points apply only to B0, B1 and B2.
 Gateway points apply only to G1 and G2. A scenario or operation with no
 memory dependency has no F8 cell. `Fail P3` means property 3 alone fails
 with `stale_input`. Every cell commits one effect.
@@ -175,20 +188,23 @@ and cleanup. The ordered digest of the final matrix was
 The prototype reused the simulator's fact history, the direct and gateway
 read routes, the existing virtual scheduler and the property 3 evaluator.
 It enabled the extra dependency for purchase orders throughout its isolated
-memory-only matrix. Scenario-level selection remains part of the proposed
+memory-only matrix. Scenario-level selection is required for the
 implementation. The matrix exercised the in-repo memory. The AliceMemory
 route design was checked against the pinned sources and awaits its own
 isolated smoke test.
 
-## Consequences and spec changes on acceptance
+## Consequences and spec changes
 
-- Add the scenario's exact memory dependency and read shape under Facts
-  and dependency rules and Tool surfaces. Keep property 3's definition.
+- Simulator and Gateway describe the scenario's exact memory dependency
+  and scenario-dependent tool list. Keep property 3's definition.
 - Document the four F8 variants, route-specific points, prerequisites and
   the synthetic adapter boundary under Fault catalog.
-- Record the proposed F8 matrix as new expected cases. Retain the existing
-  379 outcomes and check their determinism alongside the new cells.
+- Testing names the separate F8 matrix. Retain the existing 379 outcomes
+  and check their determinism alongside the new cells.
 - Add reference-backend tests for fresh and corrected reads, both routes
   and commit behavior. Verify the optional HTTP adapter separately by
-  creating, reading, correcting and cleaning up a disposable namespace.
-- Leave the implementation for a later v0.2 sprint.
+  seeding, reading and correcting a synthetic entry. Document operator
+  setup and cleanup in `docs/alicememory.md`.
+- Later releases, the product doc and the plan describe the in-repo
+  memory as the scored F8 backend and AliceMemory as an optional exercise.
+  Implementation is for a later v0.2 sprint.

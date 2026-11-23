@@ -88,7 +88,7 @@ The 0.2.0a2 pre-release ships B1, the scripted Temporal baseline (record 0018), 
 
 - **Name:** FiveFold; the Python package and its commands are `fivefold`. The name was unclaimed on PyPI and npm on 14 Nov 2026. The repository was renamed from AgentCheck to FiveFold on 15 Nov 2026.
 - **License:** Apache-2.0, which includes a patent grant.
-- **AliceMemory** is planned for a later 0.2 release. It drives the memory-correction fault (F8), which decision record 0006 defers.
+- **Memory correction (F8)** is planned for a later 0.2 release. The in-repo memory drives the scored runs. AliceMemory is an optional adapter exercise. See [record 0023](adr/0023-memory-correction.md).
 - **Open: live study.** Which models, and the spend cap after the pilot.
 
 ## Sources
