@@ -49,3 +49,27 @@ jobs:
           name: hypothesis-examples
           path: .hypothesis/
           if-no-files-found: ignore
+
+  gateway-model:
+    name: Gateway model (nightly profile)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv==0.13.8
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-package: jre
+          java-version: '17.0.19+10'
+      - name: Verify Java and install the pinned TLC jar
+        run: |
+          java -version
+          make tla-setup
+      - name: Check the larger gateway model
+        run: make tla-nightly
