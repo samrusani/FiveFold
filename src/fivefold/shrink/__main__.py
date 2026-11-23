@@ -19,7 +19,7 @@ from fivefold.viewer.source import ViewerError
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m fivefold.shrink", description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--result", type=Path, help="a saved evaluator result JSON file")
     inputs.add_argument("--database", help="the source run's registered database name")
