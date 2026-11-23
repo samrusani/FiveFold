@@ -37,12 +37,14 @@ from fivefold.gateway.state_machine import (
     ActionState,
     AnswerClass,
     CheckKind,
+    EventKind,
     GatewaySettings,
     GrantState,
     IllegalTransition,
     Note,
     Reason,
     ReconcileHow,
+    check_transition,
 )
 from fivefold.gateway.steps import StepRefused
 from fivefold.gateway.twin import TwinStore
@@ -101,7 +103,7 @@ class Run:
         return self.store.view(action_id).last_seq
 
     def write(
-        self, intent: str = "REQ-1", key: str = "k1", quote_version: int = 1
+        self, intent: str = "REQ-1", key: str = "k1", quote_version: int = 1, *, quantity: int = 100
     ) -> ActionResult | Refusal:
         """A write call that cites fresh reads of the order's two dependencies."""
         vt = self.at(1)
@@ -112,7 +114,7 @@ class Run:
                 intent,
                 "submit_purchase_order",
                 "supplier/S-1",
-                {"quantity": 100},
+                {"quantity": quantity},
                 key,
                 (quote.read_id, budget.read_id),
                 ("quote/S-1/W-100", "budget/CC-OPS"),
@@ -620,6 +622,101 @@ def test_a_new_action_follows_a_failed_one_with_a_new_key_and_grant() -> None:
     assert second != first
     assert snapshot.actions[second].idempotency_key == second
     assert snapshot.actions[second].grant_id == "G-0002"
+
+
+# Trace replays for Gateway.tla (0021) ---------------------------------------------------
+
+
+def _tla_edges(
+    run: Run, action_id: str, contract: Contract
+) -> tuple[tuple[str, ActionState | None, ActionState, Reason], ...]:
+    edges = []
+    for event in run.store.view(action_id).events:
+        if event.kind is EventKind.TRANSITION:
+            assert isinstance(event.reason, Reason)
+            row = check_transition(event.from_state, event.to_state, event.reason, contract)
+            edges.append((row.tid, event.from_state, event.to_state, event.reason))
+    return tuple(edges)
+
+
+@pytest.mark.parametrize("quantity", [100, 101], ids=["form-A", "form-B"])
+def test_tla_replay_offer_and_dispatch_after_denial(quantity: int) -> None:
+    contract = Contract.C2
+    run = Run(contract)
+    first = run.pending()
+    before = run.store.snapshot()
+    attached = run.write()
+    assert isinstance(attached, ActionResult) and attached.action_id == first
+    busy = run.write(key="k2", quantity=101)
+    assert isinstance(busy, Refusal) and busy.reason is RefusalReason.INTENT_BUSY
+    assert run.store.snapshot().events == before.events
+    assert run.store.snapshot().grants == before.grants
+
+    run.store.poll_approval(first, ApprovalStatus.DENIED, None, run.at(1), seen_seq=run.seq(first))
+    assert _tla_edges(run, first, contract) == (
+        ("T1", None, S.PROPOSED, Reason.ADMITTED),
+        ("T2", S.PROPOSED, S.PENDING_APPROVAL, Reason.APPROVAL_REQUESTED),
+        ("T5", S.PENDING_APPROVAL, S.REJECTED, Reason.APPROVAL_DENIED),
+    )
+    new = run.write(key="k1" if quantity == 100 else "k2", quantity=quantity)
+    assert isinstance(new, ActionResult) and new.action_id != first
+    second = new.action_id
+    run.store.file_approval(second, FRESH, "AP-2", run.at(1), seen_seq=run.seq(second))
+    run.store.poll_approval(
+        second, ApprovalStatus.APPROVED, FRESH, run.at(1), seen_seq=run.seq(second)
+    )
+    ticket = run.store.begin_check(second)
+    check = ticket.record(
+        approval=ApprovalStatus.APPROVED, basis=FRESH, check_vt=run.at(1), expires_at=FAR
+    )
+    attempt = run.store.dispatch(second, check, run.at(1))
+    assert attempt is not None and attempt.idempotency_key == second
+    assert _tla_edges(run, second, contract) == (
+        ("T1", None, S.PROPOSED, Reason.ADMITTED),
+        ("T2", S.PROPOSED, S.PENDING_APPROVAL, Reason.APPROVAL_REQUESTED),
+        ("T4", S.PENDING_APPROVAL, S.AUTHORIZED, Reason.APPROVED),
+        ("T6", S.AUTHORIZED, S.DISPATCHED, Reason.DISPATCHED),
+    )
+    snapshot = run.store.snapshot()
+    assert (snapshot.actions[first].state, snapshot.actions[second].state) == (
+        S.REJECTED,
+        S.DISPATCHED,
+    )
+    assert [(g.action_id, g.state) for g in snapshot.grants.values()] == [
+        (first, GrantState.DENIED),
+        (second, GrantState.CONSUMED),
+    ]
+
+
+def test_tla_replay_status_confirms_one_effect_and_rejects_a_conflicting_report() -> None:
+    contract = Contract.C1
+    run = Run(contract)
+    action_id = run.unknown()
+    before = run.store.snapshot()
+    with pytest.raises(StepRefused):
+        run.store.begin_check(action_id)
+    assert run.store.snapshot() == before
+
+    run.store.probe(action_id, ProbeAnswer(True, ("PO-2", "PO-1"), run.at()), run.at())
+    snapshot = run.store.snapshot()
+    assert snapshot.events[:-1] == before.events
+    assert _tla_edges(run, action_id, contract)[-2:] == (
+        ("T10", S.DISPATCHED, S.OUTCOME_UNKNOWN, Reason.TIMEOUT),
+        ("T11", S.OUTCOME_UNKNOWN, S.CONFIRMED, Reason.STATUS_FOUND),
+    )
+    action = snapshot.actions[action_id]
+    assert (action.state, action.effect_id) == (S.CONFIRMED, "PO-2")
+    assert snapshot.grants == before.grants
+    other = Claim("REQ-2", ClaimStatus.NOT_DONE)
+    wrong = Claim("REQ-1", ClaimStatus.DONE, ("PO-1",))
+    refused = run.store.submit_report([wrong, other], run.at(1), worker="W1")
+    assert isinstance(refused, Refusal) and refused.reason is RefusalReason.REPORT_INCONSISTENT
+    assert not run.store.snapshot().run_closed
+    right = Claim("REQ-1", ClaimStatus.DONE, ("PO-1", "PO-2"))
+    assert isinstance(
+        run.store.submit_report([right, other], run.at(1), worker="W1"), ReportAccepted
+    )
+    assert run.store.snapshot().run_closed
 
 
 def test_attaching_takes_only_a_newer_basis_and_only_before_dispatch() -> None:

@@ -6,7 +6,7 @@ FIVEFOLD_TEMPORAL_CLI ?= $(CURDIR)/.temporal/temporal
 export FIVEFOLD_ADMIN_DSN FIVEFOLD_TEMPORAL_CLI
 
 .DEFAULT_GOAL := help
-.PHONY: help setup temporal-setup check-temporal tla-setup check-tla fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
+.PHONY: help setup temporal-setup check-temporal tla-setup check-tla tla-tables tla-ci tla-nightly fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
 	viewer-build viewer viewer-e2e clean
 
 help: ## List the targets
@@ -26,6 +26,15 @@ tla-setup: ## Install the checksum-verified TLC jar (0021)
 
 check-tla: ## Check Java 17 and the verified TLC jar
 	python3 scripts/tla_tools.py check
+
+tla-tables: ## Refresh the readable TLC contract tables from Python
+	$(UV) run python tla/check_model.py tables
+
+tla-ci: check-tla ## Check the bounded gateway model with TLC
+	$(UV) run python tla/check_model.py ci
+
+tla-nightly: check-tla ## Check the larger gateway model with TLC
+	$(UV) run python tla/check_model.py nightly
 
 fmt: ## Format the code and apply safe lint fixes
 	$(UV) run ruff format .
@@ -47,7 +56,7 @@ test-fast: ## Run the tests that need no database
 test-pg: ## Run only the tests that need PostgreSQL
 	$(UV) run pytest -m pg
 
-check: check-temporal ## Lint, type check and run every test
+check: check-temporal tla-ci ## Lint, type check and run the bounded model and every test
 	$(MAKE) lint typecheck test
 
 db-up: ## Start PostgreSQL 16 on 127.0.0.1:5432 (Docker Compose)

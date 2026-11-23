@@ -14,11 +14,14 @@ Follow the [Code of Conduct](CODE_OF_CONDUCT.md) when taking part in the communi
 
 You need Python 3.12, [uv](https://docs.astral.sh/uv/) 0.13.8 or later, and PostgreSQL 16. Put `uv` on your path. Two packaging tests run `uv build` and need network access for build dependencies. Docker Compose can run the database for you. The viewer's frontend also needs Node 26 and npm; the Python tests never do.
 
+The gateway model needs Java 17. Install [Eclipse Temurin JRE 17.0.19+10](https://github.com/adoptium/temurin17-binaries/releases/tag/jdk-17.0.19%2B10), put `java` on `PATH` and run `make tla-setup`. The setup command verifies the pinned TLC jar's checksum. `make check` runs the bounded model and fails with setup instructions if Java 17 or the verified jar is unavailable.
+
 ```
 make setup      # install the locked dependencies into .venv
 make temporal-setup  # install the pinned Temporal CLI for the test suite
+make tla-setup  # install the checksum-verified TLC jar
 make db-up      # start PostgreSQL 16 on 127.0.0.1:5432
-make check      # lint, type check and every test
+make check      # lint, type check, bounded model and every test
 make test-fast  # only the tests that need no database
 make demo       # the four demos, for B0 and G2, from a seed
 make help       # every target
