@@ -103,7 +103,7 @@ Claude Sonnet 5.5 and GPT-6.1 Sol each ran every fault cell three times, 741 epi
 4. **Sometimes the honest answer is "unknown".** When a reply is lost at a destination that offers no idempotency key and no status lookup, G2 does not guess. It escalates to a human, and the agent's report says `unknown`. Behind G2, 12 episodes per model ended with an honest `unknown`.
 5. **The destination's contract sets the ceiling.** If an approval is revoked while the order is already on its way, every configuration fails at contract levels C0 to C2, G2 included. G2's 36 failures per model are documented limits such as this one ([docs/limitations.md](docs/limitations.md)).
 
-The scripted agent's 307 expected outcomes are checked by CI on every change. The live study's results and recordings are in [results/study](results/study/README.md).
+The scripted agent's 379 expected outcomes are checked by CI on every change. The live study's results and recordings are in [results/study](results/study/README.md).
 
 ## Who it's for
 
@@ -117,7 +117,7 @@ The scripted agent's 307 expected outcomes are checked by CI on every change. Th
 | Page | What it covers |
 | --- | --- |
 | [The twenty-minute tour](docs/tour.md) | Every demo in B0, G1 and G2, a small study with its report, B0 beside B1, recorded playback and branching |
-| [Faults, contract levels and configurations](docs/faults.md) | The eleven faults, what a destination can offer, and how the 307 expected outcomes are tested |
+| [Faults, contract levels and configurations](docs/faults.md) | The eleven faults, what a destination can offer, and how the 379 expected outcomes are tested |
 | [Viewer](docs/viewer.md) | Each run's timeline and scorecard, and B0 beside G2 on the same seed |
 | [Studies and reports](docs/studies.md) | Matrices of runs, CSV and Markdown reports, cost per passing run and recovery latency |
 | [Live runs](docs/live-runs.md) | Ollama, Anthropic, OpenAI and Google models, behind a flag, a spend cap and a price file |

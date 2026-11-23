@@ -134,6 +134,18 @@ and sends a stable key for each write Activity where the destination accepts
 one. Separate Activities can still place separate effects.
 See [record 0018](adr/0018-temporal-baseline.md).
 
+B2 kills its DBOS worker at the programmed virtual restart and starts the
+replacement immediately. This measures recovery after a known loss, so its
+recovery latency is a lower bound. Each invocation has fresh DBOS state on the
+existing PostgreSQL service, and each worker has its own schema. B2 runs on
+Linux and macOS. It runs the scripted model in-process and refuses cassettes.
+
+A Step can make three attempts. Exhausting them ends the worker with an error
+that the evaluator scores. A handoff that reaches its 30 s wall-time limit
+stops the episode before scoring. The prototype matrix in record 0020 never reached
+a third attempt, so it does not show the difference between B2's three
+attempts and B1's unlimited retries. See [record 0020](adr/0020-dbos-baseline.md).
+
 ## Scripted and live models
 
 - Deterministic tests, the demos and `faults/expected.yaml` use a scripted model, which follows one fixed policy in every configuration (0008, amended by 0011 and 0015). Record 0006 fixes some expected outcomes; the rest come from the first reviewed deterministic run, and all are frozen before any live-model run (0006). They show what each configuration does under that policy. A live model can act differently, for example by calling B0's status tool at C1, which the scripted policy never does.
@@ -148,6 +160,7 @@ See [record 0018](adr/0018-temporal-baseline.md).
 - Message latency is drawn from the seed, between 5 and 50 ms a hop (0009), and the simulator handles one request at a time ([spec](spec.md), Simulator). A virtual time in a result says when something happened in the run, not how fast a real system is.
 - FiveFold records wall time for metrics. Application decisions use virtual time (0009).
 - B1 uses Temporal's wall clock for internal scheduling, retries and infrastructure timers. FiveFold virtual time stands still while it waits for Temporal. Application timeouts and scoring use FiveFold's clock (0018).
+- B2 uses the DBOS clock and jitter for internal wall-time scheduling. FiveFold holds virtual time during the handoff. Application timeouts and scoring still use FiveFold's clock (0020).
 - Recovery latency is virtual time too: from the first fault that touched an intent until the stack's evidence settled its outcome (0014). It says how long the stack took to know, not how fast a real system recovers, and its wall-clock twin depends on the machine. An intent whose outcome the evidence never settles has no latency, and counts as unresolved. Latency alone does not rank configurations: with F2 at C2, B0 settles in 2,013 ms by placing a second order, which fails properties 1, 2 and 3.
 - One known source of nondeterminism remains: LangGraph's retry backoff sleeps in wall time, with jitter from the global random generator. It changes wall-clock metrics only (0008, 0009).
 - The determinism contract covers the inproc topology only. The split topology runs the gateway, the simulator and PostgreSQL as separate services, for people who bring their own agent. It is not deterministic: its virtual clock follows the host's monotonic clock, though faults still fire on counters (0009).
@@ -178,7 +191,7 @@ The 0.2.0a1 pre-release ships B1 and the MCP lost-reply conformance test. B2, th
 7. **The split topology is not deterministic** (0009; see [Virtual time](#virtual-time)). It fires faults only on the network and in the simulator, so it refuses F1, F3, F9 and F11, and F6 and F7 early in G1 and G2. It runs one agent worker, its services must share one host, and each service must start once per run: its fault counters live in its memory, so a service started again mid-run fires a fault again from its first occurrence. It counts no tokens and no cost, since it runs no model ([Bring your own agent](your-own-agent.md)).
 8. **Failed is final, and nothing is undone.** A commit after Failed happens only when the destination breaks its contract; G2 does not reverse Failed, and the evaluator still scores the ledger (0003). v0.1 has no compensation: if one intent's effect commits and another's fails, nothing is undone, and the report must say so (0004).
 9. **An agent cannot withdraw a live proposal.** It waits for the approval, a denial or the approval timeout (0001).
-10. **Baselines without a gateway.** B0 keeps the framework's defaults. B1 uses Temporal's Activity retries with the same scripted policy. A B0 with `ToolNode`'s error handling turned on, G2 with one feature switched off at a time, and the DBOS baseline B2 are deferred ([plan](plan.md)).
+10. **Baselines without a gateway.** B0 keeps the framework's defaults. B1 uses Temporal's Activity retries and B2 uses DBOS Step retries with the same scripted policy. A B0 with `ToolNode`'s error handling turned on and G2 with one feature switched off at a time are deferred ([plan](plan.md)).
 11. **G1 is a pattern, not a product.** G1 follows the single-use grant pattern, and no claim is made that it reproduces any specific product (0008). Record 0006 fixes no G1 outcome, so G1's cells come from its first deterministic runs (`faults/expected.yaml`).
 12. **Comparisons with prior work.** The metric `success_claimed_with_duplicate` is comparable in spirit to the false-success measure in "Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents" (LIMBO, arXiv 2609.29095, a preprint). The two definitions are not claimed to match (0004).
 13. **The development scenarios are public.** Code can be fitted to the scenarios in this repository. The plan guards against it with held-out scenarios that a separate team keeps outside the repository ([plan](plan.md), Risks). The full study did not run the held-out set.
@@ -187,7 +200,7 @@ The 0.2.0a1 pre-release ships B1 and the MCP lost-reply conformance test. B2, th
 16. **The spend cap is not a hard ceiling on a provider's invoice.** Before each call, the spend counted so far, from each reply's reported tokens at the price file's prices, is checked against the cap. Once it reaches the cap, further calls are refused ([spec](spec.md), Runs and determinism), but the call in flight can pass it ([spec](spec.md), Testing). For a model priced above 0, a reply that reports no usage makes the spend unknown, and further calls are refused as well. The meter applies one input rate to all input tokens; it does not account for different cache-read or cache-write prices, which can make the provider bill lower or higher than the counted spend ([API pilot](report/pilot-api.md)).
 17. **No message holding a NUL character.** PostgreSQL's JSONB cannot store `\u0000`, so neither can the harness's log. An agent's MCP message to the gateway that holds one, in a value or a key, is refused with invalid params before anything logs it, in both topologies; the agent's framework retries the refused call as it retries any MCP error, so the worker then ends with an error. B0's tools refuse one as an invalid argument, since every request model, the final report's included, already does; the model sees the tool error. The split simulator refuses a body holding one with 422. A scripted model never sends one; a live model could.
 18. **Ollama input usage and prompt cache.** The [local pilot](report/pilot-ollama.md) found that reported input can decrease between calls as the rendered prompt changes. The budget counts reported usage, but the records do not independently show whether every token read was counted when the prompt cache was used.
-19. **MCP session recovery in the split topology.** In G1 and G2, the worker opens a new session when the gateway reports that the old one is gone. The failed request never reached a tool. In G1, recovery follows the same retry rules as a timeout. A write whose reply was lost can be placed twice. That is what G1 measures (0008). In G2, an identical proposal attaches to the same action (0001). The demos, the 307 expected outcomes, and the full study use the in-process topology. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
+19. **MCP session recovery in the split topology.** In G1 and G2, the worker opens a new session when the gateway reports that the old one is gone. The failed request never reached a tool. In G1, recovery follows the same retry rules as a timeout. A write whose reply was lost can be placed twice. That is what G1 measures (0008). In G2, an identical proposal attaches to the same action (0001). The demos, the 379 expected outcomes, and the full study use the in-process topology. [Tracking issue #101](https://github.com/samrusani/FiveFold/issues/101)
 
 ## Out of scope
 
