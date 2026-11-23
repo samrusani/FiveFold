@@ -12,7 +12,7 @@ DECLARE
     role_name text;
 BEGIN
     FOREACH role_name IN ARRAY ARRAY[
-        'ff_sim', 'ff_gw', 'ff_harness', 'ff_agent', 'ff_eval', 'ff_viewer', 'ff_registry'
+        'ff_sim', 'ff_gw', 'ff_harness', 'ff_agent', 'ff_eval', 'ff_viewer', 'ff_registry', 'ff_dbos'
     ]
     LOOP
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = role_name) THEN

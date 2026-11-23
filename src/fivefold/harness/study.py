@@ -439,7 +439,7 @@ def run_episode(
     except DatabaseExists:
         raise ValueError(taken(database)) from None
     try:
-        run = InprocRun(spec, created.dsn)
+        run = InprocRun(spec, created.dsn, admin_dsn=admin_dsn)
         asyncio.run(run.execute())
     finally:
         if not keep:

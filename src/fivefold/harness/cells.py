@@ -145,8 +145,8 @@ def load_expected(path: Path = EXPECTED) -> Expected:
 
 def cell_plan(cell: Cell) -> list[dict[str, Any]]:
     """The fault plan that puts a run in this cell."""
-    # B1 injects the same faults on the same direct route as B0 (0018).
-    config = "B0" if cell.config == "B1" else cell.config
+    # The durable baselines use B0's direct fault points (0018, 0020).
+    config = "B0" if cell.config in ("B1", "B2") else cell.config
     hop = "agent_sim" if config == "B0" else "gw_sim"
     if cell.fault == "F2":
         return [

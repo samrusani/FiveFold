@@ -478,3 +478,77 @@ cells:
   - {fault: F12, variant: agent_sim, contract: C1, config: B1, verdict: pass, failing: []}
   - {fault: F12, variant: agent_sim, contract: C2, config: B1, verdict: pass, failing: []}
   - {fault: F12, variant: agent_sim, contract: C3, config: B1, verdict: pass, failing: []}
+
+# B2's 72 expected outcomes (0020).
+  - {fault: F1, variant: a, contract: C0, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: a, contract: C1, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: a, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: a, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: b, contract: C0, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: b, contract: C1, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: b, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F1, variant: b, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F2, variant: null, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F2, variant: null, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F2, variant: null, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F2, variant: null, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F3, variant: null, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F3, variant: null, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F3, variant: null, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F3, variant: null, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_sim, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: agent_sim, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F4, variant: agent_sim, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F4, variant: agent_sim, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F5, variant: beyond_deadline, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F5, variant: beyond_deadline, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F5, variant: beyond_deadline, contract: C2, config: B2, verdict: pass_unresolved, failing: []}
+  - {fault: F5, variant: beyond_deadline, contract: C3, config: B2, verdict: pass_unresolved, failing: []}
+  - {fault: F5, variant: in_contract, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F5, variant: in_contract, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F5, variant: in_contract, contract: C2, config: B2, verdict: pass_unresolved, failing: []}
+  - {fault: F5, variant: in_contract, contract: C3, config: B2, verdict: pass_unresolved, failing: []}
+  - {fault: F6, variant: early, contract: C0, config: B2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: early, contract: C1, config: B2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: early, contract: C2, config: B2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: early, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F6, variant: late, contract: C0, config: B2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: late, contract: C1, config: B2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: late, contract: C2, config: B2, verdict: fail, failing: [2]}
+  - {fault: F6, variant: late, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_harmless, contract: C0, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_harmless, contract: C1, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_harmless, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_harmless, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: early_price_up, contract: C0, config: B2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_price_up, contract: C1, config: B2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_price_up, contract: C2, config: B2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: early_price_up, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C0, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C1, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_harmless, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F7, variant: late_price_up, contract: C0, config: B2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C1, config: B2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C2, config: B2, verdict: fail, failing: [3]}
+  - {fault: F7, variant: late_price_up, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F9, variant: different_args, contract: C0, config: B2, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: different_args, contract: C1, config: B2, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: different_args, contract: C2, config: B2, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: different_args, contract: C3, config: B2, verdict: fail, failing: [5]}
+  - {fault: F9, variant: same_args, contract: C0, config: B2, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: same_args, contract: C1, config: B2, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: same_args, contract: C2, config: B2, verdict: fail, failing: [1, 3, 5]}
+  - {fault: F9, variant: same_args, contract: C3, config: B2, verdict: fail, failing: [5]}
+  - {fault: F11, variant: after_tool_call, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F11, variant: after_tool_call, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F11, variant: after_tool_call, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F11, variant: after_tool_call, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F11, variant: after_tool_result, contract: C0, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F11, variant: after_tool_result, contract: C1, config: B2, verdict: fail, failing: [1, 2, 3]}
+  - {fault: F11, variant: after_tool_result, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F11, variant: after_tool_result, contract: C3, config: B2, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_sim, contract: C0, config: B2, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_sim, contract: C1, config: B2, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_sim, contract: C2, config: B2, verdict: pass, failing: []}
+  - {fault: F12, variant: agent_sim, contract: C3, config: B2, verdict: pass, failing: []}

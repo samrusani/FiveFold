@@ -277,7 +277,7 @@ def _misfits(plan: Sequence[PlannedFault], *, params: Params, contract: Contract
 
 # Random plans (see the module's docstring) ---------------------------------------------
 
-CONFIGS = ("B0", "B1", "G1", "G2")
+CONFIGS = ("B0", "B1", "B2", "G1", "G2")
 """The configurations a run can have (0008)."""
 
 AGENT_RESTART_MAX_MS = 10_000
