@@ -1,6 +1,6 @@
 # 0021: A TLA+ model of the gateway
 
-Status: Proposed
+Status: Accepted on 23 Nov 2026 by the maintainer
 Date: 2026-11-22
 Spec sections affected on acceptance: Action state machine, Testing, Stack, Later releases
 
@@ -9,10 +9,10 @@ Spec sections affected on acceptance: Action state machine, Testing, Stack, Late
 The spec calls for a formal model checked with TLC. Record 0007 reserves
 `tla/` for it. The PostgreSQL tests exercise real transactions, and a
 model can enumerate bounded orderings of dispatch, delivery, recovery
-and reporting. This record proposes how to check the existing design.
-Its implementation follows acceptance in a later sprint.
+and reporting. This record defines how to check the existing design.
+Implementation is scheduled for a later sprint.
 
-## Decision proposed
+## Decision
 
 ### Scope and environment
 
@@ -48,7 +48,7 @@ A G1 profile can be added later with its own checks.
 
 The scratch prototype abstracts one intent, a single progressing action
 and one outstanding commit per action. It represents the gateway-to-
-destination transport. Following acceptance, model both argument forms
+destination transport. In the implementation, model both argument forms
 at admission and let a second admitted action proceed to dispatch
 after the first releases the intent. Preserve the real catalog in
 the integration tests, which exercise exact points, delays and
@@ -107,7 +107,7 @@ confirmation. A later model needs distinct effect IDs to exercise
 replacement of one ID by another. Both extensions need new bounds
 and another measurement.
 
-| Proposed profile | Slots for one intent | C1 probes | TLC workers | Generated states | Distinct states | Elapsed |
+| Profile | Slots for one intent | C1 probes | TLC workers | Generated states | Distinct states | Elapsed |
 | --- | --- | --- | --- | --- | --- | --- |
 | CI | 1 | 1 | 1 | 2,151,667 | 658,490 | 31 s |
 | Nightly | 2 | 2 | 2 | 4,216,436 | 1,426,166 | 49 s |
@@ -127,23 +127,62 @@ The upstream jar also contains an Eclipse Public License 2.0 notice
 in `META-INF/LICENSE.txt`. Apache lists EPL 2.0 under
 [Category B](https://www.apache.org/legal/resolved.html#category-b).
 Fetch and run the unmodified jar as a separate development tool.
-Keep it out of FiveFold's source and package releases.
+Keep it out of Git and the PyPI distributions.
 The release's `tla2tools.jar` has SHA-256
 `ae7a33bbe99e5a3783c28d826d20e0028fc87f5a8cc8f9520afab00eabbc0bb1`.
 The jar manifest identifies source revision `3ea322254974cd39a4dd336fff12b203a6743dd1`.
 The jar's own `tlc2.TLC -help` identifies TLC2 2.18, revision
 `3ea3222`, and documents `-config`, `-workers`, `-metadir` and `-fp`.
 The project's [tool usage guide](https://github.com/tlaplus/tlaplus/blob/master/USE.md)
-specifies Java 11 or later. Use Java 17 LTS in CI and verify it on
-the implementation PR.
+specifies Java 11 or later. Use Java 17 LTS for FiveFold.
 
-Add `make tla-setup` to download that jar from the release and verify
-its checksum before installation. Install Java and the jar on CI
-before running the check, using GitHub release assets as the Temporal
-CLI setup already does. Run the bounded profile through `make check`
-and the larger profile in the scheduled workflow. If Java or the verified
-jar is missing, fail with the setup command. The model checker needs
-no download while it runs.
+#### CI and the app image
+
+In the PR and nightly workflows, install Eclipse Temurin JRE
+`17.0.19+10` with
+[`actions/setup-java` v5.7.0](https://github.com/actions/setup-java/tree/v5.7.0).
+Pin the action to `b6effb05e454b25005698d916606bdc6ffcbf961`.
+Set `distribution: temurin`, `java-package: jre` and
+`java-version: '17.0.19+10'`. Check the installed build with
+`java -version`, then run `make tla-setup`. Run the bounded profile
+as part of `make check` and the larger profile in the scheduled workflow.
+
+The app image runs `make check` by default (0007). In a build stage,
+fetch the Linux HotSpot JRE from the
+[Temurin `jdk-17.0.19+10` release](https://github.com/adoptium/temurin17-binaries/releases/tag/jdk-17.0.19%2B10).
+Choose the archive from Docker's target architecture and check its
+pinned SHA-256 before extracting it. Copy the extracted runtime to
+`/opt/java` and add its `bin` directory to `PATH`. Run `make tla-setup`
+in the build and keep its verified jar at the path the check uses.
+Keep the runtime and jar with their licence notices. Leave the
+download archives in the build stage. The container can run TLC
+without downloading Java or the jar at startup.
+
+| Image architecture | Temurin release asset | SHA-256 of JRE archive | Added layers, uncompressed |
+| --- | --- | --- | ---: |
+| Linux amd64 | `OpenJDK17U-jre_x64_linux_hotspot_17.0.19_10.tar.gz` | `adb5a2364baa51de1ef91bb9911f5a61d24b045fe1d6647cb8050272a3a8ee75` | 137.43 MiB |
+| Linux arm64 | `OpenJDK17U-jre_aarch64_linux_hotspot_17.0.19_10.tar.gz` | `aae834297a87736869745be7c1fca3207ea9167c5824f41c88b0ebb2e3ccb9b1` | 138.47 MiB |
+
+These are measurements of the two layers that copy the extracted JRE
+and the verified jar onto `python:3.12-slim`. The same layers are
+47.43 MiB compressed on amd64 and 46.94 MiB on arm64. The bounded
+prototype also ran offline on both probe images. Each found 658,490
+distinct states, in 35 s on amd64 and 27 s on arm64. Measure the final
+app image on the implementation PR.
+
+#### Contributor setup
+
+When the model lands, add Java 17 to Development in
+`CONTRIBUTING.md`. Link the pinned Temurin release and add
+`make tla-setup` after `make temporal-setup`. The setup target downloads
+the jar from the release pinned above and verifies its checksum.
+Document that `make check` runs the bounded TLC profile.
+
+Make the check fail before running TLC if Java 17 or the verified jar
+is missing. For missing or wrong Java, print the pinned Java 17 install
+instruction, say to put `java` on `PATH`, and give `make tla-setup`.
+For a missing or invalid jar, print `Run make tla-setup to install the
+verified TLC jar.` Cover both failures in the implementation PR.
 
 ## Alternatives considered
 
@@ -185,4 +224,5 @@ decision record for any design change.
 - Define the checked scope and the journal projection under Action
   state machine and Testing. Keep I1 to I7 as written.
 - Record the pinned TLC and Java setup under Stack and reserve
-  the implementation for a later v0.2 release.
+  the implementation for a later v0.2 release. Update the CI workflows,
+  app image and contributor setup together when the model lands.
