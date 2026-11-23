@@ -167,7 +167,7 @@ attempts and B1's unlimited retries. See [record 0020](adr/0020-dbos-baseline.md
 
 ## Known limits
 
-The 0.2.0a1 pre-release ships B1 and the MCP lost-reply conformance test. B2, the TLA+ model, run shrinking and F8 are planned for later 0.2 releases. [Roadmap](plan.md#roadmap)
+The 0.2.0a2 pre-release ships B1, B2 and the MCP lost-reply conformance test. The TLA+ model, run shrinking and F8 are planned for later 0.2 releases. [Roadmap](plan.md#roadmap)
 
 1. **Race windows at C0 to C2.** G2 checks the approval and the inputs, then sends, and the destination commits later. A revocation or a price change in between lets the order commit on dead authority or a stale price. So G2 fails property 2 under F6 late, and property 3 under F7 late, `price_up`, at C0 to C2, by design ([plan](plan.md), Risks; 0002, rule 21; 0006). C3 closes both windows in the simulator, whose C3 destination checks the basis and the approval atomically at commit (0005). A real destination closes them only if it does the same. One that checks versions only, as with an ETag, leaves the authority race open (0005, Alternatives considered).
 2. **G2's documented limits.** Record 0006 lists the G2 cells that fail or stay unresolved by design. The failing properties are those of dev-001, whose budget covers one order but not two; another scenario can fail a different set.

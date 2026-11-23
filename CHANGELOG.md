@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0a2 (23 Nov 2026)
+
+### Added
+
+- B2, the scripted DBOS baseline (record 0020), runs on Linux and macOS. Install the optional SDK with `fivefold[dbos]`. At C2 and C3, retries of the same write Step use its original idempotency key.
+
+### Fixed
+
+- `python -m fivefold.conformance --help` prints the module name in its usage line (#128).
+
+### Docs
+
+- The tour compares B0 and B2 on a lost reply. The deterministic suite now checks 379 expected outcomes. This pre-release ships B1, B2 and the MCP lost-reply conformance test. The TLA+ model, run shrinking and F8 are planned for later 0.2 releases.
+
 ## 0.2.0a1 (22 Nov 2026)
 
 ### Added
