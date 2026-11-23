@@ -103,7 +103,7 @@ Detail: 0007.
 | Tests | pytest; Hypothesis rule-based state machines |
 | Packaging | Docker Compose; `make demo` runs the four demos of record 0006 (1, 2a, 2b and 3) for B0 and G2 with the scripted model, and needs no API key |
 | Viewer | React and TypeScript (Vite, Vitest, ESLint, npm) over a read-only Starlette API; see 0012 |
-| Formal model (later v0.2 release) | TLA+ checked with TLC |
+| Formal model (later v0.2 release) | TLA+ checked with pinned TLC v1.7.3 and Temurin Java 17 in CI and the app image (0021) |
 
 This spec names no library functions. The decision records cite the library facts they rely on, with the versions where they were checked.
 
@@ -159,6 +159,11 @@ Detail: 0002.
 ## Action state machine
 
 Detail: 0003.
+
+Record 0021 defines the planned bounded G2 model for C0 to C3. It models
+durable action state and its append-only journal, separate from
+destination effects. It takes legal transition edges from the gateway
+implementation and checks I1 to I7.
 
 | State | Meaning | Final |
 | --- | --- | --- |
@@ -352,6 +357,7 @@ Detail: 0009, 0018 and 0020.
 
 ## Testing
 
+- **TLA+ (later v0.2 release):** check the bounded G2 model, append-only history and deadlocks in `make check`. Run the larger profile nightly. Java 17 and the checksum-verified TLC jar are required. Missing prerequisites fail the check and print the setup instructions, including `make tla-setup` (0021).
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006), 72 for B1 (0018) and 72 for B2 (0020).
 - **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). Use `FIVEFOLD_B1_REPEATS=20 uv run pytest tests/pg/test_b1.py`. The implementation must also pass the 235 original cells and regenerate the committed study exports byte for byte.
@@ -401,7 +407,7 @@ fivefold/
   scenarios/dev/     development scenarios
   prices/            price files for live runs
   viewer/            the viewer's frontend, React and TypeScript (0012)
-  tla/               formal model (later v0.2 release)
+  tla/               formal model (0021, later v0.2 release)
   docker-compose.yml, Dockerfile, Makefile, pyproject.toml, uv.lock, .python-version
 ```
 
