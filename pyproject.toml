@@ -63,7 +63,7 @@ pattern = '\]\(((?![a-zA-Z][a-zA-Z0-9+.-]*:|/|#)[^\s)]+)\)'
 replacement = '](https://github.com/samrusani/FiveFold/blob/v$HFPR_VERSION/\1)'
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/results"]
+exclude = ["/results", "/.tla"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fivefold"]

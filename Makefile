@@ -6,7 +6,7 @@ FIVEFOLD_TEMPORAL_CLI ?= $(CURDIR)/.temporal/temporal
 export FIVEFOLD_ADMIN_DSN FIVEFOLD_TEMPORAL_CLI
 
 .DEFAULT_GOAL := help
-.PHONY: help setup temporal-setup check-temporal fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
+.PHONY: help setup temporal-setup check-temporal tla-setup check-tla fmt lint typecheck test test-fast test-pg check db-up db-down db-reset demo \
 	viewer-build viewer viewer-e2e clean
 
 help: ## List the targets
@@ -20,6 +20,12 @@ temporal-setup: ## Install the checksum-verified Temporal CLI for B1 tests
 
 check-temporal: ## Check the Temporal CLI version required by B1
 	python3 scripts/temporal_cli.py check
+
+tla-setup: ## Install the checksum-verified TLC jar (0021)
+	python3 scripts/tla_tools.py install
+
+check-tla: ## Check Java 17 and the verified TLC jar
+	python3 scripts/tla_tools.py check
 
 fmt: ## Format the code and apply safe lint fixes
 	$(UV) run ruff format .
