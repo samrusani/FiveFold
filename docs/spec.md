@@ -45,6 +45,8 @@ In the baseline configurations, the agent calls the simulator API directly and t
 
 Detail: 0008, 0018 and 0020.
 
+The 0.2.0a2 pre-release includes B1, B2 and the MCP lost-reply conformance test (0019).
+
 | Config | Write path | Features |
 | --- | --- | --- |
 | B0 | The agent calls the simulator API directly | The framework's retries only |
@@ -372,7 +374,7 @@ Detail: 0009, 0018 and 0020.
 
 ## Later releases
 
-- The DBOS baseline B2 (0020) is slated for 0.2.0a2. The TLA+ model, run shrinking and F8 are planned for later v0.2 releases.
+- The TLA+ model, run shrinking and F8 are planned for later v0.2 releases.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
 ## Repo layout

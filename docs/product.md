@@ -82,7 +82,7 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 | tau2-bench | Business tasks scored on final database state | Fault injection |
 | ActionProxy | Gateway with single-use grants | Fault injection and evaluation |
 
-The 0.2.0a1 pre-release ships B1, the scripted Temporal baseline (record 0018), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394. The DBOS baseline B2 (record 0020), the TLA+ model, run shrinking and F8 are planned for later 0.2 releases.
+The 0.2.0a2 pre-release ships B1, the scripted Temporal baseline (record 0018), B2, the scripted DBOS baseline (record 0020), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394. The TLA+ model, run shrinking and F8 are planned for later 0.2 releases.
 
 ## Decisions and open questions
 

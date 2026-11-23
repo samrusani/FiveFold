@@ -15,9 +15,9 @@ Status: M0 done, 14 Nov 2026. M1 and M2 done, 15 Nov 2026. M3 done but for T6's 
 | M4 | 5 | Live study | Report drafted |
 | M5 | 6 | Release v0.1 | v0.1 released |
 
-The 0.2.0a1 pre-release ships the scripted Temporal baseline B1 (record 0018) and the MCP lost-reply conformance test (record 0019).
+The 0.2.0a2 pre-release ships the scripted Temporal baseline B1 (record 0018), the scripted DBOS baseline B2 (record 0020) and the MCP lost-reply conformance test (record 0019).
 
-B2, the TLA+ model, run shrinking and the AliceMemory adapter for F8 are planned for later 0.2 releases. Record 0020 defines the scripted DBOS baseline B2. Its implementation is scheduled for a later sprint. Receipt export is planned for v0.3.
+The TLA+ model, run shrinking and the AliceMemory adapter for F8 are planned for later 0.2 releases. Receipt export is planned for v0.3.
 
 ## Teams
 
@@ -27,7 +27,7 @@ B2, the TLA+ model, run shrinking and the AliceMemory adapter for F8 are planned
 | T1 Gateway | Gateway, state machine, recovery, grants, admin API | Recovery from a lost reply |
 | T2 Simulator, harness and faults | Simulator services, approvals service, tool contracts, effects ledger, the harness (scheduler, virtual clock, transports) and the fault scheduler | Purchase-order service with fault F2 |
 | T3 Evaluator | Property checks, metrics, report generator | Scoring for properties 1 and 5 |
-| T4 Agents and baselines | LangGraph agent, model adapter, B0, B1 in 0.2.0a1, B2 in a later 0.2 release | Agent completing demo 1 |
+| T4 Agents and baselines | LangGraph agent, model adapter, B0, B1 (added in 0.2.0a1), B2 (added in 0.2.0a2) | Agent completing demo 1 |
 | T5 Viewer and docs | Viewer, README, decision records | Run timeline |
 | T6 Red team (independent) | Held-out scenarios; reviews every claim in the report | 10 held-out scenarios |
 
