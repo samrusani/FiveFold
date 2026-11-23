@@ -1,6 +1,6 @@
 # 0022: Shrink a failing scripted run
 
-Status: Proposed
+Status: Accepted on 23 Nov 2026 by the maintainer
 Date: 2026-11-23
 Spec sections affected on acceptance: Playback and branching, Testing, Later releases
 
@@ -81,7 +81,7 @@ and points to ordinary playback. A separate, freshly scored scripted
 reproduction can be shrunk. B1, B2 and the split topology wait for
 separate verification of repeated candidates and their cleanup.
 
-Proposed interface `python -m fivefold.shrink --result FILE --scenario FILE
+The command is `python -m fivefold.shrink --result FILE --scenario FILE
 --out DIR`. Accept a registered run database through `--database NAME` in
 place of `--result`. Require the original scenario with its matching digest,
 the recorded model and run parameters, and the complete scored result.
@@ -100,15 +100,22 @@ new database or artifact identifiers. Leave the original run untouched.
 
 ### Cost and cleanup
 
-Start with a cap of 100 distinct search candidates and a 120 s wall-time
-budget. Include setup and cleanup in wall time and stop starting candidates
-when the budget is exceeded. Finish and clean up any candidate in progress.
+The default budget is 100 distinct search candidates. The same input and
+candidate budget always yield the same plan. A wall-time limit is optional
+and off by default. Include setup and cleanup in elapsed time. Check both
+limits at the same point, before starting a new distinct candidate. Once a
+candidate starts, finish it, apply its result and clean up its database.
+Wall time can only stop the search. It never changes which candidate is
+tried next or whether a candidate is accepted, so no exception to record
+0009 is needed.
+
 Reserve one final rerun to check the selected plan and save its evidence.
-On exhaustion, return the best verified plan with `budget_exhausted` and
-which work remains. Label elapsed time as a metric. A host pause can change
-where a wall-time-limited search stops. The plan, deterministic audit fields
-and record digests must agree when repeating the same completed search or
-stopping at the same candidate count (0009).
+On exhaustion, return the best verified plan. In `shrink.json`, record
+`budget_exhausted`, the number of distinct candidates tried and which work
+remains. Repeating a wall-time-limited search using that count as the
+candidate budget, with the wall-time limit off, yields the same plan. A
+count of zero returns the verified original plan. Label elapsed time as a
+metric.
 
 Create each candidate as a fresh copy of the migrated template. Use a
 unique database name, refuse taken names and do not request replacement.
@@ -145,9 +152,9 @@ the minimum D + 1 ms. The prototype did not change occurrences.
 
 | Input | Shrunk plan | Delta debugging, fresh candidates / calls / time | Hypothesis, fresh candidates / calls / time |
 | --- | --- | ---: | ---: |
-| F2 and harmless F7 | F2 | 3 / 3 / 1.825–2.129 s | 3 / 5 / 2.655–2.989 s |
-| F2 | F2 | 1 / 1 / 0.854–1.173 s | 1 / 4 / 0.971–1.268 s |
-| F5 beyond deadline and harmless F7 | F5, reduced from 20,000 to 10,001 ms | 4 / 4 / 3.732–4.302 s | 3 / 5 / 4.589–5.037 s |
+| F2 and harmless F7 | F2 | 3 / 3 / 1.825 to 2.129 s | 3 / 5 / 2.655 to 2.989 s |
+| F2 | F2 | 1 / 1 / 0.854 to 1.173 s | 1 / 4 / 0.971 to 1.268 s |
+| F5 beyond deadline and harmless F7 | F5, reduced from 20,000 to 10,001 ms | 4 / 4 / 3.732 to 4.302 s | 3 / 5 / 4.589 to 5.037 s |
 
 Search time includes creating, executing, reading and dropping candidate
 databases on a local PostgreSQL 16 instance. Calls include cache hits.
@@ -182,7 +189,9 @@ Hypothesis is already a development dependency.
   candidate audit fields. Repeat tests compare the selected run's records
   after removing the ordinary wall-clock fields.
 - Tests cover a taken name, cleanup after a failed candidate, no writes
-  to the original run, and a budget stop with a verified candidate.
+  to the original run, and a budget stop with a verified plan. They also
+  replay a wall-time stop with its recorded candidate count and check
+  that it returns the same plan.
 - The search may retain a fault whose removal only works in combination
   with other changes. It reports the reductions tried.
 
