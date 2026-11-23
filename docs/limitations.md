@@ -165,9 +165,17 @@ attempts and B1's unlimited retries. See [record 0020](adr/0020-dbos-baseline.md
 - One known source of nondeterminism remains: LangGraph's retry backoff sleeps in wall time, with jitter from the global random generator. It changes wall-clock metrics only (0008, 0009).
 - The determinism contract covers the inproc topology only. The split topology runs the gateway, the simulator and PostgreSQL as separate services, for people who bring their own agent. It is not deterministic: its virtual clock follows the host's monotonic clock, though faults still fire on counters (0009).
 
+## The bounded gateway model
+
+The TLA+ model checks I1 to I7, append-only history and deadlocks for G2 across C0 to C3. Both profiles model one intent, up to one gateway crash and up to two attempts per action. CI explores one action and up to one C1 status probe. Nightly allows two probes. It explores a second action after an approval denial in a run with no earlier crash, sampled status read, change to authority or stale basis. The second action can use the same or different arguments and can dispatch. The model checks the disposition for both argument forms when an intent is held. [Record 0021](adr/0021-tla-gateway-model.md)
+
+An action can record only one effect ID. The modeled destination can commit two distinct effects at C0 or C1. At C1, a status answer can list both effects or falsely show a settled empty outcome. The gateway's report check uses the evidence it has recorded. The evaluator's five properties use the simulator's separate evidence.
+
+The search covers the modeled bounds. It does not prove safety for longer runs, liveness, the evaluator's five properties or any real service. It abstracts the final approval poll, virtual deadlines, faults and destination behaviour. The in-process and PostgreSQL tests exercise exact fault points and timings, row locking and transactions. G1, the baselines, agent strategy and transport implementation are outside the model.
+
 ## Known limits
 
-The 0.2.0a2 pre-release ships B1, B2 and the MCP lost-reply conformance test. The TLA+ model, run shrinking and F8 are planned for later 0.2 releases. [Roadmap](plan.md#roadmap)
+The 0.2.0a2 pre-release ships B1, B2 and the MCP lost-reply conformance test. The repository checks the TLA+ model for a later 0.2 release. Run shrinking and F8 are planned for later 0.2 releases. [Roadmap](plan.md#roadmap)
 
 1. **Race windows at C0 to C2.** G2 checks the approval and the inputs, then sends, and the destination commits later. A revocation or a price change in between lets the order commit on dead authority or a stale price. So G2 fails property 2 under F6 late, and property 3 under F7 late, `price_up`, at C0 to C2, by design ([plan](plan.md), Risks; 0002, rule 21; 0006). C3 closes both windows in the simulator, whose C3 destination checks the basis and the approval atomically at commit (0005). A real destination closes them only if it does the same. One that checks versions only, as with an ETag, leaves the authority race open (0005, Alternatives considered).
 2. **G2's documented limits.** Record 0006 lists the G2 cells that fail or stay unresolved by design. The failing properties are those of dev-001, whose budget covers one order but not two; another scenario can fail a different set.
