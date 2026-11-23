@@ -355,7 +355,7 @@ Detail: 0009, 0018 and 0020.
 - **Branch point:** model calls are the only points where the model can switch, so the branch point K counts them, in the order the cassette and `harness.model_call` number them, from 0 to the cassette's length. The branch adapter serves the parent's first K calls with the replay's checks, then hands every later call to the new model. A live one needs the flag, spend cap and price file of any live run. Every call takes `think_ms` once. A branch that asks for fewer than K calls fails, as a replay does.
 - **Branch run:** it runs its parent's run (the same scenario, configuration, contract level, seed, fault plan and workers) in a database of its own. Its run id is the parent's with `.branch-K` added, such as `dev-001-single-po.G2.C2.7.branch-4`. `harness.run` records `parent_run_id`, `branch_point` (K), the adapter and name of the new model, and the digest of the branch's own cassette. `harness.model_call` logs every call under the new model's name, the replayed calls included.
 - **Branch cassette:** it holds all the branch's calls, the replayed ones included, each hashed with the new model, and its header names the parent's run id and the branch point. The cassettes of other runs leave both fields out, so they read as before, and the format stays `fivefold-cassette/1`. `play` replays a branch's cassette like any other.
-- **Run shrinking (later v0.2 release, record 0022):** find the smallest verified fault plan within the search budget for a scored, in-process scripted B0, G1 or G2 run. A candidate must return `fail` with the same failing properties and the same set of `(property, reason code, intent ID)` triples. Try candidates in a fixed order, each in a fresh database. The default budget is 100 distinct candidates. An optional wall-time limit stops the search between candidates. `shrink.json` records `budget_exhausted` and the count reached. Repeating the search with that candidate budget and no wall-time limit yields the same plan.
+- **Run shrinking (record 0022):** `python -m fivefold.shrink` finds the smallest verified fault plan within the search budget for a scored, in-process scripted B0, G1 or G2 run. A candidate must return `fail` with the same failing properties and the same set of `(property, reason code, intent ID)` triples. Try candidates in a fixed order, each in a fresh database. The default budget is 100 distinct candidates. An optional wall-time limit stops the search between candidates. `shrink.json` records `budget_exhausted` and the count reached. Repeating the search with that candidate budget and no wall-time limit yields the same plan. [Walkthrough](shrinking.md)
 
 ## Testing
 
@@ -381,7 +381,7 @@ Detail: 0009, 0018 and 0020.
 
 ## Later releases
 
-- The repository checks the TLA+ model for a later v0.2 release. Run shrinking (record 0022) and F8 are planned for later v0.2 releases.
+- The repository checks the TLA+ model and implements run shrinking (record 0022) for a later v0.2 release. F8 is planned for a later v0.2 release.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
 ## Repo layout
