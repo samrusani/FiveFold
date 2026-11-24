@@ -56,6 +56,9 @@ and rereads. A late relevant correction can still commit on stale input
 at C0 to C2. At C3 the destination catches it at commit. Every harmless
 case passes. F8 uses a fixed in-process plan. [Record 0023](adr/0023-memory-correction.md)
 
+The [AliceMemory guide](alicememory.md) shows how to run the optional
+exercise on a disposable local instance.
+
 ## How the outcomes are tested
 
 Every expected cell is a test, run from its committed seed. Record 0006 fixes no G1 outcome, so G1's cells come from its first runs, and record 0013 settles two of F10's. Hypothesis checks invariants I1 to I7 on the gateway's state machine, and on full runs of dev-001 with random fault plans (`{random: {from: [...], max: N}}`, record 0006) in B0, G1 and G2 at every contract level: 20 runs in CI and 100 nightly.

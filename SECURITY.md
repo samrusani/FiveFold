@@ -18,7 +18,7 @@ Do not open a public issue, pull request or discussion about a vulnerability bef
 | --- | --- |
 | `main` | Yes |
 | The latest full release (`0.1.2`) | Yes |
-| The current pre-release (`0.2.0a3`) | Yes |
+| The current pre-release (`0.2.0a4`) | Yes |
 | Older releases and pre-releases | No |
 
 ## Scope
