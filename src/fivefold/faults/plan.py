@@ -116,6 +116,8 @@ class PlannedFault(BaseModel):
             raise ValueError(f"{self.fault} cannot be injected by this build yet")
         if self.at.point not in kind.points:
             raise ValueError(f"{self.fault} does not fire at {self.at.point} (0006)")
+        if self.fault is FaultId.F8 and self.at.occurrence != 1:
+            raise ValueError("F8 fires at occurrence 1 (0023)")
         unknown = sorted(set(self.params) - set(kind.params) - set(kind.seeded))
         if unknown:
             raise ValueError(f"{self.fault} has no parameters {unknown}")
@@ -177,6 +179,8 @@ def parse_plan(entries: Sequence[Mapping[str, Any]]) -> tuple[PlannedFault, ...]
     faults with the same trigger.
     """
     plan = tuple(PlannedFault.model_validate(entry) for entry in entries)
+    if sum(entry.fault is FaultId.F8 for entry in plan) > 1:
+        raise ValueError("a plan can contain only one F8 correction (0023)")
     crashes: dict[_TriggerKey, PlannedFault] = {}
     for planned in plan:
         if planned.kind.action is not Action.KILL:
@@ -346,6 +350,7 @@ def drawable_faults(*, scenario: Scenario, config: str, contract: Contract) -> t
         fault
         for fault in FaultId
         if fault in BUILT
+        and fault is not FaultId.F8
         and _choices(BUILT[fault], scenario=scenario, config=config, contract=contract)[0]
     )
 
@@ -363,6 +368,9 @@ def draw_plan(
     choices: dict[FaultId, list[PlannedFault]] = {}
     refused: list[str] = []
     for fault in random.faults:
+        if fault is FaultId.F8:
+            refused.append("F8 needs a fixed plan (0023)")
+            continue
         kind = BUILT.get(fault)
         if kind is None:
             refused.append(f"{fault} cannot be injected by this build yet")
@@ -519,7 +527,9 @@ class FaultInjector:
         self._plan = tuple(plan)
         self._counts = [0] * len(self._plan)
 
-    def at(self, point: str, fields: Mapping[str, object]) -> list[Fired]:
+    def at(
+        self, point: str, fields: Mapping[str, object], *, approval_status: object = None
+    ) -> list[Fired]:
         """Report reaching `point` with an event's `fields`; return the faults that fire.
 
         A match compares each of its fields with the event's, as text.
@@ -530,6 +540,12 @@ class FaultInjector:
         for index, planned in enumerate(self._plan):
             if planned.at.point != point:
                 continue
+            if planned.fault is FaultId.F8:
+                if point == "net.agent_sim.answer":
+                    if fields.get("api") != APPROVAL_REQUEST or approval_status != "approved":
+                        continue
+                elif fields.get("api") != Operation.SUBMIT_PURCHASE_ORDER:
+                    continue
             if any(str(fields.get(key)) != str(value) for key, value in planned.at.match.items()):
                 continue
             self._counts[index] += 1

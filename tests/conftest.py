@@ -102,6 +102,35 @@ def db_prefix() -> str:
     return DB_PREFIX
 
 
+@pytest.fixture
+def assert_f8_records() -> Callable[[str, str | None], None]:
+    """Assert that a cell corrected one memory once and committed one effect."""
+
+    def check(dsn: str, variant: str | None) -> None:
+        assert variant is not None
+        with psycopg.connect(dsn) as conn:
+            fired = conn.execute(
+                "SELECT fault, variant, occurrence FROM harness.fault_log"
+            ).fetchall()
+            assert fired == [("F8", variant, 1)]
+            rows = conn.execute(
+                "SELECT version, value, cause, cause_actor FROM sim.fact_version"
+                " WHERE key = 'memory/S-1/W-100' ORDER BY version"
+            ).fetchall()
+            assert conn.execute("SELECT count(*) FROM sim.effect").fetchone() == (1,)
+        first, second = rows
+        assert (first[0], first[2], first[3]) == (1, "initial", None)
+        assert (second[0], second[2], second[3]) == (2, "control", "fault-plan")
+        assert first[1]["order_channel"] == "edi"
+        if variant.endswith("_relevant"):
+            assert second[1] == {**first[1], "order_channel": "portal"}
+        else:
+            assert second[1]["order_channel"] == "edi"
+            assert second[1]["notes"] != first[1]["notes"]
+
+    return check
+
+
 @pytest.fixture(scope="session")
 def admin_dsn() -> Iterator[str]:
     """The admin connection string, after the component roles and a fresh run registry are

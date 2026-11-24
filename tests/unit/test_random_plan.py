@@ -40,7 +40,7 @@ HUMAN = load_scenario_file(DEV_002)
 """dev-002: dev-001 with an order above the auto-approval threshold, so a human approves."""
 
 SEEDS = range(200)
-EVERY = [str(fault) for fault in BUILT]
+EVERY = [str(fault) for fault in BUILT if fault is not FaultId.F8]
 """Every fault this build can inject."""
 
 
@@ -289,8 +289,8 @@ def test_b0s_early_f6_and_f7_fire_only_where_the_request_answer_holds_the_approv
 # Refusals ----------------------------------------------------------------------------------
 
 
-def test_a_fault_this_build_cannot_inject_is_refused_in_one_line() -> None:
-    with pytest.raises(ValueError, match="F8 cannot be injected by this build yet") as refused:
+def test_f8_is_refused_in_a_random_plan_in_one_line() -> None:
+    with pytest.raises(ValueError, match="F8 needs a fixed plan") as refused:
         drawn(random("F2", "F8"), 7)
     assert "\n" not in str(refused.value)
 
@@ -333,9 +333,10 @@ def test_f7_is_refused_where_no_intent_orders_from_a_quote(dev_data: dict[str, A
 
 
 def test_the_faults_a_random_plan_can_draw_in_dev_001() -> None:
-    """F10 changes status answers, so it needs C1, and G1 never asks for one (0008). F8 is
-    not built. Every other fault can be drawn everywhere."""
-    others = [fault for fault in FaultId if fault in BUILT and fault is not FaultId.F10]
+    """F10 needs C1 and a status probe. F8 only joins fixed plans. All other faults draw."""
+    others = [
+        fault for fault in FaultId if fault in BUILT and fault not in (FaultId.F8, FaultId.F10)
+    ]
     for config, contract in itertools.product(CONFIGS, Contract):
         found = drawable_faults(scenario=DEV, config=config, contract=contract)
         with_f10 = contract is Contract.C1 and config != "G1"

@@ -296,7 +296,8 @@ class Transport:
         fields = {"api": api, "tool": api, "answer": answer_class, "intent_id": intent_id}
         dropped = False
         copies: list[Fired] = []
-        for fired in self._faults.at(point, fields):
+        approval_status = envelope.body.get("status") if isinstance(envelope.body, dict) else None
+        for fired in self._faults.at(point, fields, approval_status=approval_status):
             action = fired.planned.kind.action
             if action is Action.DUPLICATE:
                 copies.append(fired)

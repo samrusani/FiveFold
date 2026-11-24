@@ -15,6 +15,7 @@ The variants of a cell:
   simulator (0006).
 - F7 names its timing and its change, as F6's timing then `price_up` or `harmless`:
   `early_price_up`, `late_price_up`, `early_harmless` or `late_harmless`.
+- F8 names its timing and whether the memory correction is relevant or harmless (0023).
 - F12 names the hop it drops the order on: `gw_sim` or `agent_gw` in G modes, `agent_sim`
   in B0, its B0 equivalent (0006).
 - F1 is `a` or `b`: in G modes the gateway crashes after the order's dispatch check (`a`)
@@ -192,6 +193,16 @@ def cell_plan(cell: Cell) -> list[dict[str, Any]]:
                 "at": {"point": point, "match": match, "occurrence": 1},
             }
         ]
+    if cell.fault == "F8":
+        timing, _, _ = str(cell.variant).partition("_")
+        point, match = _timing(cell, config, timing)
+        return [
+            {
+                "fault": "F8",
+                "variant": cell.variant,
+                "at": {"point": point, "match": match, "occurrence": 1},
+            }
+        ]
     if cell.fault == "F12":
         if cell.variant not in F12_HOPS.get(config, frozenset()):
             raise ValueError(f"F12 cannot drop the order on {cell.variant!r} in {cell.config}")
@@ -297,7 +308,7 @@ def cell_scenario(cell: Cell, scenario: Scenario) -> Scenario:
 
 
 def _timing(cell: Cell, config: str, timing: str) -> tuple[str, dict[str, str]]:
-    """Where an F6 or F7 cell fires: its point and match."""
+    """Where an F6, F7 or F8 cell fires: its point and match."""
     points = TIMINGS.get(timing)
     if points is None or config not in points:
         raise ValueError(f"{cell.fault} cannot fire {timing!r} in {cell.config}")

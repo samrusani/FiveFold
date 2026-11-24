@@ -36,7 +36,7 @@ POINTS = frozenset(
 
 
 class FaultId(StrEnum):
-    """The faults in the catalog (0006). F8 is deferred to v0.2."""
+    """The faults in the catalog (0006, 0023)."""
 
     F1 = "F1"
     F2 = "F2"
@@ -66,6 +66,8 @@ class Action(StrEnum):
     CHANGE_QUOTE = "change_quote"
     """Change the quote the action or the message cites (F7): its price, or only its
     lead time in the `harmless` variant."""
+    CHANGE_MEMORY = "change_memory"
+    """Correct the ordering channel or notes of the order's memory (F8)."""
     START_WORKER = "start_worker"
     """Start another agent worker on the same task (F9). In the `different_args`
     variant, it chooses the second-cheapest acceptable option."""
@@ -207,6 +209,20 @@ BUILT: Mapping[FaultId, FaultKind] = {
         variants={"price_up": None, "harmless": None},
         minimums={"percent": 1},
     ),
+    FaultId.F8: FaultKind(
+        FaultId.F8,
+        "Memory correction after a proposal",
+        AUTHORITY_POINTS,
+        Action.CHANGE_MEMORY,
+        {},
+        variants={
+            "early_relevant": EARLY_POINTS,
+            "early_harmless": EARLY_POINTS,
+            "late_relevant": LATE_POINTS,
+            "late_harmless": LATE_POINTS,
+        },
+        variant_required=True,
+    ),
     FaultId.F12: FaultKind(
         FaultId.F12,
         "Request lost before it reaches the destination",
@@ -247,7 +263,7 @@ BUILT: Mapping[FaultId, FaultKind] = {
         variant_required=True,
     ),
 }
-"""The faults this build can inject, with the points 0006 allows for each."""
+"""The faults this build can inject, with the points 0006 and 0023 allow for each."""
 
 
 GATEWAY_ONLY_PREFIXES = ("gw.", "net.agent_gw.", "net.gw_sim.")

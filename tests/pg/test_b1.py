@@ -17,12 +17,15 @@ from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import InprocRun, RunSpec
 from fivefold.harness.temporal_worker import TemporalHost
+from fivefold.paths import DEV_MEMORY_PO, EXPECTED_F8
 from fivefold.recorder.cassette import sha256
 from fivefold.recorder.playback import RECORDS, compare, records
 
 pytestmark = pytest.mark.pg
 EXPECTED = load_expected()
 CELLS = tuple(cell for cell in EXPECTED.cells if cell.config == "B1")
+F8 = load_expected(EXPECTED_F8)
+F8_CELLS = tuple(cell for cell in F8.cells if cell.config == "B1")
 # CI always runs every cell, plus both host pauses for these retry/concurrency paths.
 DETERMINISM_CELLS = {
     "F2-C2-B1",
@@ -60,17 +63,24 @@ async def pause_activity(treatment: str, activity_id: str, attempt: int) -> None
         await asyncio.sleep(0.150)
 
 
-@pytest.mark.parametrize("cell", CELLS, ids=lambda cell: cell.name)
+@pytest.mark.parametrize("cell", CELLS + F8_CELLS, ids=lambda cell: cell.name)
 def test_b1_cell(
-    run_database: Callable[[str], str], cell: Cell, temporal_host: TemporalHost
+    run_database: Callable[[str], str],
+    cell: Cell,
+    temporal_host: TemporalHost,
+    assert_f8_records: Callable[[str, str | None], None],
 ) -> None:
-    scenario = cell_scenario(cell, load_scenario_file(DEV_001))
+    memory = cell.fault == "F8"
+    scenario = cell_scenario(cell, load_scenario_file(DEV_MEMORY_PO if memory else DEV_001))
+    expected = F8 if memory else EXPECTED
     plan = cell_plan(cell)
-    spec = RunSpec(scenario, "B1", cell.contract, EXPECTED.seed, plan=plan)
+    spec = RunSpec(scenario, "B1", cell.contract, expected.seed, plan=plan)
     if os.environ.get("FIVEFOLD_B1_REPEATS") == "20":
         treatments = ["normal"] * 10 + ["async"] * 5 + ["blocked"] * 5
     elif cell.name in DETERMINISM_CELLS:
         treatments = ["normal", "async", "blocked"]
+    elif memory:
+        treatments = ["normal", "normal"]
     else:
         treatments = ["normal"]
 
@@ -92,9 +102,11 @@ def test_b1_cell(
         for entry in plan:
             planned = (entry["fault"], entry.get("variant"), entry["at"]["point"])
             assert planned in fired, f"{cell.name}: {planned} never fired"
+        if memory:
+            assert_f8_records(dsn, cell.variant)
         evaluation = result.evaluation
         assert evaluation is not None
-        assert tuple(evaluation.evaluated) == EXPECTED.evaluated
+        assert tuple(evaluation.evaluated) == expected.evaluated
         failing = tuple(row.property for row in evaluation.properties if row.verdict == "fail")
         assert (str(evaluation.verdict), failing) == (cell.verdict, cell.failing)
         trace = records(dsn)

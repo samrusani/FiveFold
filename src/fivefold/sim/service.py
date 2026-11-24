@@ -846,6 +846,12 @@ class Control:
         version, value = latest
         return FactRead(key=key, version=version, data=json_object(value))
 
+    def correct_memory(
+        self, key: str, changes: Mapping[str, str], *, actor: str, vt: int
+    ) -> FactRead:
+        """Correct a memory through the run's reference memory backend (0023)."""
+        return self._sim.memory.correct(key, changes, actor=actor, vt=vt)
+
     def pending_approvals(self) -> list[ApprovalAnswer]:
         """Requests waiting for the scripted approver, in the order they were filed."""
         sim = self._sim
