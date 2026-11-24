@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0a4 (24 Nov 2026)
+
+### Added
+
+- F8 tests a memory correction after a proposal on `dev-001-memory-po` (record 0023). The scenario uses in-repo memory and checks 80 expected outcomes across five configurations and four destination contract levels.
+- Run the optional AliceMemory exercise with `python -m fivefold.harness.alicememory`. It runs only with `FIVEFOLD_ALICEMEMORY=1` against an operator's disposable local instance and never in CI. [AliceMemory guide](docs/alicememory.md) · [Record 0023](docs/adr/0023-memory-correction.md)
+
+### Docs
+
+- The [fault catalog](docs/faults.md#f8-in-the-memory-scenario) describes the four F8 variants and their fault points. The [study guide](docs/studies.md) shows how to run the matrix, and the [limitations](docs/limitations.md#known-limits) explain when a late correction can still leave a stale write.
+
 ## 0.2.0a3 (24 Nov 2026)
 
 ### Added
