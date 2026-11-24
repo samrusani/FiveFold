@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0a3 (24 Nov 2026)
+
+### Added
+
+- Run shrinking. Use `python -m fivefold.shrink` to find and verify a smaller fault plan for a scored, in-process scripted B0, G1 or G2 failure (record 0022).
+- A bounded TLA+ model of the G2 gateway. CI and `make check` run the bounded profile. The model and TLC are development tools outside the installed package (record 0021).
+
+### Docs
+
+- Added the [run-shrinking walkthrough](docs/shrinking.md) and documented the [bounds of the gateway model](docs/limitations.md#the-bounded-gateway-model). F8 remains planned for a later 0.2 release under accepted record 0023.
+
 ## 0.2.0a2 (23 Nov 2026)
 
 ### Added
