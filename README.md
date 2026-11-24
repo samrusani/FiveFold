@@ -32,7 +32,7 @@ No model grades the runs, and a seed with its recorded model replies reproduces 
 
 - **The agent** is a LangGraph agent on a scripted model, which needs no API key, or on a live model. You can also bring your own agent over MCP.
 - **Three configurations** put something different between the agent and the procurement system: nothing (B0), an approval gate (G1) or the FiveFold gateway (G2).
-- **The harness** runs everything on one virtual clock with seeded randomness, and fires eleven kinds of failure at named points, so every rerun is the same run. [The fault catalog](docs/faults.md) lists them, with the four contract levels a destination can offer.
+- **The harness** runs everything on one virtual clock with seeded randomness, and fires twelve kinds of failure at named points, so every rerun is the same run. [The fault catalog](docs/faults.md) lists them, with the four contract levels a destination can offer.
 - **The evaluator** scores the five checks from the simulator's ledger and the harness's logs, and writes CSV and Markdown reports.
 
 ## Try it in two minutes
@@ -103,7 +103,7 @@ Claude Sonnet 5.5 and GPT-6.1 Sol each ran every fault cell three times, 741 epi
 4. **Sometimes the honest answer is "unknown".** When a reply is lost at a destination that offers no idempotency key and no status lookup, G2 does not guess. It escalates to a human, and the agent's report says `unknown`. Behind G2, 12 episodes per model ended with an honest `unknown`.
 5. **The destination's contract sets the ceiling.** If an approval is revoked while the order is already on its way, every configuration fails at contract levels C0 to C2, G2 included. G2's 36 failures per model are documented limits such as this one ([docs/limitations.md](docs/limitations.md)).
 
-The scripted agent's 379 expected outcomes are checked by CI on every change. The live study's results and recordings are in [results/study](results/study/README.md).
+CI checks 379 expected outcomes on dev-001 and 80 F8 outcomes on the memory scenario. The live study's results and recordings are in [results/study](results/study/README.md).
 
 ## Who it's for
 
@@ -117,7 +117,7 @@ The scripted agent's 379 expected outcomes are checked by CI on every change. Th
 | Page | What it covers |
 | --- | --- |
 | [The twenty-minute tour](docs/tour.md) | Every demo in B0, G1 and G2, a small study with its report, B0 beside B1, recorded playback and branching |
-| [Faults, contract levels and configurations](docs/faults.md) | The eleven faults, what a destination can offer, and how the 379 expected outcomes are tested |
+| [Faults, contract levels and configurations](docs/faults.md) | The twelve faults, what a destination can offer, and how both expected-outcome matrices are tested |
 | [Viewer](docs/viewer.md) | Each run's timeline and scorecard, and B0 beside G2 on the same seed |
 | [Studies and reports](docs/studies.md) | Matrices of runs, CSV and Markdown reports, cost per passing run and recovery latency |
 | [Run shrinking](docs/shrinking.md) | Find and verify a smaller fault plan for a failing scripted run |
@@ -138,7 +138,7 @@ Version 0.1.2 is the latest full release. [PyPI](https://pypi.org/project/fivefo
 
 The 0.2.0a3 pre-release adds run shrinking and the bounded TLA+ gateway model checked in CI. It includes B1, the scripted Temporal baseline, B2, the scripted DBOS baseline, and the MCP lost-reply conformance test. Install it with `pip install --pre fivefold` or pin it with `pip install fivefold==0.2.0a3`. [Run-shrinking walkthrough](docs/shrinking.md) · [MCP conformance walkthrough](docs/conformance.md)
 
-F8 (a memory correction after a proposal) is planned for a later 0.2 release. [Milestones](docs/plan.md)
+F8 tests a memory correction after a proposal in a dedicated in-process scenario. [Fault catalog](docs/faults.md#f8-in-the-memory-scenario)
 
 The [full study and its raw data](docs/report.md) are available.
 
