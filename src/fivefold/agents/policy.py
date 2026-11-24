@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from fivefold.domain.rules import Operation, budget_key, inventory_key, quote_key
+from fivefold.domain.rules import Operation, dependencies
 from fivefold.domain.scenario import Intent, PurchaseOrderAccept, ReservationAccept
 
 WAIT_MS = 60_000
@@ -108,16 +108,21 @@ _Step = Generator[ToolCall, Result, Any]
 
 
 def scripted_policy(
-    intents: Sequence[Intent], *, mode: Mode, rank: int = 0, max_wait_ms: int = WAIT_MS
+    intents: Sequence[Intent],
+    *,
+    mode: Mode,
+    rank: int = 0,
+    max_wait_ms: int = WAIT_MS,
+    memory_enabled: bool = False,
 ) -> Policy:
     """The policy for one worker, with its scenario limit and option rank."""
     wait_ms = min(WAIT_MS, max_wait_ms)
     outcomes: dict[str, _Outcome] = {}
     for intent in intents:
         if mode is Mode.GATEWAY:
-            outcomes[intent.id] = yield from _gateway_intent(intent, rank, wait_ms)
+            outcomes[intent.id] = yield from _gateway_intent(intent, rank, wait_ms, memory_enabled)
         else:
-            outcomes[intent.id] = yield from _baseline_intent(intent, rank, wait_ms)
+            outcomes[intent.id] = yield from _baseline_intent(intent, rank, wait_ms, memory_enabled)
     if mode is Mode.GATEWAY:
         for outcome in outcomes.values():
             yield from _refresh(outcome)
@@ -132,7 +137,7 @@ def _is_fact(result: Result) -> bool:
     return "read_id" in result or result.get("answer") == "fact"
 
 
-def _read_and_choose(intent: Intent, rank: int) -> _Step:
+def _read_and_choose(intent: Intent, rank: int, memory_enabled: bool) -> _Step:
     """Read what the intent depends on and choose an option, or return None."""
     accept = intent.accept
     if isinstance(accept, ReservationAccept):
@@ -181,18 +186,24 @@ def _read_and_choose(intent: Intent, rank: int) -> _Step:
         "currency": accept.currency,
         "cost_center": accept.cost_center,
     }
-    return _Choice(args, (quote, budget))
+    reads: tuple[Result, ...] = (quote, budget)
+    if memory_enabled:
+        memory = yield ToolCall("get_memory", {"supplier_id": supplier_id, "sku": accept.sku})
+        if not _is_fact(memory) or memory["data"].get("order_channel") not in ("edi", "portal"):
+            return None
+        reads += (memory,)
+    return _Choice(args, reads)
 
 
 # G modes ---------------------------------------------------------------------------------
 
 
-def _gateway_intent(intent: Intent, rank: int, wait_ms: int) -> _Step:
+def _gateway_intent(intent: Intent, rank: int, wait_ms: int, memory_enabled: bool) -> _Step:
     """Steps 1, 3 and 4 for one intent, through the gateway's tools."""
     actions: list[str] = []
     stale_retries = failure_retries = reread_retries = 0
     while True:
-        choice = yield from _read_and_choose(intent, rank)
+        choice = yield from _read_and_choose(intent, rank, memory_enabled)
         if choice is None:
             return _Outcome("not_done", note="No acceptable option fits.", action_ids=actions)
         cited = [read["read_id"] for read in choice.reads]
@@ -321,25 +332,18 @@ def _covers(scope: Mapping[str, object], wanted: Mapping[str, object]) -> bool:
     return True
 
 
-def _basis(intent: Intent, choice: _Choice) -> dict[str, int]:
+def _basis(intent: Intent, choice: _Choice, memory_enabled: bool) -> dict[str, int]:
     """The versions of the reads the write relies on: its dependencies (0004)."""
-    args = choice.args
-    if intent.operation is Operation.RESERVE_INVENTORY:
-        keys = [inventory_key(str(args["warehouse_id"]), str(args["sku"]))]
-    else:
-        keys = [
-            quote_key(str(args["supplier_id"]), str(args["sku"])),
-            budget_key(str(args["cost_center"])),
-        ]
-    return {key: int(read["version"]) for key, read in zip(keys, choice.reads, strict=True)}
+    declared = dependencies(intent.operation, choice.args, memory_enabled=memory_enabled)
+    return {dep.key: int(read["version"]) for dep, read in zip(declared, choice.reads, strict=True)}
 
 
-def _baseline_intent(intent: Intent, rank: int, wait_ms: int) -> _Step:
+def _baseline_intent(intent: Intent, rank: int, wait_ms: int, memory_enabled: bool) -> _Step:
     """Steps 1 to 4 for one intent, against the simulator's API."""
     approval: tuple[str, dict[str, str | int]] | None = None
     stale_retries = failure_retries = 0
     while True:
-        choice = yield from _read_and_choose(intent, rank)
+        choice = yield from _read_and_choose(intent, rank, memory_enabled)
         if choice is None:
             return _Outcome("not_done", note="No acceptable option fits.")
         wanted = _scope(intent.operation, choice.args)
@@ -364,7 +368,7 @@ def _baseline_intent(intent: Intent, rank: int, wait_ms: int) -> _Step:
             {
                 "intent_id": intent.id,
                 "approval_id": approval[0],
-                "basis": _basis(intent, choice),
+                "basis": _basis(intent, choice, memory_enabled),
                 **choice.args,
             },
         )

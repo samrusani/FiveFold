@@ -103,6 +103,7 @@ class ApiName(StrEnum):
     """The simulator's API calls (0008, tool surfaces)."""
 
     GET_QUOTE = "get_quote"
+    GET_MEMORY = "get_memory"
     LIST_SUPPLIERS = "list_suppliers"
     GET_BUDGET = "get_budget"
     GET_INVENTORY = "get_inventory"
@@ -151,6 +152,14 @@ class GetQuote(ApiModel):
     """Read a supplier's quote for a sku: `quote/{supplier_id}/{sku}`."""
 
     api: ClassVar[ApiName] = ApiName.GET_QUOTE
+    supplier_id: Id
+    sku: Id
+
+
+class GetMemory(ApiModel):
+    """Read the remembered order channel for a supplier and sku (0023)."""
+
+    api: ClassVar[ApiName] = ApiName.GET_MEMORY
     supplier_id: Id
     sku: Id
 
@@ -498,6 +507,7 @@ class StatusAnswer(ApiModel):
 
 REQUESTS: dict[ApiName, type[ApiModel]] = {
     ApiName.GET_QUOTE: GetQuote,
+    ApiName.GET_MEMORY: GetMemory,
     ApiName.LIST_SUPPLIERS: ListSuppliers,
     ApiName.GET_BUDGET: GetBudget,
     ApiName.GET_INVENTORY: GetInventory,

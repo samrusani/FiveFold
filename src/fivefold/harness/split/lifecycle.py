@@ -143,6 +143,8 @@ def start_run(
     run yet. A failed start rolls back its directory and files."""
     scenario_text = scenario_path.read_text(encoding="utf-8")
     scenario = load_scenario(scenario_text)
+    if scenario.memory_enabled:
+        raise SplitRefused("the split topology does not support memory-enabled scenarios (0023)")
     entries = list(plan) if plan is not None else _plan_of(scenario)
     planned = parse_plan(entries)
     check_configuration(planned, gateway=config != "B0")

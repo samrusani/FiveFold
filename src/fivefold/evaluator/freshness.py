@@ -99,7 +99,11 @@ def check_inputs_still_fresh(records: RunRecords) -> PropertyResult:
     for effect in sorted(records.effects, key=lambda effect: effect.commit_seq):
         try:
             checks = check_basis(
-                effect.operation, effect.args, effect.basis, History(ledger, effect)
+                effect.operation,
+                effect.args,
+                effect.basis,
+                History(ledger, effect),
+                memory_enabled=records.scenario.memory_enabled,
             )
         except ValueError as error:
             raise RecordsError(f"the basis of {effect.effect_id}: {error}") from error

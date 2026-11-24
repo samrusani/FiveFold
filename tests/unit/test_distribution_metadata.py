@@ -23,6 +23,11 @@ def test_project_links_and_sdist_wheel_file_parity(tmp_path: Path) -> None:
     (sdist_wheel,) = from_sdist.glob("*.whl")
     with zipfile.ZipFile(direct_wheel) as first, zipfile.ZipFile(sdist_wheel) as second:
         assert set(first.namelist()) == set(second.namelist())
+        scenario = "dev-001-memory-po.yaml"
+        assert (
+            first.read(f"fivefold/_data/scenarios/dev/{scenario}")
+            == (root / "scenarios" / "dev" / scenario).read_bytes()
+        )
         (metadata_name,) = [
             name for name in first.namelist() if name.endswith(".dist-info/METADATA")
         ]

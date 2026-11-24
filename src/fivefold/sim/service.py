@@ -35,6 +35,7 @@ from fivefold.domain.api import (
     GetApprovalStatus,
     GetBudget,
     GetInventory,
+    GetMemory,
     GetOrderStatus,
     GetQuote,
     GetReservationStatus,
@@ -63,6 +64,7 @@ from fivefold.domain.authority import (
     scope_mismatches,
 )
 from fivefold.domain.contracts import Capability, ContractParams
+from fivefold.domain.memory import Memory
 from fivefold.domain.rules import (
     SUPPLIERS_KEY,
     FactKind,
@@ -73,6 +75,7 @@ from fivefold.domain.rules import (
     consequence_key,
     fact_kind,
     inventory_key,
+    memory_key,
     quote_key,
 )
 from fivefold.domain.scenario import FACT_MODELS, Authority, Scenario
@@ -207,7 +210,9 @@ class Simulator:
         try:
             row = self._conn.execute(
                 "SELECT scenario_id, task_id, capabilities, max_hop_latency_ms,"
-                " commit_deadline_ms, status_lag_ms, credentials, authority FROM sim.run"
+                " commit_deadline_ms, status_lag_ms, credentials, authority,"
+                " EXISTS (SELECT 1 FROM sim.fact_version WHERE version = 1 AND key LIKE 'memory/%')"
+                " FROM sim.run"
             ).fetchone()
             if row is None:
                 raise NotSetUp("the run database has no simulator run; call setup_run first")
@@ -223,10 +228,13 @@ class Simulator:
                 ),
             )
             self.authority = Authority.model_validate(row[7])
+            # Scenario validation requires memory facts and the dependency together.
+            self._memory_enabled = bool(row[8])
         except BaseException:
             self._conn.close()
             raise
         self.control = Control(self)
+        self.memory: Memory = _SimulatorMemory(self)
 
     @classmethod
     def setup(
@@ -288,6 +296,10 @@ class Simulator:
     def get_quote(self, request: GetQuote, *, caller: str, vt: int) -> FactRead | Refusal:
         """Serve a supplier's quote for a sku."""
         return self._read(quote_key(request.supplier_id, request.sku), caller=caller, vt=vt)
+
+    def get_memory(self, request: GetMemory, *, caller: str, vt: int) -> FactRead | Refusal:
+        """Serve the latest version of the supplier's memory for the sku."""
+        return self.memory.read(memory_key(request.supplier_id, request.sku), caller=caller, vt=vt)
 
     def list_suppliers(self, request: ListSuppliers, *, caller: str, vt: int) -> FactRead | Refusal:
         """Serve the supplier directory."""
@@ -598,7 +610,9 @@ class Simulator:
                     FailedCheck(check=CheckName.APPROVAL_USED, effect_id=approval.effect_id)
                 )
         history = History(ledger, write.received_seq)
-        for check in check_basis(write.operation, write.args, write.basis, history):
+        for check in check_basis(
+            write.operation, write.args, write.basis, history, memory_enabled=self._memory_enabled
+        ):
             if check.failure is not None:
                 failed.append(
                     FailedCheck(
@@ -728,6 +742,23 @@ class Simulator:
             )
 
 
+class _SimulatorMemory:
+    """Use the simulator's ordinary version and read records for memory."""
+
+    def __init__(self, simulator: Simulator) -> None:
+        self._sim = simulator
+
+    def read(self, key: str, *, caller: str, vt: int) -> FactRead | Refusal:
+        if fact_kind(key) is not FactKind.MEMORY:
+            raise ValueError(f"{key} is not a memory key")
+        return self._sim._read(key, caller=caller, vt=vt)
+
+    def correct(self, key: str, changes: Mapping[str, str], *, actor: str, vt: int) -> FactRead:
+        if fact_kind(key) is not FactKind.MEMORY:
+            raise ValueError(f"{key} is not a memory key")
+        return self._sim.control.change_fact(key, changes, actor=actor, vt=vt)
+
+
 class Control:
     """The harness's control interface: scripted humans and fault plans (0002, 0006).
 
@@ -767,7 +798,7 @@ class Control:
     def change_fact(
         self, key: str, changes: Mapping[str, str | int], *, actor: str, vt: int
     ) -> FactRead:
-        """Append a version of a quote, budget or stock with some fields changed (fault F7).
+        """Append a version of a fact with some fields changed (faults F7 and F8).
 
         The new version is caused by `actor`. It is not a read, so it is not logged as one.
         """

@@ -292,6 +292,8 @@ Dependency rules, shared by the gateway, the C3 destination and the evaluator (0
 
 For F8 in a later v0.2 release, `dev-001-memory-po` adds an exact `order_channel` dependency on `memory/{supplier_id}/{sku}` for the selected supplier and SKU. The simulator stores and serves memory as versioned facts and selects the extra dependency from the scenario (0023).
 
+Set `memory_dependency: memory_channel_unchanged` alongside initial `memory/{supplier_id}/{sku}` facts to enable the dependency for purchase orders. Each memory value has two text fields, `order_channel` and `notes`. The rule compares `order_channel` with the value read by the agent (0023).
+
 ## Fault catalog
 
 This table is a summary. 0006 is the full catalog: fault points, B0 equivalents, variants, parameters and expected outcomes.

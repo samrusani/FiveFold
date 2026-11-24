@@ -56,6 +56,7 @@ from fivefold.domain.api import (
     FactRead,
     GetBudget,
     GetInventory,
+    GetMemory,
     GetQuote,
     Id,
     ListSuppliers,
@@ -178,7 +179,11 @@ TOOLS: tuple[ToolDefinition, ...] = (
         FinalReport,
     ),
 )
-"""Every tool G modes expose, in `tools/list` order."""
+"""The tools every gateway scenario exposes, in `tools/list` order."""
+
+MEMORY_TOOL = ToolDefinition(
+    "get_memory", "Read the remembered order channel for a supplier and sku.", GetMemory
+)
 
 
 class ToolError(Exception):
@@ -246,6 +251,7 @@ class GatewayTools:
         task_id: str,
         intents: Mapping[str, str],
         timing: ToolTiming | None = None,
+        memory_enabled: bool = False,
     ) -> None:
         self._scheduler = scheduler
         self._store = store
@@ -255,6 +261,7 @@ class GatewayTools:
         self._task_id = task_id
         self._intents = dict(intents)
         self._timing = timing if timing is not None else ToolTiming()
+        self.memory_enabled = memory_enabled
         self._handlers: dict[str, Handler] = {
             "get_quote": self._read_with(GetQuote),
             "list_suppliers": self._read_with(ListSuppliers),
@@ -265,6 +272,8 @@ class GatewayTools:
             "get_action_status": self._status,
             "submit_final_report": self._report,
         }
+        if memory_enabled:
+            self._handlers[MEMORY_TOOL.name] = self._read_with(GetMemory)
 
     async def call(
         self,
@@ -329,7 +338,10 @@ class GatewayTools:
                 args=normal,
                 action_key=action_key(self._task_id, args.intent_id, operation, normal),
                 based_on=tuple(args.based_on),
-                dependencies=tuple(d.key for d in dependencies(operation, normal)),
+                dependencies=tuple(
+                    d.key
+                    for d in dependencies(operation, normal, memory_enabled=self.memory_enabled)
+                ),
             )
             outcome = self._store.propose(call, self._now, args=arguments)
             if isinstance(outcome, Refusal):

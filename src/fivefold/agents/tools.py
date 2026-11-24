@@ -43,6 +43,7 @@ from fivefold.domain.api import (
     GetApprovalStatus,
     GetBudget,
     GetInventory,
+    GetMemory,
     GetOrderStatus,
     GetQuote,
     GetReservationStatus,
@@ -164,6 +165,10 @@ BASELINE_TOOLS: tuple[_ApiTool, ...] = (
 )
 """B0's tools at every contract level (0008)."""
 
+MEMORY_TOOL = _ApiTool(
+    "get_memory", "Read the remembered order channel for a supplier and sku.", GetMemory
+)
+
 STATUS_TOOLS: tuple[_ApiTool, ...] = (
     _ApiTool("get_order_status", "Which purchase orders exist for an intent.", GetOrderStatus),
     _ApiTool(
@@ -180,9 +185,12 @@ def baseline_tools(
     *,
     worker: str,
     status: bool,
+    memory_enabled: bool = False,
 ) -> list[BaseTool]:
     """B0's tools for one agent worker; `status` adds C1's status tools."""
     tools = BASELINE_TOOLS + (STATUS_TOOLS if status else ())
+    if memory_enabled:
+        tools += (MEMORY_TOOL,)
     return [_baseline_tool(transport, scheduler, timeouts, spec, worker) for spec in tools]
 
 

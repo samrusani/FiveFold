@@ -29,12 +29,18 @@ from fivefold.gateway.store import ActionStore
 class RuleFreshness:
     """Checks an action's basis against facts now, for the dispatcher."""
 
-    def __init__(self, store: ActionStore) -> None:
+    def __init__(self, store: ActionStore, *, memory_enabled: bool = False) -> None:
         self._store = store
+        self._memory_enabled = memory_enabled
 
     def keys(self, action: Action) -> Sequence[str]:
         """The fact keys of the action's dependencies."""
-        return [d.key for d in dependencies(Operation(action.operation), action.args)]
+        return [
+            d.key
+            for d in dependencies(
+                Operation(action.operation), action.args, memory_enabled=self._memory_enabled
+            )
+        ]
 
     def check(self, action: Action, now: Mapping[str, FactNow], *, full: bool) -> BasisCheck:
         """The basis check; `full` adds the sufficient rules to the exact ones (I3)."""
@@ -45,6 +51,7 @@ class RuleFreshness:
             action.basis,
             history,
             exact_only=not full,
+            memory_enabled=self._memory_enabled,
         )
         exact = [r for r in results if r.dependency.kind is RuleKind.EXACT]
         sufficient = [r for r in results if r.dependency.kind is RuleKind.SUFFICIENT]

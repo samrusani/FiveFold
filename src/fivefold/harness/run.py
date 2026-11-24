@@ -297,6 +297,8 @@ class InprocRun:
         )
         gateway = spec.config in GATEWAY_CONFIGS
         self._tool_names = GATEWAY_TOOL_NAMES if gateway else BASELINE_TOOL_NAMES
+        if spec.scenario.memory_enabled:
+            self._tool_names |= {"get_memory"}
         self._closing: list[Any] = []
         self._last_write_answers: dict[tuple[str, str], int] = {}
         self._params: dict[str, object] = {
@@ -529,7 +531,7 @@ class InprocRun:
             self.scheduler,
             self.store,
             client,
-            RuleFreshness(self.store),
+            RuleFreshness(self.store, memory_enabled=scenario.memory_enabled),
             component=GATEWAY,
             timing=Timing(
                 approval_poll_ms=params.approval_poll_interval_ms,
@@ -548,6 +550,7 @@ class InprocRun:
             task_id=scenario.task_id,
             intents=intents,
             timing=ToolTiming(tool_wait_ms=params.tool_wait_ms, max_wait_ms=params.max_wait_ms),
+            memory_enabled=scenario.memory_enabled,
         )
         self.dispatcher.start()
 
@@ -686,6 +689,7 @@ class InprocRun:
                 self.timeouts,
                 worker=worker,
                 status=self.spec.contract.has(Capability.STATUS),
+                memory_enabled=scenario.memory_enabled,
             )
             graph = build_graph(
                 model,
@@ -866,9 +870,14 @@ class InprocRun:
             return self.scheduler.sleep(scenario.params.think_ms)
 
         def scripted(its_think: Think) -> BaseChatModel:
+            memory_options = {"memory_enabled": True} if scenario.memory_enabled else {}
             return ScriptedModel(
                 lambda: scripted_policy(
-                    scenario.intents, mode=mode, rank=rank, max_wait_ms=scenario.params.max_wait_ms
+                    scenario.intents,
+                    mode=mode,
+                    rank=rank,
+                    max_wait_ms=scenario.params.max_wait_ms,
+                    **memory_options,
                 ),
                 its_think,
             )
