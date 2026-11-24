@@ -1,6 +1,16 @@
 # Studies and reports
 
-`python -m fivefold.harness.study` runs the episodes of milestone M4. An episode is a cell of `faults/expected.yaml`, or a cell with no fault, run with one seed. By default the study runs every expected cell of dev-001, in B0, G1 and G2 at C0 to C3, once each, with the scripted model. Each episode runs in a fresh database, dropped once it ends.
+`python -m fivefold.harness.study` runs the episodes of milestone M4. An episode is an expected-outcome cell or a cell with no fault, run with one seed. By default the study runs the dev-001 cells in `faults/expected.yaml` for B0, G1 and G2 at C0 to C3, once each, with the scripted model. Each episode runs in a fresh database, dropped once it ends.
+
+To use the 80 F8 expectations in `faults/expected-f8.yaml`, select the memory
+scenario and all five configurations. B1 and B2 require their optional SDKs
+and B1 also uses the pinned Temporal CLI. [Fault catalog](faults.md#f8-in-the-memory-scenario)
+
+```sh
+uv run python -m fivefold.harness.study \
+  --scenario scenarios/dev/dev-001-memory-po.yaml \
+  --configs B0 B1 B2 G1 G2 --cells F8 --out f8-study
+```
 
 `--cells` takes `all`, `none` (no fault), a fault (`F2`), a fault and variant (`F11-after_tool_call`) or a cell (`F2-C2-G2`). `--configs` and `--contracts` narrow the matrix. `--episodes N` runs each cell with the seeds S to S+N-1, where `--seed S` defaults to 7. Episodes run in a fixed order, by seed and then by cell, and each result is saved as `CELL-seed-SEED.json`, such as `F2-C0-G2-seed-7.json`. The same inputs with the scripted model give the same bytes, apart from the wall-clock latencies of recovery (see below). The output directory must be new or empty. The cells' fault plans are written for dev-001, so with another scenario only `--cells none` runs. A study refuses to start if any of its episode databases already exists, such as one another study kept, rather than replace it. It never drops a database it did not create: if another study creates an episode's database after that check, the study stops at that episode with one line naming the database, and keeps the results it has.
 

@@ -30,7 +30,7 @@ All of this evidence comes from 2026 preprints that have not been peer-reviewed.
 | --- | --- | --- | --- |
 | 1 | Exactly once | Each intent has at most one committed effect, and nothing commits that the task did not intend | Lost reply, redelivery, crash after commit |
 | 2 | Authorized at commit | Each committed effect cites one approval that was valid and in scope when it committed | Revoked approval, expired approval, replayed approval |
-| 3 | Inputs still fresh | Every input the operation depends on was read, and still holds at commit under the dependency rules | Quote change, with memory correction planned for a later 0.2 release |
+| 3 | Inputs still fresh | Every input the operation depends on was read, and still holds at commit under the dependency rules | Quote change or memory correction after a proposal |
 | 4 | Actually committed | Every required effect exists in the ledger, unless the authority withdrew it or it became infeasible | Crash before dispatch, request lost |
 | 5 | Truthfully reported | The final report matches the ledger and the evidence the stack had, including "outcome unknown" | Success claimed after a lost reply |
 
@@ -82,13 +82,13 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 | tau2-bench | Business tasks scored on final database state | Fault injection |
 | ActionProxy | Gateway with single-use grants | Fault injection and evaluation |
 
-The 0.2.0a3 pre-release ships the bounded TLA+ gateway model (record 0021) and run shrinking (record 0022). It includes B1, the scripted Temporal baseline (record 0018), B2, the scripted DBOS baseline (record 0020), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394. F8 is planned for a later 0.2 release.
+The 0.2.0a3 pre-release ships the bounded TLA+ gateway model (record 0021) and run shrinking (record 0022). It includes B1, the scripted Temporal baseline (record 0018), B2, the scripted DBOS baseline (record 0020), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394.
 
 ## Decisions and open questions
 
 - **Name:** FiveFold; the Python package and its commands are `fivefold`. The name was unclaimed on PyPI and npm on 14 Nov 2026. The repository was renamed from AgentCheck to FiveFold on 15 Nov 2026.
 - **License:** Apache-2.0, which includes a patent grant.
-- **Memory correction (F8)** is planned for a later 0.2 release. The in-repo memory drives the scored runs. AliceMemory is an optional adapter exercise. See [record 0023](adr/0023-memory-correction.md).
+- **Memory correction (F8)** is implemented on the memory-enabled development scenario. The in-repo memory drives the scored runs. Record 0023 also defines an optional AliceMemory exercise. See [record 0023](adr/0023-memory-correction.md).
 - **Open: live study.** Which models, and the spend cap after the pilot.
 
 ## Sources
