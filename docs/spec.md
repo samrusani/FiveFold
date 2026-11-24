@@ -45,7 +45,7 @@ In the baseline configurations, the agent calls the simulator API directly and t
 
 Detail: 0008, 0018 and 0020.
 
-The 0.2.0a2 pre-release includes B1, B2 and the MCP lost-reply conformance test (0019).
+The 0.2.0a3 pre-release includes B1, B2 and the MCP lost-reply conformance test (0019).
 
 | Config | Write path | Features |
 | --- | --- | --- |
@@ -359,11 +359,11 @@ Detail: 0009, 0018 and 0020.
 - **Branch point:** model calls are the only points where the model can switch, so the branch point K counts them, in the order the cassette and `harness.model_call` number them, from 0 to the cassette's length. The branch adapter serves the parent's first K calls with the replay's checks, then hands every later call to the new model. A live one needs the flag, spend cap and price file of any live run. Every call takes `think_ms` once. A branch that asks for fewer than K calls fails, as a replay does.
 - **Branch run:** it runs its parent's run (the same scenario, configuration, contract level, seed, fault plan and workers) in a database of its own. Its run id is the parent's with `.branch-K` added, such as `dev-001-single-po.G2.C2.7.branch-4`. `harness.run` records `parent_run_id`, `branch_point` (K), the adapter and name of the new model, and the digest of the branch's own cassette. `harness.model_call` logs every call under the new model's name, the replayed calls included.
 - **Branch cassette:** it holds all the branch's calls, the replayed ones included, each hashed with the new model, and its header names the parent's run id and the branch point. The cassettes of other runs leave both fields out, so they read as before, and the format stays `fivefold-cassette/1`. `play` replays a branch's cassette like any other.
-- **Run shrinking (record 0022):** `python -m fivefold.shrink` finds the smallest verified fault plan within the search budget for a scored, in-process scripted B0, G1 or G2 run. A candidate must return `fail` with the same failing properties and the same set of `(property, reason code, intent ID)` triples. Try candidates in a fixed order, each in a fresh database. The default budget is 100 distinct candidates. An optional wall-time limit stops the search between candidates. `shrink.json` records `budget_exhausted` and the count reached. Repeating the search with that candidate budget and no wall-time limit yields the same plan. [Walkthrough](shrinking.md)
+- **Run shrinking (0.2.0a3, record 0022):** `python -m fivefold.shrink` finds the smallest verified fault plan within the search budget for a scored, in-process scripted B0, G1 or G2 run. A candidate must return `fail` with the same failing properties and the same set of `(property, reason code, intent ID)` triples. Try candidates in a fixed order, each in a fresh database. The default budget is 100 distinct candidates. An optional wall-time limit stops the search between candidates. `shrink.json` records `budget_exhausted` and the count reached. Repeating the search with that candidate budget and no wall-time limit yields the same plan. [Walkthrough](shrinking.md)
 
 ## Testing
 
-- **TLA+:** `make check` runs the bounded G2 model across C0 to C3. TLC checks I1 to I7, append-only history and deadlocks. `make tla-nightly` runs the larger profile in the scheduled workflow. Each run regenerates the action edges, grant edges and send checks from Python and compares them with the checked-in tables. Tests replay representative accepted and refused paths through both gateway stores. Java 17 and the checksum-verified TLC jar are required. `make check` fails with setup instructions if either is unavailable. Run `make tla-setup` to install the jar (0021).
+- **TLA+ (0.2.0a3, record 0021):** `make check` runs the bounded G2 model across C0 to C3. TLC checks I1 to I7, append-only history and deadlocks. `make tla-nightly` runs the larger profile in the scheduled workflow. Each run regenerates the action edges, grant edges and send checks from Python and compares them with the checked-in tables. Tests replay representative accepted and refused paths through both gateway stores. Java 17 and the checksum-verified TLC jar are required. `make check` fails with setup instructions if either is unavailable. Run `make tla-setup` to install the jar.
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Run shrinking acceptance checks (0022):** verify the failure signature, fault plan reductions and deterministic candidate order. Check database ownership and cleanup. Repeat a search stopped by the optional wall-time limit with its recorded candidate count and check that it yields the same plan.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006), 72 for B1 (0018) and 72 for B2 (0020).
@@ -386,7 +386,6 @@ Detail: 0009, 0018 and 0020.
 
 ## Later releases
 
-- The repository checks the TLA+ model and implements run shrinking (record 0022) for a later v0.2 release.
 - **F8 (later v0.2 release, record 0023):** scored runs use in-repo memory. The optional AliceMemory exercise uses a disposable instance that an operator provisions and removes.
 - **Receipts (v0.3):** export the action event log as signed, chained records in an existing format. The format must carry outcome unknown and authority at commit.
 
