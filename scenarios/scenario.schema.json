@@ -236,6 +236,26 @@
       "type": "object"
     },
     "JsonValue": {},
+    "MemoryFact": {
+      "additionalProperties": false,
+      "description": "The remembered order channel and notes for a supplier and sku (0023).",
+      "properties": {
+        "order_channel": {
+          "title": "Order Channel",
+          "type": "string"
+        },
+        "notes": {
+          "title": "Notes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_channel",
+        "notes"
+      ],
+      "title": "MemoryFact",
+      "type": "object"
+    },
     "Operation": {
       "description": "The two write operations of v0.1 (0001, item 2).",
       "enum": [
@@ -504,7 +524,7 @@
     "facts": {
       "description": "Initial facts. Every fact starts at version 1.",
       "patternProperties": {
-        "^(quote/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|budget/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|inventory/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63})$": {
+        "^(quote/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|memory/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|budget/[A-Za-z0-9][A-Za-z0-9._-]{0,63}|inventory/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63})$": {
           "anyOf": [
             {
               "$ref": "#/$defs/QuoteFact"
@@ -514,12 +534,29 @@
             },
             {
               "$ref": "#/$defs/InventoryFact"
+            },
+            {
+              "$ref": "#/$defs/MemoryFact"
             }
           ]
         }
       },
       "title": "Facts",
       "type": "object"
+    },
+    "memory_dependency": {
+      "anyOf": [
+        {
+          "const": "memory_channel_unchanged",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Select the exact order channel dependency for a scenario with memory facts.",
+      "title": "Memory Dependency"
     },
     "authority": {
       "$ref": "#/$defs/Authority"

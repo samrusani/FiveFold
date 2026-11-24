@@ -59,7 +59,10 @@ PositiveMs = Annotated[StrictInt, Field(ge=1)]
 Ms = Annotated[StrictInt, Field(ge=0)]
 Count = Annotated[StrictInt, Field(ge=1)]
 
-SCENARIO_FACT_KEY = rf"^(quote/{ID_BODY}/{ID_BODY}|budget/{ID_BODY}|inventory/{ID_BODY}/{ID_BODY})$"
+SCENARIO_FACT_KEY = (
+    rf"^(quote/{ID_BODY}/{ID_BODY}|memory/{ID_BODY}/{ID_BODY}"
+    rf"|budget/{ID_BODY}|inventory/{ID_BODY}/{ID_BODY})$"
+)
 """Keys a scenario may set. The `suppliers` directory is derived, never written."""
 
 MatchField = Literal[
@@ -184,14 +187,22 @@ class InventoryFact(ScenarioModel):
     """Units free to reserve. A destination below C3 can take it below zero."""
 
 
-FACT_MODELS: dict[FactKind, type[QuoteFact] | type[BudgetFact] | type[InventoryFact]] = {
+class MemoryFact(ScenarioModel):
+    """The remembered order channel and notes for a supplier and sku (0023)."""
+
+    order_channel: str
+    notes: str
+
+
+FactModel = QuoteFact | BudgetFact | InventoryFact | MemoryFact
+
+FACT_MODELS: dict[FactKind, type[FactModel]] = {
     FactKind.QUOTE: QuoteFact,
     FactKind.BUDGET: BudgetFact,
     FactKind.INVENTORY: InventoryFact,
+    FactKind.MEMORY: MemoryFact,
 }
 """The model of each kind of fact a scenario sets."""
-
-FactModel = QuoteFact | BudgetFact | InventoryFact
 
 
 # Authority -----------------------------------------------------------------------------
@@ -315,6 +326,10 @@ class Scenario(ScenarioModel):
     intents: list[Intent] = Field(min_length=1)
     facts: dict[Annotated[str, StringConstraints(pattern=SCENARIO_FACT_KEY)], FactModel]
     """Initial facts. Every fact starts at version 1."""
+    memory_dependency: Literal["memory_channel_unchanged"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    """Select the exact order channel dependency for a scenario with memory facts."""
     authority: Authority
     contracts: list[Contract] = Field(min_length=1)
     faults: list[dict[str, JsonValue]] | dict[str, JsonValue] = Field(default_factory=list)
@@ -333,12 +348,19 @@ class Scenario(ScenarioModel):
             expected = FACT_MODELS[fact_kind(key)]
             if not isinstance(value, expected):
                 raise ValueError(f"fact {key} needs the fields of {expected.__name__}")
+        if self.memory_enabled != any(isinstance(fact, MemoryFact) for fact in self.facts.values()):
+            raise ValueError("memory facts and memory_dependency must be declared together")
         required = [intent for intent in self.intents if intent.required]
         if not feasible_together(required, self.authority, self.fact_values()):
             raise ValueError(
                 "the required intents are not feasible together on the initial facts (0004)"
             )
         return self
+
+    @property
+    def memory_enabled(self) -> bool:
+        """Whether the scenario adds the exact memory dependency to purchase orders."""
+        return self.memory_dependency is not None
 
     def fact_values(self) -> dict[str, dict[str, object]]:
         """The initial facts as plain values, in key order."""

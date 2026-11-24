@@ -34,6 +34,7 @@ from fivefold.domain.api import (
     GetApprovalStatus,
     GetBudget,
     GetInventory,
+    GetMemory,
     GetOrderStatus,
     GetQuote,
     GetReservationStatus,
@@ -59,7 +60,7 @@ from fivefold.gateway.records import Action, Answer, ApprovalStatus, Attempt, Pr
 from fivefold.gateway.state_machine import AnswerClass, Reason
 from fivefold.harness.transport import Calls, TransportTimeout
 
-ReadRequest = GetQuote | ListSuppliers | GetBudget | GetInventory
+ReadRequest = GetQuote | ListSuppliers | GetBudget | GetInventory | GetMemory
 
 SERVER_ERROR = "server_error"
 """The `answer` of a reply that reports a server error instead of an answer."""
@@ -253,6 +254,8 @@ def read_request(key: str) -> ReadRequest:
     parts = key.split("/")
     if kind is FactKind.QUOTE:
         return GetQuote(supplier_id=parts[1], sku=parts[2])
+    if kind is FactKind.MEMORY:
+        return GetMemory(supplier_id=parts[1], sku=parts[2])
     if kind is FactKind.BUDGET:
         return GetBudget(cost_center=parts[1])
     if kind is FactKind.INVENTORY:

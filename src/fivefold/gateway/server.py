@@ -26,27 +26,29 @@ from typing import Any
 import mcp_types as types
 from mcp.server.lowlevel.server import Server
 
-from fivefold.gateway.tools import TOOLS, GatewayTools, ToolError
+from fivefold.gateway.tools import MEMORY_TOOL, TOOLS, GatewayTools, ToolDefinition, ToolError
 from fivefold.harness.mcp_link import Link, delivered_seq
 
 SERVER_NAME = "fivefold-gateway"
 
 
-def _tool_list() -> types.ListToolsResult:
+def _tool_list(*, memory_enabled: bool) -> types.ListToolsResult:
     return types.ListToolsResult(
         tools=[
             types.Tool(name=t.name, description=t.description, input_schema=t.input_schema())
-            for t in TOOLS
+            for t in _definitions(memory_enabled)
         ]
     )
 
 
 def server_for(tools: GatewayTools, link: Link) -> Server[Any]:
     """An MCP server that serves `tools` to the agent worker at the other end of `link`."""
-    return worker_server(lambda: tools, link.agent)
+    return worker_server(lambda: tools, link.agent, memory_enabled=tools.memory_enabled)
 
 
-def worker_server(tools: Callable[[], GatewayTools], worker: str) -> Server[Any]:
+def worker_server(
+    tools: Callable[[], GatewayTools], worker: str, *, memory_enabled: bool = False
+) -> Server[Any]:
     """An MCP server that serves the gateway's tools to the agent worker `worker`.
 
     `tools` gives the tools of the gateway's current incarnation when a call arrives. The
@@ -55,7 +57,7 @@ def worker_server(tools: Callable[[], GatewayTools], worker: str) -> Server[Any]
     """
 
     async def list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
-        return _tool_list()
+        return _tool_list(memory_enabled=memory_enabled)
 
     async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         try:
@@ -80,17 +82,21 @@ def worker_server(tools: Callable[[], GatewayTools], worker: str) -> Server[Any]
         SERVER_NAME,
         on_list_tools=list_tools,
         on_call_tool=call_tool,
-        get_tool_input_schema=tool_input_schema,
+        get_tool_input_schema=lambda name: tool_input_schema(name, memory_enabled=memory_enabled),
     )
 
 
-def tool_input_schema(name: str) -> dict[str, object] | None:
+def _definitions(memory_enabled: bool) -> tuple[ToolDefinition, ...]:
+    return (*TOOLS, MEMORY_TOOL) if memory_enabled else TOOLS
+
+
+def tool_input_schema(name: str, *, memory_enabled: bool = False) -> dict[str, object] | None:
     """A tool's input schema by name, or None for a name that is no tool.
 
     The SDK checks a 2026-07-28 request's `Mcp-Param-*` headers against it, instead of
     asking the server for its tool list (mcp 2.3.0, `Server(get_tool_input_schema=)`).
     """
-    for tool in TOOLS:
+    for tool in _definitions(memory_enabled):
         if tool.name == name:
             return tool.input_schema()
     return None

@@ -69,6 +69,7 @@ class FactKind(StrEnum):
     """The kinds of facts the simulator keeps. The key's first segment names the kind."""
 
     QUOTE = "quote"
+    MEMORY = "memory"
     BUDGET = "budget"
     INVENTORY = "inventory"
     SUPPLIERS = "suppliers"
@@ -79,14 +80,16 @@ SUPPLIERS_KEY = "suppliers"
 """The key of the supplier directory."""
 
 FACT_KEY_PATTERN = (
-    rf"^(quote/{ID_BODY}/{ID_BODY}|budget/{ID_BODY}|inventory/{ID_BODY}/{ID_BODY}|suppliers)$"
+    rf"^(quote/{ID_BODY}/{ID_BODY}|memory/{ID_BODY}/{ID_BODY}"
+    rf"|budget/{ID_BODY}|inventory/{ID_BODY}/{ID_BODY}|suppliers)$"
 )
 """Every fact key: `quote/{supplier_id}/{sku}`, `budget/{cost_center}`,
-`inventory/{warehouse_id}/{sku}` or `suppliers`."""
+`inventory/{warehouse_id}/{sku}`, `memory/{supplier_id}/{sku}` or `suppliers`."""
 
 _FACT_KEY = re.compile(FACT_KEY_PATTERN)
 
 FACT_FIELDS: Mapping[FactKind, tuple[str, ...]] = {
+    FactKind.MEMORY: ("order_channel", "notes"),
     FactKind.QUOTE: ("unit_price_minor", "currency", "min_quantity", "lead_time_days", "status"),
     FactKind.BUDGET: ("limit_minor", "committed_minor"),
     FactKind.INVENTORY: ("available",),
@@ -112,6 +115,11 @@ def quote_key(supplier_id: str, sku: str) -> str:
     return f"quote/{supplier_id}/{sku}"
 
 
+def memory_key(supplier_id: str, sku: str) -> str:
+    """The key of a supplier's remembered ordering channel for a sku."""
+    return f"memory/{supplier_id}/{sku}"
+
+
 def budget_key(cost_center: str) -> str:
     """The key of a cost center's budget."""
     return f"budget/{cost_center}"
@@ -134,22 +142,29 @@ QUOTE_EXACT_FIELDS: tuple[str, ...] = ("unit_price_minor", "currency", "min_quan
 
 
 class Rule(StrEnum):
-    """The three dependency rules of record 0004."""
+    """The dependency rules of records 0004 and 0023."""
 
     QUOTE_UNCHANGED = "quote_unchanged"
+    MEMORY_CHANNEL_UNCHANGED = "memory_channel_unchanged"
     BUDGET_COVERS = "budget_covers"
     STOCK_COVERS = "stock_covers"
 
     @property
     def kind(self) -> RuleKind:
         """Whether the rule is exact or sufficient."""
-        return RuleKind.EXACT if self is Rule.QUOTE_UNCHANGED else RuleKind.SUFFICIENT
+        return (
+            RuleKind.EXACT
+            if self in (Rule.QUOTE_UNCHANGED, Rule.MEMORY_CHANNEL_UNCHANGED)
+            else RuleKind.SUFFICIENT
+        )
 
     @property
     def fields(self) -> tuple[str, ...]:
         """The fact fields the rule reads."""
         if self is Rule.QUOTE_UNCHANGED:
             return QUOTE_EXACT_FIELDS
+        if self is Rule.MEMORY_CHANNEL_UNCHANGED:
+            return ("order_channel",)
         if self is Rule.BUDGET_COVERS:
             return ("limit_minor", "committed_minor")
         return ("available",)
@@ -182,14 +197,20 @@ def _integer(values: Mapping[str, object], name: str) -> int:
     return value
 
 
-def dependencies(operation: Operation, args: Mapping[str, object]) -> tuple[Dependency, ...]:
-    """Return the dependencies of a write, derived from its business arguments."""
+def dependencies(
+    operation: Operation, args: Mapping[str, object], *, memory_enabled: bool = False
+) -> tuple[Dependency, ...]:
+    """Return the dependencies from the business arguments and the scenario's rules."""
     if operation is Operation.SUBMIT_PURCHASE_ORDER:
         sku = _text(args, "sku")
-        return (
-            Dependency(quote_key(_text(args, "supplier_id"), sku), Rule.QUOTE_UNCHANGED),
+        supplier_id = _text(args, "supplier_id")
+        order: tuple[Dependency, ...] = (
+            Dependency(quote_key(supplier_id, sku), Rule.QUOTE_UNCHANGED),
             Dependency(budget_key(_text(args, "cost_center")), Rule.BUDGET_COVERS),
         )
+        if memory_enabled:
+            order += (Dependency(memory_key(supplier_id, sku), Rule.MEMORY_CHANNEL_UNCHANGED),)
+        return order
     return (
         Dependency(
             inventory_key(_text(args, "warehouse_id"), _text(args, "sku")), Rule.STOCK_COVERS
@@ -247,7 +268,7 @@ def check_rule(
     """
     rule = dependency.rule
     changed = tuple(name for name in rule.fields if cited.get(name) != current.get(name))
-    if rule is Rule.QUOTE_UNCHANGED:
+    if rule.kind is RuleKind.EXACT:
         return RuleCheck(holds=not changed, changed_fields=changed)
     if rule is Rule.BUDGET_COVERS:
         left = _integer(current, "limit_minor") - _integer(current, "committed_minor")
@@ -312,6 +333,7 @@ def check_basis(
     history: FactHistory,
     *,
     exact_only: bool = False,
+    memory_enabled: bool = False,
 ) -> tuple[DependencyCheck, ...]:
     """Check a write's basis against its dependencies (0004, property 3).
 
@@ -321,7 +343,7 @@ def check_basis(
     """
     results: list[DependencyCheck] = []
     failure: BasisFailure | None
-    for dependency in dependencies(operation, args):
+    for dependency in dependencies(operation, args, memory_enabled=memory_enabled):
         if exact_only and dependency.kind is RuleKind.SUFFICIENT:
             continue
         current = history.current(dependency.key)

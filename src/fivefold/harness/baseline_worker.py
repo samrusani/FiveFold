@@ -62,6 +62,7 @@ class BaselineWorkers:
             run.timeouts,
             worker=worker,
             status=run.spec.contract.has(Capability.STATUS),
+            memory_enabled=run.spec.scenario.memory_enabled,
         )
         by_name = {tool.name: tool for tool in tools}
         bound = run._chat_model(worker).bind_tools(tools)

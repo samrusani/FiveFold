@@ -19,6 +19,7 @@ from mcp.client.session import ClientSession
 
 from fivefold.domain.api import GetQuote
 from fivefold.domain.contracts import Contract
+from fivefold.domain.scenario import load_scenario_file
 from fivefold.faults.plan import FaultInjector, parse_plan
 from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.freshness import RuleFreshness
@@ -33,6 +34,7 @@ from fivefold.harness.reports import ReportSink
 from fivefold.harness.rng import Generators
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Transport
+from fivefold.paths import DEV_MEMORY_PO
 from fivefold.sim import Simulator
 from fivefold.sim.endpoint import endpoint
 
@@ -61,7 +63,13 @@ F2: dict[str, object] = {
 class Stack:
     """G2 without its agent: the gateway in front of the simulator."""
 
-    def __init__(self, sim: Simulator, plan: list[dict[str, object]] | None = None) -> None:
+    def __init__(
+        self,
+        sim: Simulator,
+        plan: list[dict[str, object]] | None = None,
+        *,
+        memory_enabled: bool = False,
+    ) -> None:
         self.sim = sim
         self.scheduler = Scheduler()
         self.log = MemoryHarnessLog()
@@ -79,7 +87,10 @@ class Stack:
         )
         self.client = SimClient(self.transport, timeout_ms=settings.dispatch_timeout_ms)
         self.dispatcher = Dispatcher(
-            self.scheduler, self.store, self.client, RuleFreshness(self.store)
+            self.scheduler,
+            self.store,
+            self.client,
+            RuleFreshness(self.store, memory_enabled=memory_enabled),
         )
         self.tools = GatewayTools(
             self.scheduler,
@@ -89,6 +100,7 @@ class Stack:
             ReportSink(self.scheduler, self.log, INTENTS),
             task_id="TASK-dev-001",
             intents=INTENTS,
+            memory_enabled=memory_enabled,
         )
 
     def go(self, agent: Callable[[ClientSession], Awaitable[None]]) -> None:
@@ -123,6 +135,52 @@ async def order(session: ClientSession) -> dict[str, Any]:
     return await call(
         session, "submit_purchase_order", **ORDER, based_on=[quote["read_id"], budget["read_id"]]
     )
+
+
+@pytest.mark.parametrize("memory_enabled", [False, True])
+def test_memory_tools_follow_the_scenario(
+    make_sim: Callable[..., Simulator],
+    memory_enabled: bool,
+) -> None:
+    scenario = load_scenario_file(DEV_MEMORY_PO).model_dump(mode="json") if memory_enabled else None
+    sim = make_sim(data=scenario)
+    stack = Stack(sim, memory_enabled=memory_enabled)
+    ordinary = [
+        "get_quote",
+        "list_suppliers",
+        "get_budget",
+        "get_inventory",
+        "submit_purchase_order",
+        "reserve_inventory",
+        "get_action_status",
+        "submit_final_report",
+    ]
+
+    async def agent(session: ClientSession) -> None:
+        tools = (await session.list_tools()).tools
+        expected = [*ordinary, "get_memory"] if memory_enabled else ordinary
+        assert [tool.name for tool in tools] == expected
+        if not memory_enabled:
+            return
+        key = "memory/S-1/W-100"
+        fields = {"supplier_id": "S-1", "sku": "W-100"}
+        first = await call(session, "get_memory", **fields)
+        assert set(first) == {"read_id", "key", "version", "data"}
+        assert (first["key"], first["version"], first["data"]["order_channel"]) == (key, 1, "edi")
+
+        sim.memory.correct(key, {"order_channel": "portal"}, actor="test", vt=stack.scheduler.now)
+        second = await call(session, "get_memory", **fields)
+        assert (second["key"], second["version"], second["data"]["order_channel"]) == (
+            key,
+            2,
+            "portal",
+        )
+        assert second["read_id"] != first["read_id"]
+        missing = await session.call_tool("get_memory", {"supplier_id": "S-2", "sku": "W-100"})
+        assert missing.is_error and missing.content[0].type == "text"
+        assert json.loads(missing.content[0].text)["error"] == "not_found"
+
+    stack.go(agent)
 
 
 def effects(sim_database: str) -> list[tuple[object, ...]]:
