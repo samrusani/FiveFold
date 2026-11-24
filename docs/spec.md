@@ -162,7 +162,7 @@ Detail: 0002.
 
 Detail: 0003.
 
-Record 0021 defines the planned bounded G2 model for C0 to C3. It models
+The bounded G2 model for C0 to C3 (record 0021) ships in 0.2.0a3. It models
 durable action state and its append-only journal, separate from
 destination effects. It takes legal transition edges from the gateway
 implementation and checks I1 to I7.
