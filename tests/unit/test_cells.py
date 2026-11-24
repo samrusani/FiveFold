@@ -13,6 +13,7 @@ from fivefold.faults.plan import check_configuration, check_run, parse_plan
 from fivefold.harness.cells import Cell, cell_plan, cell_scenario, load_expected
 from fivefold.harness.demo import DEV_001
 from fivefold.harness.run import CONFIGS, GATEWAY_CONFIGS
+from fivefold.paths import DEV_MEMORY_PO, EXPECTED_F8
 
 
 def cell(fault: str, variant: str | None, config: str, contract: Contract = Contract.C2) -> Cell:
@@ -26,7 +27,11 @@ def cell(fault: str, variant: str | None, config: str, contract: Contract = Cont
     )
 
 
-@pytest.mark.parametrize("expected", load_expected().cells, ids=lambda expected: expected.name)
+@pytest.mark.parametrize(
+    "expected",
+    load_expected().cells + load_expected(EXPECTED_F8).cells,
+    ids=lambda expected: expected.name,
+)
 def test_every_committed_cells_plan_is_one_the_catalog_and_the_run_accept(expected: Cell) -> None:
     planned = parse_plan(cell_plan(expected))
     assert expected.fault in {str(entry.fault) for entry in planned}
@@ -168,9 +173,11 @@ def test_every_built_fault_variant_has_a_cell_wherever_it_applies() -> None:
     says the fault has nothing to act on there. The committed cells must be exactly
     these, so a variant without its cells cannot go unnoticed, as F7's late harmless
     change once did."""
-    scenario = load_scenario_file(DEV_001)
+    dev = load_scenario_file(DEV_001)
+    memory = load_scenario_file(DEV_MEMORY_PO)
     applicable: set[str] = set()
     for fault in BUILT:
+        scenario = memory if fault is FaultId.F8 else dev
         for config in CONFIGS:
             for variant in cell_variants(fault, config):
                 for contract in Contract:
@@ -187,9 +194,9 @@ def test_every_built_fault_variant_has_a_cell_wherever_it_applies() -> None:
                     except ValueError:
                         continue
                     applicable.add(candidate.name)
-    committed = {expected.name for expected in load_expected().cells}
+    committed = {cell.name for cell in load_expected().cells + load_expected(EXPECTED_F8).cells}
     missing = sorted(applicable - committed)
-    assert not missing, f"faults/expected.yaml has no cell for {', '.join(missing)}"
+    assert not missing, f"the scenario's expected outcomes have no cell for {', '.join(missing)}"
     stray = sorted(committed - applicable)
     assert not stray, f"no built fault variant applies to {', '.join(stray)}"
 

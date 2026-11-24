@@ -15,14 +15,15 @@ Its inputs:
 - `--configs` and `--contracts`: the configurations and contract levels, by default B0,
   G1 and G2, and C0 to C3. Each level must be one the scenario lists.
 - `--cells`: the cells to run in those configurations and levels. The cells are those of
-  `faults/expected.yaml` (0006), and `all`, the default, names every one. A fault, such
+  `faults/expected.yaml` for dev-001 or `faults/expected-f8.yaml` for the memory scenario.
+  `all`, the default, names every cell in the matching file. A fault, such
   as `F2`, names its cells; a fault and variant, such as `F11-after_tool_call`, names
   that variant's; a cell's own name, such as `F2-C2-G2`, names that cell. `none` names
   the cells with no fault, one in each configuration and level: the scenario's task with
   an empty fault plan. Each cell's fault plan, and any change it makes to the scenario,
   come from `fivefold.harness.cells`.
 - `--episodes N` and `--seed S`: each cell runs N times, with the seeds S, S+1, ...,
-  S+N-1. S defaults to the seed of `faults/expected.yaml`.
+  S+N-1. S defaults to the seed in the expected-outcome file.
 - The model: the scripted one by default, or `--live PROVIDER:MODEL` with
   `--spend-cap-usd`, `--prices` and any `--param`, as `record --live` takes them
   (`fivefold.harness.live_options`).
@@ -70,8 +71,8 @@ report over DIR leaves out, and its cassette goes to `cassettes/` as usual. The 
 stops once the spend reaches the cap, since every later episode's first call would be
 refused.
 
-The command prints a line for each episode: its verdict, the verdict `faults/expected.yaml`
-expects when it covers the scenario, how each agent worker ended, and in a live study the
+The command prints a line for each episode: its verdict, the expected verdict when the
+matrix covers the scenario, how each agent worker ended, and in a live study the
 episode's model calls and the spend so far. It exits with status 0 when it ran every
 episode, or when the spend cap stopped it. A refused input, such as an unknown cell or an
 output directory that is not empty, ends the command with one line on standard error and
@@ -114,7 +115,7 @@ from fivefold.harness.migrations import (
 from fivefold.harness.models import SCRIPTED, Live, ModelSpec
 from fivefold.harness.registry import forget
 from fivefold.harness.run import CONFIGS, ORIGINAL_CONFIGS, Config, InprocRun, RunSpec, run_plan
-from fivefold.paths import DB_DIR, DEV_001
+from fivefold.paths import DB_DIR, DEV_001, EXPECTED, EXPECTED_F8
 from fivefold.recorder.cassette import Cassette, response_message
 
 ALL: Final = "all"
@@ -326,15 +327,16 @@ def check_study(study: Study, prefix: str) -> None:
     Each episode's contract level must be one the scenario lists, its fault plan must fit
     its configuration and timing as a run checks them (`fivefold.harness.run.run_plan`),
     and its database name must be valid. A cell with a fault runs only on the scenario
-    `faults/expected.yaml` is written for: its plan targets that scenario's operation and
+    the expected-outcome file is written for: its plan targets that scenario's operation and
     facts, and on another scenario it could fail partway through the study. Raises
     `ValueError`.
     """
     scenario = study.scenario
     faulted = [episode for episode in study.episodes if not isinstance(episode.cell, NoFault)]
     if faulted and study.expected.scenario != scenario.id:
+        expected_file = EXPECTED_F8 if scenario.memory_enabled else EXPECTED
         raise ValueError(
-            f"the cells of faults/expected.yaml are written for {study.expected.scenario},"
+            f"the cells of faults/{expected_file.name} are written for {study.expected.scenario},"
             f" not {scenario.id}; with another scenario, give --cells {NO_FAULT}"
         )
     for episode in study.episodes:
@@ -525,8 +527,8 @@ def episode_line(study: Study, outcome: Outcome) -> str:
 
 def plan_study(args: argparse.Namespace, model: ModelSpec) -> Study:
     """The study the command's arguments describe, checked before anything runs."""
-    expected = load_expected()
     scenario = load_scenario_file(args.scenario)
+    expected = load_expected(EXPECTED_F8) if scenario.memory_enabled else load_expected()
     configs = [config for config in CONFIGS if config in args.configs]
     contracts = [contract for contract in Contract if str(contract) in args.contracts]
     cells = select_cells(expected.cells, args.cells, configs=configs, contracts=contracts)
@@ -572,7 +574,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[ALL],
         metavar="CELL",
         help=f"{ALL}, {NO_FAULT}, a fault (F2), a fault and variant (F11-after_tool_call),"
-        f" or a cell (F2-C2-G2) of faults/expected.yaml (default: {ALL})",
+        f" or a cell (F2-C2-G2) in the scenario's expected-outcome file (default: {ALL})",
     )
     parser.add_argument(
         "--episodes", type=int, default=1, metavar="N", help="episodes per cell (default 1)"
@@ -581,7 +583,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--seed",
         type=int,
         metavar="S",
-        help="the first seed; each cell runs with S, S+1, ... (default: faults/expected.yaml's)",
+        help="the first seed; each cell runs with S, S+1, ... (default: the expected file's seed)",
     )
     parser.add_argument(
         "--database-prefix",

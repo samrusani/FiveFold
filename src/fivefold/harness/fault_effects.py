@@ -1,7 +1,7 @@
-"""Faults that change the simulator's state: F6 revokes, F7 changes a quote (0006).
+"""Faults that change the simulator's state: F6 revokes, F7 and F8 change facts.
 
-A fault takes effect at its point, before the scheduler delivers any further message. F6
-and F7 apply directly through the simulator's control interface at that moment; they are
+A fault takes effect at its point, before the scheduler delivers any further message. These
+faults apply directly through the simulator's control interface at that moment; they are
 not sent as messages, so they cannot arrive late (0006, Fault points).
 
 What a fault acts on comes from where it fires: the action at the gateway's dispatch
@@ -13,13 +13,15 @@ check, or the message on the wire (the write request, or B0's approval answer).
   raises the unit price by `percent` (default 5), rounding up, but no higher than the
   intent's maximum, so the order stays acceptable. The `harmless` variant adds a day
   to the lead time, which no dependency rule reads (0004).
+- F8 corrects the order's memory. Relevant variants set the channel to `portal`.
+  Harmless variants change only the notes (0023).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from fivefold.domain.rules import quote_key
+from fivefold.domain.rules import memory_key, quote_key
 from fivefold.domain.scenario import PurchaseOrderAccept, Scenario
 from fivefold.faults.catalog import Action
 from fivefold.faults.plan import Fired
@@ -37,7 +39,7 @@ class FaultEffectError(RuntimeError):
 
 
 class SimulatorFaults:
-    """Applies F6 and F7 through the simulator's control interface."""
+    """Applies F6, F7 and F8 through the simulator's control interface."""
 
     def __init__(
         self, scheduler: Scheduler, control: Control, log: HarnessLog, scenario: Scenario
@@ -54,6 +56,8 @@ class SimulatorFaults:
             self._revoke(fired, context)
         elif action is Action.CHANGE_QUOTE:
             self._change_quote(fired, context)
+        elif action is Action.CHANGE_MEMORY:
+            self._change_memory(fired, context)
         else:
             raise FaultEffectError(f"{fired.fault} does not change the simulator")
 
@@ -94,6 +98,20 @@ class SimulatorFaults:
         else:
             raise FaultEffectError(f"{fired.fault} has no variant {variant!r}")
         self._control.change_fact(key, changes, actor=FAULT_ACTOR, vt=self._scheduler.now)
+
+    def _change_memory(self, fired: Fired, context: Mapping[str, object]) -> None:
+        supplier_id, sku = context.get("supplier_id"), context.get("sku")
+        if not isinstance(supplier_id, str) or not isinstance(sku, str):
+            raise FaultEffectError("F8 fired without a supplier and sku")
+        key = memory_key(supplier_id, sku)
+        if str(fired.planned.variant).endswith("_relevant"):
+            changes = {"order_channel": "portal"}
+        else:
+            current = self._control.current_fact(key)
+            if current is None:
+                raise FaultEffectError(f"F8: there is no memory {key}")
+            changes = {"notes": f"{current.data['notes']} (corrected)"}
+        self._control.correct_memory(key, changes, actor=FAULT_ACTOR, vt=self._scheduler.now)
 
     def _ceiling(self, context: Mapping[str, object], price: int) -> int:
         """The intent's highest acceptable unit price, so the change stays acceptable."""

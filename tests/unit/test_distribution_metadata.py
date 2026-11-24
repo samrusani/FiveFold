@@ -28,6 +28,10 @@ def test_project_links_and_sdist_wheel_file_parity(tmp_path: Path) -> None:
             first.read(f"fivefold/_data/scenarios/dev/{scenario}")
             == (root / "scenarios" / "dev" / scenario).read_bytes()
         )
+        assert (
+            first.read("fivefold/_data/faults/expected-f8.yaml")
+            == (root / "faults" / "expected-f8.yaml").read_bytes()
+        )
         (metadata_name,) = [
             name for name in first.namelist() if name.endswith(".dist-info/METADATA")
         ]

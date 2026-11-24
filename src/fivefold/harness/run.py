@@ -258,6 +258,8 @@ def run_plan(spec: RunSpec) -> tuple[PlannedFault, ...]:
         )
     else:
         plan = parse_plan(faults)
+        if not spec.scenario.memory_enabled and any(entry.fault == "F8" for entry in plan):
+            raise ValueError("F8 needs a memory-enabled scenario (0023)")
         check_configuration(plan, gateway=spec.config in GATEWAY_CONFIGS)
         check_run(plan, params=spec.scenario.params, contract=spec.contract)
     return seed_parameters(plan, draws)
@@ -565,7 +567,7 @@ class InprocRun:
             self.store.close_run(self.scheduler.now)
 
     def _gateway_fault(self, fired: Fired, point: str, context: Mapping[str, object]) -> None:
-        """A fault at a dispatch point: record it, then apply it: F6 and F7 early through
+        """A fault at a dispatch point: record it, then apply it: F6, F7 and F8 early through
         the simulator, F1 and F3 by crashing the gateway.
 
         What the crash changes for the evidence goes in the fault's record (0006, crashes;

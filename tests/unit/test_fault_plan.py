@@ -109,7 +109,7 @@ def test_a_parameter_falls_back_to_the_catalog_default() -> None:
     [
         ({"fault": "F2", "at": {"point": "net.nowhere.answer"}}, "not a fault point"),
         ({"fault": "F2", "at": {"point": "agent.step"}}, "does not fire at"),
-        ({"fault": "F8", "at": {"point": "agent.step"}}, "cannot be injected"),
+        ({"fault": "F8", "at": {"point": "agent.step"}}, "F8 does not fire at agent.step"),
         ({"fault": "F13", "at": {"point": "agent.step"}}, "fault"),
         (
             {"fault": "F11", "at": {"point": "agent.after_tool_call"}, "params": {"x": 1}},
