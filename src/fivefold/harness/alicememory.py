@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ipaddress
 import os
 import sys
@@ -234,4 +235,7 @@ def main(*, transport: httpx.BaseTransport | None = None) -> int:
 
 
 if __name__ == "__main__":
+    argparse.ArgumentParser(
+        prog="python -m fivefold.harness.alicememory", description=__doc__
+    ).parse_args()
     raise SystemExit(main())

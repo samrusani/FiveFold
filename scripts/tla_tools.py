@@ -59,17 +59,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("install", "check"))
     args = parser.parse_args()
-    if args.action == "check":
+    if args.action == "install":
         try:
-            check_java()
-        except ValueError as error:
-            print(error, file=sys.stderr)
-            return 1
-    try:
-        if args.action == "install":
             install(JAR)
-        else:
-            verify_jar(JAR)
+        except (OSError, ValueError) as error:
+            detail = " ".join(str(error).splitlines())
+            print(f"TLC jar installation failed. {detail}", file=sys.stderr)
+            return 1
+        return 0
+
+    try:
+        check_java()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    try:
+        verify_jar(JAR)
     except (OSError, ValueError) as error:
         print(f"{JAR_HELP} ({error})", file=sys.stderr)
         return 1

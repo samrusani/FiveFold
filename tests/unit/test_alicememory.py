@@ -1,6 +1,8 @@
 """The AliceMemory exercise uses a fake HTTP transport in the deterministic suite."""
 
 import json
+import subprocess
+import sys
 
 import httpx
 import pytest
@@ -12,6 +14,19 @@ USER = "05bfb352-e04b-4e8b-803b-b97c80f139df"
 MEMORY = "e2e324a5-a0d7-41ea-9f27-9d705c7ffd61"
 SETTINGS = {FLAG: "1", KEY: BEARER, URL: "http://127.0.0.1:8000", USER_ID: USER}
 API = "/v0/vnext/memories"
+
+
+def test_help_names_module_without_settings() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "fivefold.harness.alicememory", "--help"],
+        env={},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    assert result.stdout.splitlines()[0].startswith("usage: python -m fivefold.harness.alicememory")
+    assert result.stderr == ""
 
 
 @pytest.fixture

@@ -19,6 +19,10 @@ if TYPE_CHECKING:
     from fivefold.harness.run import InprocRun
 
 
+class BaselineInfrastructureError(RuntimeError):
+    """A durable baseline stopped before the episode could be scored."""
+
+
 @dataclass(frozen=True)
 class Request:
     kind: str

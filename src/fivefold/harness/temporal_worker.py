@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
@@ -20,6 +21,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from fivefold.harness.baseline_worker import (
+    BaselineInfrastructureError,
     BaselineWorkers,
     Broken,
     Reply,
@@ -40,6 +42,11 @@ if TYPE_CHECKING:
     from fivefold.harness.run import InprocRun
 
 TASK_QUEUE = "fivefold-b1"
+CLI_VERSION = "1.10.1"  # The same release as scripts/temporal_cli.py.
+CLI_HELP = (
+    f"Temporal CLI {CLI_VERSION} is required. Run make temporal-setup or set "
+    "FIVEFOLD_TEMPORAL_CLI to the pinned binary."
+)
 HOST_WAIT_S = 30
 # Record 0018 keeps Temporal's default Activity policy. Add its largest backoff
 # to the ordinary host wait so failed attempts get the same scheduling margin.
@@ -51,8 +58,26 @@ TIMEOUT_EVENTS = (
 )
 
 
-class TemporalInfrastructureError(RuntimeError):
+class TemporalInfrastructureError(BaselineInfrastructureError):
     """Temporal infrastructure failed before the episode could be scored."""
+
+
+def temporal_cli_path() -> Path:
+    path = Path(os.environ.get("FIVEFOLD_TEMPORAL_CLI", ".temporal/temporal")).resolve()
+    if not path.is_file():
+        raise TemporalInfrastructureError(CLI_HELP)
+    return path
+
+
+def check_temporal_cli() -> None:
+    """Check the pinned binary without starting a Temporal server."""
+    path = temporal_cli_path()
+    try:
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        raise TemporalInfrastructureError(CLI_HELP) from None
+    if result.returncode != 0 or result.stdout.split()[:3] != ["temporal", "version", CLI_VERSION]:
+        raise TemporalInfrastructureError(CLI_HELP)
 
 
 Receiver = Callable[[Delivery], None]
@@ -62,13 +87,7 @@ class TemporalHost:
     """A loopback dev server and poller on a clock separate from FiveFold's."""
 
     def __init__(self) -> None:
-        path = Path(os.environ.get("FIVEFOLD_TEMPORAL_CLI", ".temporal/temporal")).resolve()
-        if not path.is_file():
-            raise TemporalInfrastructureError(
-                "The local Temporal CLI is required. Run make temporal-setup or set "
-                "FIVEFOLD_TEMPORAL_CLI to the pinned binary."
-            )
-        self.cli = str(path)
+        self.cli = str(temporal_cli_path())
         self.task_queue = f"{TASK_QUEUE}-{os.getpid()}"
         self.before_activity: Callable[[str, int], Awaitable[None]] | None = None
         self.loop = asyncio.new_event_loop()
