@@ -20,7 +20,7 @@ All of this evidence comes from 2026 preprints that have not been peer-reviewed.
 | User | What they do with it |
 | --- | --- |
 | Agent platform engineers | Run the suite against their agent stack before granting write access |
-| MCP server and API authors | Check that their tools survive lost replies (conformance test, 0.2.0a1) |
+| MCP server and API authors | Check that their tools survive lost replies (conformance test, 0.2.0) |
 | Teams on Temporal, DBOS or LangGraph | Compare their setup against published baselines |
 | Researchers | Reproduce the 2026 failure modes in one place and extend them |
 

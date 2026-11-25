@@ -12,8 +12,18 @@ The first full release in the 0.2 series brings together the four pre-releases a
 - Run shrinking finds and verifies a smaller fault plan for a scored, in-process scripted B0, G1 or G2 failure (record 0022). [Shrinking guide](docs/shrinking.md)
 - F8 tests a memory correction after a proposal. It adds 80 expected outcomes on `dev-001-memory-po`, for 459 across both matrices. The optional AliceMemory exercise uses an operator's disposable local instance with `FIVEFOLD_ALICEMEMORY=1` and runs outside CI (record 0023). [Fault catalog](docs/faults.md#f8-in-the-memory-scenario) · [AliceMemory guide](docs/alicememory.md)
 
+### Changed
+
+- `make check` requires Temporal CLI 1.10.1, Java 17 and TLC. Run `make temporal-setup` for the pinned CLI and `make tla-setup` for the verified TLC jar.
+- The app image bundles a Temurin 17 runtime, the TLC jar and the Temporal CLI.
+- Database setup adds the `ff_dbos` role. Set `FIVEFOLD_DBOS_PASSWORD` on servers that require a password for this role.
+- Memory-enabled scenarios add the `get_memory` tool, the `memory_dependency` scenario field and `memory/{supplier_id}/{sku}` facts.
+- The split topology refuses memory-enabled scenarios.
+
 ### Fixed
 
+- B1's handoff wait covers the full Temporal Activity retry backoff and a scheduling margin. An expired handoff identifies the Activity ID and attempt and stops the run before scoring (#124).
+- The conformance and shrink commands print `python -m fivefold.conformance` and `python -m fivefold.shrink` on their respective usage lines (#128, #142).
 - The MCP conformance runner reports a rejected first write as a fixture error before dropping its reply (#151).
 - The shrinker explains why split runs are unsupported before checking the model adapter (#152).
 - The study command rejects unsupported selections and missing baseline prerequisites before provisioning a database. Baseline infrastructure errors name the episode when available. Unknown selectors name the scenario's expected-outcome file (#154).
