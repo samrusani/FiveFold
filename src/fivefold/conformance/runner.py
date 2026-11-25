@@ -194,6 +194,8 @@ class Attempt:
         else:
             first_reply = await self.write()
             self.evidence.events.append("first_reply_received")
+            if first_reply.is_error:
+                raise TestError("fixture write returned an MCP error")
             if case is Case.LOST_REPLY:
                 before = await self.probe()
                 while before.count == 0:
