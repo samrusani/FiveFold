@@ -15,7 +15,7 @@ uv run python -m fivefold.harness.demo 1
 
 `make db-up` starts PostgreSQL 16 in Docker, on 127.0.0.1:5432. Without Docker, skip it and use your own PostgreSQL 16 server, if it trusts local connections. The commands connect to it as a superuser through `FIVEFOLD_ADMIN_DSN`, which defaults to `postgresql://postgres@127.0.0.1:5432/postgres`. For a server elsewhere, run `export FIVEFOLD_ADMIN_DSN=postgresql://USER@HOST:PORT/postgres` first.
 
-The first `uv run` downloads the locked dependencies, about 56 MB on Linux, and installs them into `.venv`. On a clean machine with an empty uv cache and a fast network, the path from `git clone` to the demo's output took 10 to 12 seconds, plus the time Docker takes to pull the PostgreSQL image the first time. The demo itself takes about 5 seconds, and prints:
+The first `uv run` downloads the locked dependencies and installs them into `.venv`. An empty-cache `uv sync --locked` on Linux amd64 received about 88 MB with Python 3.12 and uv 0.13.8. This includes the development Temporal and DBOS SDKs and excludes the PostgreSQL image. The demo itself takes about 5 seconds, and prints:
 
 ```
 Demo 1: Order placed, reply lost (dev-001-single-po, C2, seed 7)

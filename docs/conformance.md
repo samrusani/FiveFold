@@ -66,6 +66,8 @@ including multiple updates that leave the same final value. The match flag
 says whether the effects match the expected contents. If work can continue
 after the write replies, set `terminal_replies_settle` to false and have the
 probe include `"settled": true` only when neither attempt can still commit.
+The only fields are `count`, `matches` and optional `settled`. An extra
+field is a test error.
 
 Use `{{namespace}}` as an argument value in every tool declaration. Each
 invocation uses a fresh namespace, and each case has its own scope.
@@ -97,7 +99,17 @@ To add the pre-commit case, list it under `supported_cases` and supply a
 returns `{"armed": true}`. `held` returns `{"held": true}` while that write is
 still blocked before commit. `abort` ends the blocked write without committing
 and returns `{"aborted": true}`. The repository fixtures enable these hooks
-with `--hooks`.
+with `--hooks`. This is their `pre_commit` block:
+
+```json
+{
+  "pre_commit": {
+    "arm": {"name": "arm", "arguments": {"namespace": "{{namespace}}"}},
+    "held": {"name": "holding", "arguments": {"namespace": "{{namespace}}"}},
+    "abort": {"name": "abort", "arguments": {"namespace": "{{namespace}}"}}
+  }
+}
+```
 
 The caller wait and the evidence deadline are in milliseconds. Choose a
 caller wait below the evidence deadline. A settled count or effect that

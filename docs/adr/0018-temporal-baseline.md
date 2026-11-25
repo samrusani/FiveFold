@@ -1,6 +1,7 @@
 # 0018: B1, the Temporal baseline
 
 Status: Accepted on 18 Nov 2026 by the maintainer
+Note, 22 Nov 2026: #124 allows 130 s for a handoff after a failed or lost attempt; the 30 s limit still applies otherwise.
 Date: 2026-11-18
 Spec sections affected: Configurations, Simulator (determinism), Testing, Data model (Run)
 Amends: 0008 (B1 configuration) and 0009 (Temporal scheduling in B1 only)

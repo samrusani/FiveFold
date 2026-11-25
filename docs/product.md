@@ -89,7 +89,7 @@ The 0.2.0a4 pre-release includes the bounded TLA+ gateway model (record 0021) an
 - **Name:** FiveFold; the Python package and its commands are `fivefold`. The name was unclaimed on PyPI and npm on 14 Nov 2026. The repository was renamed from AgentCheck to FiveFold on 15 Nov 2026.
 - **License:** Apache-2.0, which includes a patent grant.
 - **Memory correction (F8)** ships in 0.2.0a4 on the memory-enabled development scenario. The in-repo memory drives the scored runs. Record 0023 also defines an optional AliceMemory exercise. See [record 0023](adr/0023-memory-correction.md).
-- **Open: live study.** Which models, and the spend cap after the pilot.
+- **Open: live study of B1, B2 and F8 after 0.2.0.** Which models and spend cap should it use?
 
 ## Sources
 

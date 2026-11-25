@@ -27,6 +27,8 @@ make demo       # the four demos, for B0 and G2, from a seed
 make help       # every target
 ```
 
+After a gateway state-machine change, run `make tla-tables` to refresh the model's checked-in tables.
+
 CI also builds the wheel, installs it outside the checkout and runs demo 1 against PostgreSQL 16.
 
 The demos, the tests and every command that runs an episode connect with `FIVEFOLD_ADMIN_DSN`, which defaults to the Compose database, `postgresql://postgres@127.0.0.1:5432/postgres`. Any PostgreSQL 16 server works if that connection is a superuser and the component roles can log in. `db/bootstrap.sql` creates those roles without a password; the Compose database and CI trust local connections, so the roles need none there. Test runs that share one server at the same time need different `FIVEFOLD_TEST_DB_PREFIX` values.
@@ -35,7 +37,7 @@ Every run database is a copy of one migrated template database, `fivefold_templa
 
 ## Pull requests
 
-- Run `make check` before asking for review. The Development section below explains the setup.
+- Run `make check` before asking for review. The Development section above explains the setup.
 - One change per pull request, kept small.
 - Name the spec section or decision record it implements.
 - List every library API you used and where you checked it: the official docs, or the installed package source with its version. If you are unsure an API exists, say so instead of guessing.

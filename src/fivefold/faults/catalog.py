@@ -131,14 +131,14 @@ F10_WRITE_POINTS = frozenset({"sim.write.received"})
 """Where F10 `stale_beyond_lag` fires: as a write reaches the destination (0013)."""
 
 EARLY_POINTS = frozenset({"gw.dispatch.before_check", "net.agent_sim.answer"})
-"""F6 and F7 early: at the gateway's check, or as B0's approval answer reaches it."""
+"""F6, F7 and F8 early: at the gateway's check or on the baseline's approval reply."""
 
 LATE_POINTS = frozenset({"net.gw_sim.request", "net.agent_sim.request"})
-"""F6 and F7 late: as the write leaves for the simulator."""
+"""F6, F7 and F8 late: as the write leaves for the simulator."""
 
 AUTHORITY_POINTS = EARLY_POINTS | LATE_POINTS
-"""Where F6 and F7 fire (0006): early, at the gateway's check or as B0's approval answer
-reaches it; late, as the write request leaves for the simulator."""
+"""Where F6, F7 and F8 fire (0006, 0023). The early points are the gateway check and
+the baseline's approval reply. The late points are on the write's way to the simulator."""
 
 BUILT: Mapping[FaultId, FaultKind] = {
     FaultId.F1: FaultKind(

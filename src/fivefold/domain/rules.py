@@ -1,6 +1,6 @@
 """Operations, fact keys and the dependency rules (0001, 0004).
 
-Record 0004's dependency rules live here and nowhere else. The simulator's C3 check, the
+The dependency rules from records 0004 and 0023 live here. The simulator's C3 check, the
 gateway's dispatch check and the evaluator's property 3 all call these functions, so they
 cannot disagree about what "still fresh" means. The rules change only by decision record.
 
@@ -8,6 +8,8 @@ cannot disagree about what "still fresh" means. The rules change only by decisio
   currency, min_quantity and status are unchanged since the basis version.
 - submit_purchase_order depends on `budget/{cost_center}` (sufficient): limit_minor minus
   committed_minor, just before this effect, is at least quantity x unit_price_minor.
+- On a memory-enabled scenario, submit_purchase_order also depends on
+  `memory/{supplier_id}/{sku}` (exact): order_channel is unchanged since the basis version.
 - reserve_inventory depends on `inventory/{warehouse_id}/{sku}` (sufficient): available,
   just before this effect, is at least quantity.
 

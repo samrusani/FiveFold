@@ -53,7 +53,7 @@ The split topology fires faults only on the network and in the simulator, at the
 | `sim.write.received` | F5 | all |
 | `sim.status.answer` | F10 | all, at C1 |
 
-`start` refuses, in one line, a plan with a fault inside the gateway or your agent: F1, F3, F9 and F11, and F6 and F7 early in G1 and G2. A gateway crash would mean the gateway's process exits and restarts, and the harness has no hold on your agent. It also refuses a scenario with a scripted resolver: here a human resolves escalations.
+`start` refuses, in one line, a plan with a fault inside the gateway or your agent: F1, F3, F9 and F11, and F6 and F7 early in G1 and G2. A gateway crash would mean the gateway's process exits and restarts, and the harness has no hold on your agent. It also refuses memory-enabled scenarios and scenarios with a scripted resolver. In the split topology a human resolves escalations.
 
 When the gateway escalates an action whose outcome is unknown, you resolve it through the gateway's [admin API](admin-api.md) at `http://127.0.0.1:8000/admin`. The gateway serves it when `FIVEFOLD_ADMIN_API_TOKEN` holds the API's bearer token, in the environment of `serve gateway`, or where you run Compose. The admin API shares its listener with the MCP endpoint, so your agent's network reaches it too, and the bearer token is its only guard. Make the token long and random, for example with `python -c "import secrets; print(secrets.token_urlsafe(32))"`, and never give it to your agent. Each attestation is also logged in the harness's actor log, as the scripted resolver's are in the inproc topology, so the evaluator counts it (record 0004). Once `end` stops the gateway, the admin API takes no attestation: it answers 503 and records nothing.
 

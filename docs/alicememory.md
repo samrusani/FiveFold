@@ -6,13 +6,17 @@ channel and checks both values in its revision history. The in-repo memory
 supplies all scored F8 evidence. The optional exercise keeps its own
 disposable AliceMemory instance and runs outside CI. [Record 0023](adr/0023-memory-correction.md)
 
+AliceMemory v0.25.0 tightened `POST /v0/vnext/memories/correct` for
+memories that wait for a person, and the exercise can still correct its
+own committed memory.
+
 ## Provision a disposable instance
 
-Use a fresh AliceMemory v0.24.1 checkout and Python 3.12. The following
+Use a fresh AliceMemory v0.25.0 checkout and Python 3.12. The following
 commands run in Bash from that checkout. Use free local ports for PostgreSQL,
 Redis and the API. If you change the ports, update the matching URLs.
 The commands use the pinned tag's role bootstrap and local API entry
-point. [AliceMemory local runtime](https://github.com/samrusani/AliceMemory/blob/v0.24.1/docs/alpha/local-runtime.md#commands)
+point. [AliceMemory local runtime](https://github.com/samrusani/AliceMemory/blob/v0.25.0/docs/alpha/local-runtime.md#commands)
 
 ```sh
 uv venv --python 3.12
@@ -46,11 +50,11 @@ The clean environment supplies the local database and Redis URLs without
 loading providers or keys from your usual shell. Keep this checkout free
 of a `.env` file. The migration and user seed take the database admin URL.
 The API and key command use the ordinary application role.
-[Runtime settings](https://github.com/samrusani/AliceMemory/blob/v0.24.1/apps/api/src/alicebot_api/config.py#L222-L298) · [Embedding opt-in](https://github.com/samrusani/AliceMemory/blob/v0.24.1/apps/api/src/alicebot_api/vnext_embeddings.py#L675-L693)
+[Runtime settings](https://github.com/samrusani/AliceMemory/blob/v0.25.0/apps/api/src/alicebot_api/config.py#L219-L298) · [Embedding opt-in](https://github.com/samrusani/AliceMemory/blob/v0.25.0/apps/api/src/alicebot_api/vnext_embeddings.py#L675-L685)
 
 After both services report ready, migrate, seed the synthetic user and
 capture an unbound trusted local agent key. Keep shell tracing off while
-handling the key. [Migrations](https://github.com/samrusani/AliceMemory/blob/v0.24.1/scripts/migrate.sh) · [User seed](https://github.com/samrusani/AliceMemory/blob/v0.24.1/scripts/seed_local_user.py) · [Agent keys](https://github.com/samrusani/AliceMemory/blob/v0.24.1/docs/alpha/agent-integration.md#agent-api-keys)
+handling the key. [Migrations](https://github.com/samrusani/AliceMemory/blob/v0.25.0/scripts/migrate.sh) · [User seed](https://github.com/samrusani/AliceMemory/blob/v0.25.0/scripts/seed_local_user.py) · [Agent keys](https://github.com/samrusani/AliceMemory/blob/v0.25.0/docs/alpha/agent-integration.md#authentication)
 
 ```sh
 docker exec fivefold-f8-alice-pg pg_isready -U alicebot_admin -d alicebot
