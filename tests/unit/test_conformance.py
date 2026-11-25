@@ -138,6 +138,21 @@ def test_reply_drops_need_no_fixture_hooks(kind: str, server: str, tmp_path: Pat
 
 
 @pytest.mark.parametrize("kind", ["stdio", "streamable_http"])
+def test_missing_write_tool_is_a_test_error(kind: str, tmp_path: Path) -> None:
+    with connection(kind, "deduplicating", tmp_path / "calls.jsonl") as transport:
+        data = declaration(transport, REPLY_CASES)
+        data["write"]["name"] = "missing_tool"
+        result = command(tmp_path, data)
+    assert result.returncode == 2, result.stdout + result.stderr
+    rows = {row["case"]: row for row in json.loads(result.stdout)["cases"]}
+    for case in REPLY_CASES:
+        assert rows[case]["verdict"] == "error"
+        assert rows[case]["reason"] == "fixture write returned an MCP error"
+        assert rows[case]["evidence"]["writes_sent"] == 1
+        assert rows[case]["evidence"]["replies_dropped"] == 0
+
+
+@pytest.mark.parametrize("kind", ["stdio", "streamable_http"])
 @pytest.mark.parametrize("server", ["deduplicating", "repeating"])
 def test_pre_commit_timeout_ends_the_held_attempt(kind: str, server: str, tmp_path: Path) -> None:
     audit = tmp_path / "calls.jsonl"
