@@ -2,7 +2,7 @@
 
 What each of FiveFold's guarantees depends on, and the limits known so far. The guarantees are those of the gateway in configuration G2. Decision records are cited by number and live in [adr/](adr/README.md).
 
-Status: updated for the full study on 17 Nov 2026. It reflects the accepted decisions through 0016. The viewer is implemented under record 0012.
+Status: updated for the full study on 17 Nov 2026. It reflects the accepted decisions through 0023. The viewer is implemented under record 0012.
 
 ## How to read this page
 
@@ -159,10 +159,10 @@ attempts and B1's unlimited retries. See [record 0020](adr/0020-dbos-baseline.md
 - Every component, the gateway included, reads time only from the run's virtual clock, and randomness only from the run's seeded generators (0009). Timeouts, probes, polls, approver delays and restart delays are timer events in virtual time. Lint bans wall-clock calls and global randomness outside the clock and generator modules (0007).
 - Message latency is drawn from the seed, between 5 and 50 ms a hop (0009), and the simulator handles one request at a time ([spec](spec.md), Simulator). A virtual time in a result says when something happened in the run, not how fast a real system is.
 - FiveFold records wall time for metrics. Application decisions use virtual time (0009).
-- B1 uses Temporal's wall clock for internal scheduling, retries and infrastructure timers. FiveFold virtual time stands still while it waits for Temporal. Application timeouts and scoring use FiveFold's clock (0018).
+- B1 uses Temporal's wall clock for internal scheduling, retries and infrastructure timers. FiveFold holds virtual time while it waits for Temporal. The handoff limit is 30 s, or 130 s after a failed or lost attempt (#124). An expired handoff stops the episode before scoring. Application timeouts and scoring use FiveFold's clock (0018).
 - B2 uses the DBOS clock and jitter for internal wall-time scheduling. FiveFold holds virtual time during the handoff. Application timeouts and scoring still use FiveFold's clock (0020).
 - Recovery latency is virtual time too: from the first fault that touched an intent until the stack's evidence settled its outcome (0014). It says how long the stack took to know, not how fast a real system recovers, and its wall-clock twin depends on the machine. An intent whose outcome the evidence never settles has no latency, and counts as unresolved. Latency alone does not rank configurations: with F2 at C2, B0 settles in 2,013 ms by placing a second order, which fails properties 1, 2 and 3.
-- One known source of nondeterminism remains: LangGraph's retry backoff sleeps in wall time, with jitter from the global random generator. It changes wall-clock metrics only (0008, 0009).
+- Wall-time nondeterminism comes from LangGraph's retry backoff and jitter, Temporal's clock, and DBOS's clock and jitter. These change wall-time scheduling and metrics only. FiveFold's clock governs scored evidence (0008, 0009, 0018, 0020).
 - The determinism contract covers the inproc topology only. The split topology runs the gateway, the simulator and PostgreSQL as separate services, for people who bring their own agent. It is not deterministic: its virtual clock follows the host's monotonic clock, though faults still fire on counters (0009).
 
 ## The bounded gateway model
@@ -172,6 +172,16 @@ The TLA+ model checks I1 to I7, append-only history and deadlocks for G2 across 
 An action can record only one effect ID. The modeled destination can commit two distinct effects at C0 or C1. At C1, a status answer can list both effects or falsely show a settled empty outcome. The gateway's report check uses the evidence it has recorded. The evaluator's five properties use the simulator's separate evidence.
 
 The search covers the modeled bounds. It does not prove safety for longer runs, liveness, the evaluator's five properties or any real service. It abstracts the final approval poll, virtual deadlines, faults and destination behaviour. The in-process and PostgreSQL tests exercise exact fault points and timings, row locking and transactions. G1, the baselines, agent strategy and transport implementation are outside the model.
+
+On GitHub Actions, both profiles finished on `0b47120` on Linux amd64.
+Times are TLC elapsed time and exclude setup.
+
+| Profile | Workers | Generated states | Distinct states | Search depth | Elapsed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Bounded CI | 1 | 2,170,421 | 677,392 | 24 | 26 s |
+| Larger nightly | 2 | 15,006,806 | 4,036,946 | 28 | 143 s |
+
+[Bounded CI run](https://github.com/samrusani/FiveFold/actions/runs/45598158102) · [Nightly run](https://github.com/samrusani/FiveFold/actions/runs/45620892045)
 
 ## Known limits
 
@@ -196,10 +206,10 @@ The 0.2.0a4 pre-release adds F8 on the memory scenario. It includes B1, B2, the 
 4. **F8 late relevant corrections.** At C0 to C2, G2 fails property 3 by design when `late_relevant` changes the order channel after G2's send check. The exact rule still depends on the channel the agent read, even when the new one qualifies. F7 late `price_up` has the same race. At C3 the destination rejects the stale write and the agent rereads (0023).
 5. **One domain.** v0.1 covers procurement only: quotes, suppliers, budgets, approvals, purchase orders and inventory reservations ([product](product.md), Scope). The 379 standard expected outcomes use dev-001. The 80 F8 outcomes use `dev-001-memory-po`. Both tasks have a single purchase-order intent (0006, 0023). The [full study](report.md) uses dev-001 with two live models and three seeds; it does not establish results for other scenarios or models.
 6. **A fixed fault catalog.** Faults fire at named points, on per-point event counters, never on wall-clock time (0006). FiveFold is not a general chaos tool ([product](product.md), Scope), so failures outside the catalog are not tested.
-7. **The split topology is not deterministic** (0009; see [Virtual time](#virtual-time)). It fires faults only on the network and in the simulator, so it refuses F1, F3, F9 and F11, and F6 and F7 early in G1 and G2. It runs one agent worker, its services must share one host, and each service must start once per run: its fault counters live in its memory, so a service started again mid-run fires a fault again from its first occurrence. It counts no tokens and no cost, since it runs no model ([Bring your own agent](your-own-agent.md)).
+7. **The split topology is not deterministic** (0009; see [Virtual time](#virtual-time)). It fires faults only on the network and in the simulator, so it refuses F1, F3, F9 and F11, and F6 and F7 early in G1 and G2. It also refuses memory-enabled scenarios. It runs one agent worker, its services must share one host, and each service must start once per run: its fault counters live in its memory, so a service started again mid-run fires a fault again from its first occurrence. It counts no tokens and no cost, since it runs no model ([Bring your own agent](your-own-agent.md)).
 8. **Failed is final, and nothing is undone.** A commit after Failed happens only when the destination breaks its contract; G2 does not reverse Failed, and the evaluator still scores the ledger (0003). v0.1 has no compensation: if one intent's effect commits and another's fails, nothing is undone, and the report must say so (0004).
 9. **An agent cannot withdraw a live proposal.** It waits for the approval, a denial or the approval timeout (0001).
-10. **Baselines without a gateway.** B0 keeps the framework's defaults. B1 uses Temporal's Activity retries and B2 uses DBOS Step retries with the same scripted policy. A B0 with `ToolNode`'s error handling turned on and G2 with one feature switched off at a time are deferred ([plan](plan.md)).
+10. **Baselines without a gateway.** B0 keeps the framework's defaults. B1 uses Temporal's Activity retries and B2 uses DBOS Step retries with the same scripted policy. See [setup and DBOS state cleanup](studies.md#clean-up-dbos-state-after-a-hard-kill). A B0 with `ToolNode`'s error handling turned on and G2 with one feature switched off at a time are deferred (0008).
 11. **G1 is a pattern, not a product.** G1 follows the single-use grant pattern, and no claim is made that it reproduces any specific product (0008). Record 0006 fixes no G1 outcome, so G1's cells come from its first deterministic runs (`faults/expected.yaml`).
 12. **Comparisons with prior work.** The metric `success_claimed_with_duplicate` is comparable in spirit to the false-success measure in "Where Does Exactly-Once Live? Model, Harness, and Tool-Contract Effects on Duplicate Side Effects in LLM Agents" (LIMBO, arXiv 2609.29095, a preprint). The two definitions are not claimed to match (0004).
 13. **The development scenarios are public.** Code can be fitted to the scenarios in this repository. The plan guards against it with held-out scenarios that a separate team keeps outside the repository ([plan](plan.md), Risks). The full study did not run the held-out set.
@@ -212,4 +222,4 @@ The 0.2.0a4 pre-release adds F8 on the memory scenario. It includes B1, B2, the 
 
 ## Out of scope
 
-v0.1 is not an agent framework, a durable execution engine, a model router or a memory product. It has no receipts, signing, TEE or hosted service ([product](product.md), Scope). Later releases are listed in the [plan](plan.md).
+v0.1 is not an agent framework, a durable execution engine, a model router or a memory product. It has no receipts, signing, TEE or hosted service ([product](product.md), Scope). See the spec for [later releases](spec.md#later-releases).

@@ -1,10 +1,11 @@
 """One run in the inproc topology: every component on one scheduler (0009).
 
-A run is a scenario, a configuration, a contract level, a seed and a model (0009). This
-build runs B0, G1 and G2 with the scripted model, recorded into a cassette or not, with a
-cassette's replay, with a live model, always recorded, or as an experimental branch of a
-recorded run, which replays the parent's first K model calls and then switches to the
-scripted model or a live one, also always recorded (`fivefold.harness.models`). A branch
+A run is a scenario, a configuration, a contract level, a seed and a model (0009).
+B0, G1 and G2 can use a scripted or live model, replay a cassette or branch from a
+recorded run. A live run always records a cassette. B1 and B2 run the scripted model
+with Temporal and DBOS respectively (0018, 0020). A branch replays the parent's first K
+model calls, then switches to a scripted or live model. It always records a cassette
+(`fivefold.harness.models`). A branch
 runs its parent's run: the same scenario, configuration, contract level, seed, fault plan
 and workers. It is a new run all the same, with its own run id, the parent's with
 `.branch-K` added, and `harness.run` names its parent and its branch point.
@@ -20,8 +21,9 @@ the faults the run had.
 
 1. records the run, in its run database and in the run registry (0012,
    `fivefold.harness.registry`), sets up the simulator for the contract with the
-   configuration's credentials (only the gateway in G1 and G2, the agent workers in B0;
-   0008), and serves the simulator's API and, in B0, the report sink on the transport;
+   configuration's credentials (only the gateway in G1 and G2, and the agent workers in
+   the baselines, 0008), and serves the simulator's API and the baseline report sink
+   on the transport;
 2. in G1 and G2, starts the gateway: its store, its dispatcher after startup recovery, and
    its tools, one MCP server per agent connection. G1's store has action identity off,
    which makes the gateway authorization only (0008);

@@ -1,6 +1,7 @@
 # 0021: A TLA+ model of the gateway
 
 Status: Accepted on 23 Nov 2026 by the maintainer
+Note, 23 Nov 2026: implemented in 0.2.0a3 (#135, #136, #138).
 Date: 2026-11-22
 Spec sections affected on acceptance: Action state machine, Testing, Stack, Later releases
 

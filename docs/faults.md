@@ -31,7 +31,7 @@ Each applicable fault runs against four kinds of destination ([record 0005](adr/
 | Configuration | Between the agent and the destination |
 | --- | --- |
 | B0 | The LangGraph agent calls the API directly |
-| B1 | The Temporal agent calls the API directly. At C2 and C3 each write Activity has a key that stays the same on retry. |
+| B1 | The Temporal agent calls the simulator API directly through the harness. At C2 and C3 each write Activity has a key that stays the same on retry. |
 | B2 | The DBOS agent calls the API directly through the harness. At C2 and C3 each write Step has a key that stays the same on retry. |
 | G1 | An approval gate: one approval request per write call, checked before each send |
 | G2 | The reference gateway |

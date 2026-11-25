@@ -31,7 +31,7 @@ No model grades the runs, and a seed with its recorded model replies reproduces 
 ![How a FiveFold run works: the agent talks to the procurement simulator directly (B0), through an approval gate (G1) or through the FiveFold gateway (G2). The harness injects faults on the way and logs every message. The evaluator scores five checks from the simulator's effects ledger and the logs, never from the agent's transcript.](docs/images/how-it-works.png)
 
 - **The agent** is a LangGraph agent on a scripted model, which needs no API key, or on a live model. You can also bring your own agent over MCP.
-- **Three configurations** put something different between the agent and the procurement system: nothing (B0), an approval gate (G1) or the FiveFold gateway (G2).
+- **Five configurations** compare the direct LangGraph baseline (B0), the scripted Temporal and DBOS baselines (B1 and B2), an approval gate (G1) and the FiveFold gateway (G2).
 - **The harness** runs everything on one virtual clock with seeded randomness, and fires twelve kinds of failure at named points, so every rerun is the same run. [The fault catalog](docs/faults.md) lists them, with the four contract levels a destination can offer.
 - **The evaluator** scores the five checks from the simulator's ledger and the harness's logs, and writes CSV and Markdown reports.
 
@@ -95,7 +95,7 @@ The output is trimmed; the [tour](docs/tour.md#demo-1-line-by-line) shows all of
 
 ![Fault episodes that pass, by configuration, on the 64 fault cells all three configurations run: 192 live episodes per model in each configuration. B0, the agent alone: Claude Sonnet 5.5 39% (74 of 192), GPT-6.1 Sol 52% (100 of 192), the scripted agent 34% (22 of 64 cells). G1, an approval gate: 33% for all three (64 and 63 of 192 episodes, 21 of 64 cells). G2, the FiveFold gateway: 88% for all three (168 of 192 episodes for each model, 56 of 64 cells for the scripted agent); both models got the scripted agent's exact outcome in every G2 episode.](docs/images/results.png)
 
-Claude Sonnet 5.5 and GPT-6.1 Sol each ran every fault cell three times, 741 episodes per model. Each configuration applies to a different set of fault cells, so the chart and the comparisons below use the 64 fault cells that all three run: 192 episodes per model in each configuration. The [study report](docs/report.md) has every table, each configuration's full set and the raw data.
+Claude Sonnet 5.5 and GPT-6.1 Sol each ran every B0, G1 and G2 fault cell of dev-001 three times, for 741 episodes per model including no-fault runs. Each configuration applies to a different set of fault cells, so the chart and the comparisons below use the 64 fault cells that all three run: 192 episodes per model in each configuration. The [study report](docs/report.md) has every table, each configuration's full set and the raw data.
 
 1. **Behind the gateway, the model stopped mattering.** G2 passed 213 of its 249 fault episodes for each model, and all 249 ended exactly as they do for the scripted agent. At contract level C3 it passed every episode.
 2. **Without it, the outcome depends on the model.** Calling the API directly, Claude passed 39% and GPT 52%. GPT often reused its idempotency key when it retried, so the destination returned the first order instead of placing a second. Where the destination offers no idempotency key (C0 and C1), both passed 25%.
@@ -116,7 +116,7 @@ CI checks 379 expected outcomes on dev-001 and 80 F8 outcomes on the memory scen
 
 | Page | What it covers |
 | --- | --- |
-| [The twenty-minute tour](docs/tour.md) | Every demo in B0, G1 and G2, a small study with its report, B0 beside B1, recorded playback and branching |
+| [The twenty-minute tour](docs/tour.md) | Every demo in B0, G1 and G2, a small study with its report, B0 beside B1 and B2, recorded playback and branching |
 | [Faults, contract levels and configurations](docs/faults.md) | The twelve faults, what a destination can offer, and how both expected-outcome matrices are tested |
 | [Viewer](docs/viewer.md) | Each run's timeline and scorecard, and B0 beside G2 on the same seed |
 | [Studies and reports](docs/studies.md) | Matrices of runs, CSV and Markdown reports, cost per passing run and recovery latency |

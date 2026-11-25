@@ -60,8 +60,8 @@ a fixed plan could also say:
   are left out: F10 below C1, for example, or `stale_within_lag` with no status lag.
   F10 is left out in G1 too, where nothing ever asks for a status answer (0008).
 
-A fault this build cannot inject (F8), or one that no combination lets fire in the run,
-is refused in one line, before the run starts.
+F8 needs an in-process memory scenario and a fixed plan (0023).
+A fault that the chosen run cannot inject is refused before the run starts.
 """
 
 from __future__ import annotations

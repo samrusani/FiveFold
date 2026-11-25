@@ -1,9 +1,9 @@
 """The expected-outcome cells of record 0006, and the fault plan for each (0006).
 
-`faults/expected.yaml` lists every cell built so far: a fault variant, a contract level and
-a configuration, with the verdict the run must get. `cell_plan` turns a cell into the plan
-the run uses. A fault that acts on a message targets the purchase order's call, on the hop
-the configuration uses: `gw_sim` in G modes, `agent_sim` in B0. G1 and G2 have the same
+`faults/expected.yaml` lists dev-001's cells. `faults/expected-f8.yaml` lists the memory
+scenario's F8 cells. Each row names a variant, contract level, configuration and verdict.
+`cell_plan` turns a cell into the run's plan. A message fault targets the purchase order's
+call on `gw_sim` in G modes or `agent_sim` in B0, B1 and B2. G1 and G2 have the same
 gateway points, so a G1 cell fires its fault where the G2 cell does (0006, 0008).
 
 The variants of a cell:
@@ -70,7 +70,7 @@ TIMINGS: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
         "B0": ("net.agent_sim.request", {"api": ORDER}),
     },
 }
-"""Where F6 and F7 fire, early and late, by configuration (0006, catalog)."""
+"""Where F6, F7 and F8 fire, early and late, by configuration (0006, 0023)."""
 
 F7_CHANGES = ("price_up", "harmless")
 """F7's changes: the price up within the intent's maximum, or the lead time only."""
@@ -129,7 +129,7 @@ class Cell(BaseModel):
 
 
 class Expected(BaseModel):
-    """`faults/expected.yaml`."""
+    """The expected-outcome file for one scenario."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

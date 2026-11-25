@@ -121,7 +121,7 @@ from fivefold.paths import DB_DIR, DEV_001, EXPECTED, EXPECTED_F8
 from fivefold.recorder.cassette import Cassette, response_message
 
 ALL: Final = "all"
-"""The `--cells` name of every cell of `faults/expected.yaml`."""
+"""The `--cells` selector for every cell in the chosen expected-outcome file."""
 
 NO_FAULT: Final = "none"
 """The `--cells` name of the cells with no fault, and the start of each one's name."""
@@ -157,7 +157,7 @@ class NoFault:
 
 
 StudyCell = Cell | NoFault
-"""A cell of a study: a cell of `faults/expected.yaml`, or a cell with no fault."""
+"""A row in the chosen expected-outcome file or a cell with no fault."""
 
 
 def as_config(name: str) -> Config:
@@ -169,7 +169,7 @@ def as_config(name: str) -> Config:
 
 
 def selector_names(cell: StudyCell) -> frozenset[str]:
-    """The `--cells` names that name `cell`. A cell of `faults/expected.yaml` has `all`,
+    """The `--cells` names that name `cell`. A cell from the expected-outcome file has `all`,
     its fault, its fault and variant when it has a variant, and its own name. A cell with
     no fault has `none` and its own name."""
     if isinstance(cell, NoFault):
@@ -223,7 +223,7 @@ def select_cells(
 
 
 def expected_outcome(cell: StudyCell, expected: Expected, scenario: Scenario) -> str | None:
-    """The outcome `faults/expected.yaml` expects of `cell`, such as `fail (1, 2, 3)`; None
+    """The outcome expected of `cell`, such as `fail (1, 2, 3)`. None
     for a cell with no fault, or when the file is for another scenario."""
     if isinstance(cell, NoFault) or expected.scenario != scenario.id:
         return None
@@ -231,7 +231,7 @@ def expected_outcome(cell: StudyCell, expected: Expected, scenario: Scenario) ->
 
 
 def outcome_text(verdict: str, failing: Iterable[int]) -> str:
-    """A verdict and its failing properties, as `faults/expected.yaml` gives them."""
+    """A verdict and its failing properties from the expected-outcome file."""
     numbers = ", ".join(str(number) for number in failing)
     return f"{verdict} ({numbers})" if numbers else verdict
 

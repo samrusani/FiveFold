@@ -77,11 +77,11 @@ Teams code only against the `docs/` contracts. Any contract change is a decision
 
 ## Launch checklist
 
-- [ ] Demo 1 reproduces from the README in under 15 minutes on a clean machine
-- [ ] Report includes raw results, denominators, configurations and model versions
+- [x] Demo 1 reproduces from the README in under 15 minutes on a clean machine
+- [x] Report includes raw results, denominators, configurations and model versions
 - [x] Limitations section states what each guarantee depends on
 - [x] Citations give full titles and arXiv IDs, labelled as preprints
 - [x] Every figure quoted from a preprint is checked against the paper; unconfirmed citations are fixed or removed
 - [ ] Report shared with the cited papers' authors; MCP issue #3394 gets a link once the conformance test exists
-- [ ] Open-source files in place: LICENSE, CODE_OF_CONDUCT and a security policy
+- [x] Open-source files in place: LICENSE, CODE_OF_CONDUCT and a security policy
 - [x] Audited all tracked files, including the raw study data, and branch history since Sprint 2 for secrets and personal identifiers on 18 Nov 2026.

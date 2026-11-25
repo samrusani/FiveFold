@@ -11,7 +11,8 @@ G1 and G2 expose the same tools with the same schemas; only their behaviour diff
   checks nothing. The sink records it and says what breaks the schema, as it does for
   B0's reports, and the agent is told the same.
 
-- Reads (`get_quote`, `list_suppliers`, `get_budget`, `get_inventory`) take the
+- Reads (`get_quote`, `list_suppliers`, `get_budget`, `get_inventory`, and
+  `get_memory` on memory-enabled scenarios) take the
   simulator's own arguments, read through the gateway's simulator client, record the
   read and return `{read_id, key, version, data}`.
 - Writes (`submit_purchase_order`, `reserve_inventory`) take the business arguments,
