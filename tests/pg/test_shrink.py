@@ -218,7 +218,7 @@ def test_taken_database_survives_and_failed_candidate_is_removed(
     [
         ({"config": "B1"}, "B1 needs"),
         ({"config": "B2"}, "B2 needs"),
-        ({"topology": "split"}, "split runs"),
+        ({"topology": "split", "model_adapter": "external"}, "split runs"),
         ({"model_adapter": "live"}, "live runs"),
         ({"model_adapter": "replay"}, "replayed runs"),
         ({"parent_run_id": "parent", "branch_point": 0}, "branched runs"),

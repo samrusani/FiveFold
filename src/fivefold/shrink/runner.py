@@ -44,6 +44,8 @@ def registered_result(admin_dsn: str, database: str) -> RunResult:
 def source_spec(source: RunResult, scenario: Scenario) -> tuple[RunSpec, Plan]:
     """Require the scored run's original input and a fully materialized fault plan."""
     run = source.run
+    if run.topology != "inproc":
+        raise ValueError("split runs need separate candidate determinism and cleanup verification")
     cassette_hint = (
         "a changed fault plan can change requests. Use ordinary playback for the cassette"
     )
@@ -53,8 +55,6 @@ def source_spec(source: RunResult, scenario: Scenario) -> tuple[RunSpec, Plan]:
         raise ValueError(f"cannot shrink replayed runs because {cassette_hint}")
     if run.model_adapter != "scripted" or run.model != "scripted":
         raise ValueError(f"cannot shrink live runs because {cassette_hint}")
-    if run.topology != "inproc":
-        raise ValueError("split runs need separate candidate determinism and cleanup verification")
     if run.config not in ("B0", "G1", "G2"):
         raise ValueError(
             f"{run.config} needs separate candidate determinism and cleanup verification"
