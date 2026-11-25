@@ -134,9 +134,9 @@ The gateway is a research design, not hardened for production ([SECURITY.md](SEC
 
 ## Status
 
-Version 0.1.2 is the latest full release. [PyPI](https://pypi.org/project/fivefold/0.1.2/)
+Version 0.2.0 is the first full release in the 0.2 series. Install it with `pip install fivefold`. [PyPI](https://pypi.org/project/fivefold/0.2.0/)
 
-The 0.2.0a4 pre-release adds F8, a memory correction after a proposal, in a dedicated in-process scenario. It also includes the scripted Temporal and DBOS baselines, the MCP lost-reply conformance test, run shrinking and the bounded TLA+ gateway model checked in CI. Install it with `pip install --pre fivefold` or pin it with `pip install fivefold==0.2.0a4`. [Fault catalog](docs/faults.md#f8-in-the-memory-scenario) · [Run-shrinking walkthrough](docs/shrinking.md) · [MCP conformance walkthrough](docs/conformance.md)
+Version 0.2.0 includes F8, a memory correction after a proposal in a dedicated in-process scenario, and the optional AliceMemory exercise. It also includes the scripted Temporal and DBOS baselines, the MCP lost-reply conformance test, run shrinking and the bounded TLA+ gateway model checked in CI. [Fault catalog](docs/faults.md#f8-in-the-memory-scenario) · [Run-shrinking walkthrough](docs/shrinking.md) · [MCP conformance walkthrough](docs/conformance.md)
 
 The [full study and its raw data](docs/report.md) are available.
 
