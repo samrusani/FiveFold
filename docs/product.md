@@ -20,7 +20,7 @@ All of this evidence comes from 2026 preprints that have not been peer-reviewed.
 | User | What they do with it |
 | --- | --- |
 | Agent platform engineers | Run the suite against their agent stack before granting write access |
-| MCP server and API authors | Check that their tools survive lost replies (conformance test, 0.2.0a1) |
+| MCP server and API authors | Check that their tools survive lost replies (conformance test, 0.2.0) |
 | Teams on Temporal, DBOS or LangGraph | Compare their setup against published baselines |
 | Researchers | Reproduce the 2026 failure modes in one place and extend them |
 
@@ -82,13 +82,13 @@ Every piece has 2026 prior work, but nobody scores all five properties together,
 | tau2-bench | Business tasks scored on final database state | Fault injection |
 | ActionProxy | Gateway with single-use grants | Fault injection and evaluation |
 
-The 0.2.0a4 pre-release includes the bounded TLA+ gateway model (record 0021) and run shrinking (record 0022), both introduced in 0.2.0a3. It also includes B1, the scripted Temporal baseline (record 0018), B2, the scripted DBOS baseline (record 0020), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394.
+Version 0.2.0 includes the bounded TLA+ gateway model (record 0021) and run shrinking (record 0022), both introduced in 0.2.0a3. It also includes B1, the scripted Temporal baseline (record 0018), B2, the scripted DBOS baseline (record 0020), and the MCP lost-reply conformance test (record 0019), requested in MCP issue #3394.
 
 ## Decisions and open questions
 
 - **Name:** FiveFold; the Python package and its commands are `fivefold`. The name was unclaimed on PyPI and npm on 14 Nov 2026. The repository was renamed from AgentCheck to FiveFold on 15 Nov 2026.
 - **License:** Apache-2.0, which includes a patent grant.
-- **Memory correction (F8)** ships in 0.2.0a4 on the memory-enabled development scenario. The in-repo memory drives the scored runs. Record 0023 also defines an optional AliceMemory exercise. See [record 0023](adr/0023-memory-correction.md).
+- **Memory correction (F8)** ships in 0.2.0 on the memory-enabled development scenario. The in-repo memory drives the scored runs. Record 0023 also defines an optional AliceMemory exercise. See [record 0023](adr/0023-memory-correction.md).
 - **Open: live study of B1, B2 and F8 after 0.2.0.** Which models and spend cap should it use?
 
 ## Sources

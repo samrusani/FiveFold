@@ -15,7 +15,7 @@ Status: M0 done, 14 Nov 2026. M1 and M2 done, 15 Nov 2026. M3 done but for T6's 
 | M4 | 5 | Live study | Report drafted |
 | M5 | 6 | Release v0.1 | v0.1 released |
 
-The 0.2.0a4 pre-release includes the scripted Temporal baseline B1 (record 0018), the scripted DBOS baseline B2 (record 0020) and the MCP lost-reply conformance test (record 0019).
+Version 0.2.0 includes the scripted Temporal baseline B1 (record 0018), the scripted DBOS baseline B2 (record 0020) and the MCP lost-reply conformance test (record 0019).
 
 The [bounded TLA+ gateway model](adr/0021-tla-gateway-model.md) and [run shrinking](adr/0022-run-shrinking.md) first shipped in 0.2.0a3. CI and nightly workflows check the model. F8 runs on the dedicated memory scenario. Its scored runs use in-repo memory. The record also defines a separate optional AliceMemory exercise. Receipt export is planned for v0.3.
 

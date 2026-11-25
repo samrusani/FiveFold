@@ -45,15 +45,15 @@ In the baseline configurations, the agent calls the simulator API directly and t
 
 Detail: 0008, 0018 and 0020.
 
-The 0.2.0a4 pre-release includes B1, B2 and the MCP lost-reply conformance test (0019).
+Version 0.2.0 includes B1, B2 and the MCP lost-reply conformance test (0019).
 
 | Config | Write path | Features |
 | --- | --- | --- |
 | B0 | The agent calls the simulator API directly | The framework's retries only |
 | G1 | Through the gateway | Authorization only: one approval per call, checked before a single send |
 | G2 | Through the gateway | Authorization, action identity, freshness checks, contract-aware recovery, report checks |
-| B1 (0.2.0a1) | A Temporal agent calls the simulator API directly through the harness | Shared scripted policy, durable Activity results, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
-| B2 (0.2.0a2) | A DBOS agent calls the simulator API directly through the harness | Shared scripted policy, durable Step results, up to three attempts per Step and a stable key per write Step at C2 and C3 (0020) |
+| B1 (0.2.0) | A Temporal agent calls the simulator API directly through the harness | Shared scripted policy, durable Activity results, Activity retries and a stable key per write Activity at C2 and C3 (0018) |
+| B2 (0.2.0) | A DBOS agent calls the simulator API directly through the harness | Shared scripted policy, durable Step results, up to three attempts per Step and a stable key per write Step at C2 and C3 (0020) |
 
 B1 and B2 run the scripted model only. Install the SDK with
 `pip install "fivefold[temporal]"` or `pip install "fivefold[dbos]"`. For
@@ -160,7 +160,7 @@ Detail: 0001.
 
 Detail: 0002.
 
-- The simulator's approvals service is the system of record. The scenario's `authority` section is the policy: a supplier allowlist, a per-order ceiling, an auto-approval threshold, the approval lifetime and the scripted approver's rules. The gateway has no policy file of its own in v0.1.
+- The simulator's approvals service is the system of record. The scenario's `authority` section is the policy: a supplier allowlist, a per-order ceiling, an auto-approval threshold, the approval lifetime and the scripted approver's rules. The FiveFold gateway has no policy file of its own.
 - Every write cites exactly one approval. Policy decides each request at once: it denies orders from suppliers off the allowlist or above the per-order ceiling, approves orders at or below the auto-approval threshold and every reservation, and queues the rest for the scripted approver. An approval backs at most one effect.
 - A gateway grant binds one approval to one action. Its states are pending, active, consumed (at the first dispatch), denied, timed_out, released, revoked and expired.
 - Before the first send and before every C2 retry, the gateway checks the approval with the approvals service. An approval that expires at or before the send's time plus the settle time S counts as expired (0010). C3 retries rely on the destination, which checks the approval atomically at commit.
@@ -169,7 +169,7 @@ Detail: 0002.
 
 Detail: 0003.
 
-The bounded G2 model for C0 to C3 (record 0021) ships in 0.2.0a3. It models
+The bounded G2 model for C0 to C3 (record 0021) ships in 0.2.0. It models
 durable action state and its append-only journal, separate from
 destination effects. It takes legal transition edges from the gateway
 implementation and checks I1 to I7.
@@ -368,15 +368,15 @@ Detail: 0009, 0018 and 0020.
 - **Branch point:** model calls are the only points where the model can switch, so the branch point K counts them, in the order the cassette and `harness.model_call` number them, from 0 to the cassette's length. The branch adapter serves the parent's first K calls with the replay's checks, then hands every later call to the new model. A live one needs the flag, spend cap and price file of any live run. Every call takes `think_ms` once. A branch that asks for fewer than K calls fails, as a replay does.
 - **Branch run:** it runs its parent's run (the same scenario, configuration, contract level, seed, fault plan and workers) in a database of its own. Its run id is the parent's with `.branch-K` added, such as `dev-001-single-po.G2.C2.7.branch-4`. `harness.run` records `parent_run_id`, `branch_point` (K), the adapter and name of the new model, and the digest of the branch's own cassette. `harness.model_call` logs every call under the new model's name, the replayed calls included.
 - **Branch cassette:** it holds all the branch's calls, the replayed ones included, each hashed with the new model, and its header names the parent's run id and the branch point. The cassettes of other runs leave both fields out, so they read as before, and the format stays `fivefold-cassette/1`. `play` replays a branch's cassette like any other.
-- **Run shrinking (0.2.0a3, record 0022):** `python -m fivefold.shrink` returns the smallest verified plan it finds within the search budget for a scored, in-process scripted B0, G1 or G2 run. A candidate must return `fail` with the same failing properties and the same set of `(property, reason code, intent ID)` triples. Try candidates in a fixed order, each in a fresh database. The default budget is 100 distinct candidates. An optional wall-time limit stops the search between candidates. `shrink.json` records `budget_exhausted` and the count reached. Repeating the search with that candidate budget and no wall-time limit yields the same plan. [Walkthrough](shrinking.md)
+- **Run shrinking (0.2.0, record 0022):** `python -m fivefold.shrink` returns the smallest verified plan it finds within the search budget for a scored, in-process scripted B0, G1 or G2 run. A candidate must return `fail` with the same failing properties and the same set of `(property, reason code, intent ID)` triples. Try candidates in a fixed order, each in a fresh database. The default budget is 100 distinct candidates. An optional wall-time limit stops the search between candidates. `shrink.json` records `budget_exhausted` and the count reached. Repeating the search with that candidate budget and no wall-time limit yields the same plan. [Walkthrough](shrinking.md)
 
 ## Testing
 
-- **TLA+ (0.2.0a3, record 0021):** `make check` runs the bounded G2 model across C0 to C3. TLC checks I1 to I7, append-only history and deadlocks. `make tla-nightly` runs the larger profile in the scheduled workflow. Each run regenerates the action edges, grant edges and send checks from Python and compares them with the checked-in tables. Tests replay representative accepted and refused paths through both gateway stores. Java 17 and the checksum-verified TLC jar are required. `make check` fails with setup instructions if either is unavailable. Run `make tla-setup` to install the jar.
+- **TLA+ (0.2.0, record 0021):** `make check` runs the bounded G2 model across C0 to C3. TLC checks I1 to I7, append-only history and deadlocks. `make tla-nightly` runs the larger profile in the scheduled workflow. Each run regenerates the action edges, grant edges and send checks from Python and compares them with the checked-in tables. Tests replay representative accepted and refused paths through both gateway stores. Java 17 and the checksum-verified TLC jar are required. `make check` fails with setup instructions if either is unavailable. Run `make tla-setup` to install the jar.
 - **Deterministic tests, no model calls:** unit tests, scenario tests with the scripted model, Hypothesis rule-based state machines that fire random fault sequences and assert I1 to I7, and Hypothesis runs of the development scenario with random fault plans, drawn from each run's seed, that assert I1 to I7 on each run's records.
 - **Run shrinking acceptance checks (0022):** verify the failure signature, fault plan reductions and deterministic candidate order. Check database ownership and cleanup. Repeat a search stopped by the optional wall-time limit with its recorded candidate count and check that it yields the same plan.
 - **Expected outcomes:** `faults/expected.yaml` holds the verdict and failing properties for every applicable fault variant, contract level and configuration on the standard development scenario. Deterministic tests assert 235 cells for B0, G1 and G2 (0006), 72 for B1 (0018) and 72 for B2 (0020).
-- **F8 checks (0.2.0a4, record 0023):** `faults/expected-f8.yaml` names 80 cells on `dev-001-memory-po`. Each runs twice against in-repo memory, with matching playback record digests after wall-clock exclusions. The tests assert the verdict, failing properties, one correction, two memory versions and one committed effect. Both routes list `get_memory` only in memory-enabled scenarios. The optional AliceMemory exercise in record 0023 uses synthetic data in a separate operator-provisioned instance outside CI.
+- **F8 checks (0023):** `faults/expected-f8.yaml` names 80 cells on `dev-001-memory-po`. Each runs twice against in-repo memory, with matching playback record digests after wall-clock exclusions. The tests assert the verdict, failing properties, one correction, two memory versions and one committed effect. Both routes list `get_memory` only in memory-enabled scenarios. The optional AliceMemory exercise in record 0023 uses synthetic data in a separate operator-provisioned instance outside CI.
 - **B1 acceptance check:** run each applicable scripted cell at least 20 times, including with host pauses, and compare all playback record digests with the usual wall-clock exclusions (0018). Use `FIVEFOLD_B1_REPEATS=20 uv run pytest tests/pg/test_b1.py`. The implementation must also pass the 235 original cells and regenerate the committed study exports byte for byte.
 - **B2 acceptance check:** run all 88 applicable scripted cells (72 on dev-001 and 16 on the F8 scenario) at least 20 times, including host pauses, and compare all playback record digests with the same wall-clock exclusions. Use `FIVEFOLD_B2_REPEATS=20 uv run pytest tests/pg/test_b2.py`. Test clean worker startup, per-invocation state and teardown, and denial of reads and writes in `sim` as `ff_dbos`. Retain all existing expected-outcome checks.
 - **MCP conformance tests:** run the three cases in record 0019 against two local synthetic fixtures over both stdio and Streamable HTTP. One fixture deduplicates at the effect boundary. The other records both effects when both delivery attempts write. Run both reply-drop cases with the pre-commit hooks disabled. Assert that the runner drops one reply, sends two write requests and takes its effect counts from the probe. Test the report and exit codes, including missing or invalid evidence and an unsupported case.
@@ -387,7 +387,7 @@ Detail: 0009, 0018 and 0020.
 
 ## MCP conformance test
 
-- **MCP lost-reply conformance test (0.2.0a1, record 0019):** the server author declares a disposable local test instance with synthetic state, a write tool and its arguments, the expected effect, retry identity, supported cases, an evidence deadline and a read-only probe. The probe counts committed effects in a fresh namespace and verifies their contents. If work continues after a reply, it also establishes when the attempts have settled.
+- **MCP lost-reply conformance test (0.2.0, record 0019):** the server author declares a disposable local test instance with synthetic state, a write tool and its arguments, the expected effect, retry identity, supported cases, an evidence deadline and a read-only probe. The probe counts committed effects in a fresh namespace and verifies their contents. If work continues after a reply, it also establishes when the attempts have settled.
   - **Reply lost after commit:** the probe witnesses a commit while the runner holds the first reply. The runner drops the reply at the handoff to the simulated caller and retries once after the caller's wait expires.
   - **Duplicate delivery:** the runner drops the first reply and sends a planned second request for the same operation with a fresh MCP request ID. It sends the duplicate without waiting for the caller's deadline.
   - **Timeout before commit:** fixture hooks hold and end the first attempt before it commits. The probe confirms zero effects while it is held. The runner then retries once.
@@ -427,7 +427,7 @@ fivefold/
   scenarios/dev/     development scenarios
   prices/            price files for live runs
   viewer/            the viewer's frontend, React and TypeScript (0012)
-  tla/               formal model (0021, 0.2.0a3)
+  tla/               formal model (0021, 0.2.0)
   docker-compose.yml, Dockerfile, Makefile, pyproject.toml, uv.lock, .python-version
 ```
 
