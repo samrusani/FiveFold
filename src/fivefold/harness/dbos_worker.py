@@ -19,6 +19,7 @@ from psycopg.conninfo import conninfo_to_dict
 from sqlalchemy.engine import URL
 
 from fivefold.harness.baseline_worker import (
+    BaselineInfrastructureError,
     BaselineWorkers,
     Delivery,
     Done,
@@ -41,7 +42,7 @@ ROLE = "ff_dbos"
 BACKEND_EXIT_MS = 30_000
 
 
-class DBOSInfrastructureError(RuntimeError):
+class DBOSInfrastructureError(BaselineInfrastructureError):
     """The B2 episode stopped before it could be scored."""
 
 

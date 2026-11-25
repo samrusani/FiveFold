@@ -9,7 +9,9 @@ live runs without the flag, the spend cap or a price included, before it connect
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NoReturn
 
 import psycopg
@@ -18,6 +20,7 @@ import pytest
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file, scenario_from_data
 from fivefold.harness.cells import load_expected
+from fivefold.harness.dbos_worker import DBOSInfrastructureError
 from fivefold.harness.demo import DEV_001, DEV_002
 from fivefold.harness.models import SCRIPTED
 from fivefold.harness.run import CONFIGS, ORIGINAL_CONFIGS
@@ -34,6 +37,8 @@ from fivefold.harness.study import (
     study_episodes,
     study_seeds,
 )
+from fivefold.harness.temporal_worker import TemporalInfrastructureError
+from fivefold.paths import DEV_MEMORY_PO
 
 EXPECTED = load_expected()
 SCENARIO = load_scenario_file(DEV_001)
@@ -347,3 +352,142 @@ def test_the_command_refuses_a_study_it_could_not_run_before_it_touches_a_databa
     out.mkdir()
     (out / "F2-C2-G2-seed-7.json").write_text("{}", encoding="utf-8")
     assert "not a new or empty directory" in refused(["--out", str(out)], capsys)
+
+
+@pytest.mark.parametrize("baseline", ["B1", "B2"])
+def test_live_baselines_are_refused_before_model_setup(
+    baseline: str,
+    tmp_path: Path,
+    no_database: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def live_model(*args: object) -> NoReturn:
+        raise AssertionError("a refused study configured a live model")
+
+    monkeypatch.setattr("fivefold.harness.study.live_from_args", live_model)
+    out = tmp_path / "study"
+    argv = [
+        "--out",
+        str(out),
+        "--configs",
+        "B0",
+        baseline,
+        "--contracts",
+        "C2",
+        "--cells",
+        "none",
+        "--live",
+        "ollama:unused",
+        "--spend-cap-usd",
+        "1",
+        "--prices",
+        str(tmp_path / "unused.yaml"),
+    ]
+    assert f"{baseline} support only the scripted model. Remove --live" in refused(argv, capsys)
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    ("baseline", "module", "extra"), [("B1", "temporalio", "temporal"), ("B2", "dbos", "dbos")]
+)
+def test_missing_baseline_sdk_is_refused(
+    baseline: str,
+    module: str,
+    extra: str,
+    tmp_path: Path,
+    no_database: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def missing(name: str) -> None:
+        assert name == module
+
+    monkeypatch.setattr("fivefold.harness.study.find_spec", missing)
+    out = tmp_path / "study"
+    argv = ["--out", str(out), "--configs", "B0", baseline, "--contracts", "C2", "--cells", "none"]
+    error = refused(argv, capsys)
+    assert f'{baseline} needs {module}. Run pip install "fivefold[{extra}]"' in error
+    if baseline == "B1":
+        assert "make temporal-setup" in error and "FIVEFOLD_TEMPORAL_CLI" in error
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("binary", ["missing", "wrong-version", "not-executable"])
+def test_b1_requires_the_pinned_cli(
+    binary: str,
+    tmp_path: Path,
+    no_database: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "temporal"
+    if binary != "missing":
+        path.write_text("#!/bin/sh\necho 'temporal version 0.0.0'\n")
+        path.chmod(0o755 if binary == "wrong-version" else 0o644)
+    monkeypatch.setenv("FIVEFOLD_TEMPORAL_CLI", str(path))
+    out = tmp_path / "study"
+    argv = ["--out", str(out), "--configs", "B0", "B1", "--contracts", "C2", "--cells", "none"]
+    error = refused(argv, capsys)
+    assert "Temporal CLI 1.10.1 is required" in error
+    assert "make temporal-setup" in error and "FIVEFOLD_TEMPORAL_CLI" in error
+    assert not out.exists()
+
+
+def test_b2_refuses_an_unsupported_platform(
+    tmp_path: Path,
+    no_database: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "fivefold.harness.study.sys", SimpleNamespace(platform="win32", stderr=sys.stderr)
+    )
+    out = tmp_path / "study"
+    argv = ["--out", str(out), "--configs", "B0", "B2", "--contracts", "C2", "--cells", "none"]
+    assert "B2 needs Linux or macOS" in refused(argv, capsys)
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "filename"), [(DEV_001, "expected.yaml"), (DEV_MEMORY_PO, "expected-f8.yaml")]
+)
+def test_unknown_cell_names_its_expected_file(
+    scenario: Path,
+    filename: str,
+    tmp_path: Path,
+    no_database: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = tmp_path / "study"
+    argv = ["--out", str(out), "--scenario", str(scenario), "--cells", "F99"]
+    assert f"from faults/{filename}" in refused(argv, capsys)
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    ("baseline", "error"),
+    [("B1", TemporalInfrastructureError), ("B2", DBOSInfrastructureError)],
+)
+def test_baseline_infrastructure_error_has_one_line(
+    baseline: str,
+    error: type[RuntimeError],
+    tmp_path: Path,
+    no_database: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_episode(*args: object, **kwargs: object) -> NoReturn:
+        raise error("handoff timed out")
+
+    monkeypatch.setattr("fivefold.harness.temporal_worker.check_temporal_cli", lambda: None)
+    monkeypatch.setattr("fivefold.harness.study.check_databases_free", lambda *args: None)
+    monkeypatch.setattr("fivefold.harness.study.bootstrap_server", lambda *args: None)
+    monkeypatch.setattr("fivefold.harness.study.run_episode", fail_episode)
+    out = tmp_path / "study"
+    argv = ["--out", str(out), "--configs", baseline, "--contracts", "C2", "--cells", "none"]
+    assert main(argv) == 1
+    assert capsys.readouterr().err == (
+        f"study failed: handoff timed out (in episode 1, none-C2-{baseline}-seed-7)\n"
+    )
+    assert not out.exists()

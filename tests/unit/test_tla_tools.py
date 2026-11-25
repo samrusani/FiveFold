@@ -1,5 +1,7 @@
 """Record 0021 requires hard failures for unavailable TLC prerequisites."""
 
+import io
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -47,3 +49,33 @@ echo 'openjdk version "{java_version}"' >&2
     )
     assert result.returncode == 1
     assert message in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [(None, "download failed connection closed"), (b"wrong jar", "TLC jar SHA-256 mismatch")],
+    ids=["download", "checksum"],
+)
+def test_install_reports_its_own_error(
+    contents: bytes | None,
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def download(*args: object, **kwargs: object) -> io.BytesIO:
+        if contents is None:
+            raise OSError("download failed\nconnection closed")
+        return io.BytesIO(contents)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "install"])
+    monkeypatch.setattr("urllib.request.urlopen", download)
+    with pytest.raises(SystemExit) as status:
+        runpy.run_path(str(SCRIPT), run_name="__main__")
+    assert status.value.code == 1
+    stderr = capsys.readouterr().err
+    assert stderr.startswith("TLC jar installation failed.")
+    assert message in stderr and stderr.count("\n") == 1
+    assert JAR_HELP not in stderr
+    assert not (tmp_path / ".tla/tla2tools.jar").exists()

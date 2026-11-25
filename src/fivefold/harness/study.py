@@ -87,7 +87,8 @@ import os
 import re
 import sys
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Final
 
@@ -99,6 +100,7 @@ from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.evaluator import RunResult as Evaluation
 from fivefold.evaluator import result_json
+from fivefold.harness.baseline_worker import BaselineInfrastructureError
 from fivefold.harness.cells import Cell, Expected, cell_plan, cell_scenario, load_expected
 from fivefold.harness.live_options import add_live_options, check_live_options, live_from_args
 from fivefold.harness.migrations import (
@@ -195,6 +197,7 @@ def select_cells(
     *,
     configs: Sequence[Config],
     contracts: Sequence[Contract],
+    expected_file: Path = EXPECTED,
 ) -> tuple[StudyCell, ...]:
     """The cells that `names` name (`selector_names`) in `configs` and `contracts`, each
     once, in the study's order (`cell_order`).
@@ -211,8 +214,8 @@ def select_cells(
         if not matched:
             raise ValueError(
                 f"no cell {name!r} in {', '.join(configs)} at {', '.join(map(str, contracts))}:"
-                f" give {ALL}, {NO_FAULT}, a fault such as F2, a fault and variant such as"
-                " F11-after_tool_call, or a cell such as F2-C2-G2 (faults/expected.yaml)"
+                f" give {ALL}, {NO_FAULT}, a fault, a fault and variant,"
+                f" or a cell from faults/{expected_file.name}"
             )
         for cell in matched:
             chosen.setdefault(cell.name, cell)
@@ -321,7 +324,7 @@ class Study:
         )
 
 
-def check_study(study: Study, prefix: str) -> None:
+def check_study(study: Study, prefix: str, *, live_requested: bool = False) -> None:
     """Refuse a study that could not run to its end, before any database is touched.
 
     Each episode's contract level must be one the scenario lists, its fault plan must fit
@@ -331,6 +334,30 @@ def check_study(study: Study, prefix: str) -> None:
     facts, and on another scenario it could fail partway through the study. Raises
     `ValueError`.
     """
+    configs = {episode.cell.config for episode in study.episodes}
+    baselines = sorted(configs & {"B1", "B2"})
+    if baselines and (live_requested or isinstance(study.model, Live)):
+        names = " and ".join(baselines)
+        raise ValueError(
+            f"{names} support only the scripted model. Remove --live or choose B0, G1 and G2."
+        )
+    if "B1" in configs:
+        if find_spec("temporalio") is None:
+            raise ValueError(
+                'B1 needs temporalio. Run pip install "fivefold[temporal]", then '
+                "run make temporal-setup or set FIVEFOLD_TEMPORAL_CLI to the pinned binary."
+            )
+        from fivefold.harness.temporal_worker import check_temporal_cli
+
+        check_temporal_cli()
+    if "B2" in configs:
+        if sys.platform not in ("linux", "darwin"):
+            raise ValueError(
+                "B2 needs Linux or macOS. Use either platform or remove B2 from --configs."
+            )
+        if find_spec("dbos") is None:
+            raise ValueError('B2 needs dbos. Run pip install "fivefold[dbos]".')
+
     scenario = study.scenario
     faulted = [episode for episode in study.episodes if not isinstance(episode.cell, NoFault)]
     if faulted and study.expected.scenario != scenario.id:
@@ -525,18 +552,26 @@ def episode_line(study: Study, outcome: Outcome) -> str:
     return line
 
 
-def plan_study(args: argparse.Namespace, model: ModelSpec) -> Study:
+def plan_study(args: argparse.Namespace) -> Study:
     """The study the command's arguments describe, checked before anything runs."""
     scenario = load_scenario_file(args.scenario)
-    expected = load_expected(EXPECTED_F8) if scenario.memory_enabled else load_expected()
+    expected_file = EXPECTED_F8 if scenario.memory_enabled else EXPECTED
+    expected = load_expected(expected_file)
     configs = [config for config in CONFIGS if config in args.configs]
     contracts = [contract for contract in Contract if str(contract) in args.contracts]
-    cells = select_cells(expected.cells, args.cells, configs=configs, contracts=contracts)
+    cells = select_cells(
+        expected.cells,
+        args.cells,
+        configs=configs,
+        contracts=contracts,
+        expected_file=expected_file,
+    )
     first = expected.seed if args.seed is None else args.seed
     episodes = study_episodes(cells, study_seeds(first, args.episodes))
-    study = Study(scenario=scenario, episodes=episodes, model=model, expected=expected)
-    check_study(study, args.database_prefix)
-    return study
+    study = Study(scenario=scenario, episodes=episodes, model=SCRIPTED, expected=expected)
+    check_study(study, args.database_prefix, live_requested=args.live is not None)
+    live = live_from_args(args, os.environ)
+    return replace(study, model=live) if live is not None else study
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -604,8 +639,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_live_options(parser, args)
     out: Path = args.out
     try:
-        live = live_from_args(args, os.environ)
-        study = plan_study(args, SCRIPTED if live is None else live)
+        study = plan_study(args)
+        live = study.model if isinstance(study.model, Live) else None
         check_out(out)
         check_databases_free(args.dsn, study, args.database_prefix)
         bootstrap_server(args.dsn, DB_DIR)
@@ -621,9 +656,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if live is not None and live.spend is not None:
                 print(f"Model {live.name}; {live.spend.summary()}.")
         print(end_line(study, ran, out))
-    except (OSError, ValueError, MigrationError) as error:
+    except (OSError, ValueError, MigrationError, BaselineInfrastructureError) as error:
         notes = "".join(f" ({note})" for note in getattr(error, "__notes__", ()))
-        print(f"study failed: {error}{notes}", file=sys.stderr)
+        detail = " ".join(f"{error}{notes}".splitlines())
+        print(f"study failed: {detail}", file=sys.stderr)
         return 1
     return 0
 
