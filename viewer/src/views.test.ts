@@ -60,6 +60,17 @@ describe("the ledger in time", () => {
 });
 
 describe("alignment by virtual time", () => {
+  it("reads the virtual time once per item", () => {
+    let count = 0;
+    const items = [3, 1, 1, 2];
+    const rows = alignByVt([{ key: "single", items, vt: (value) => {
+      count += 1;
+      return Number(value);
+    } }]);
+    expect(rows.map((row) => row.vt)).toEqual([1, 2, 3]);
+    expect(count).toBe(items.length);
+  });
+
   it("makes one row per virtual time with each column's items", () => {
     const rows = alignByVt([
       { key: "left", items: [{ vt: 1 }, { vt: 5 }, { vt: 5 }], vt: (i) => (i as { vt: number }).vt },

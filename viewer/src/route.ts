@@ -35,7 +35,7 @@ export function href(route: Route): string {
     case "compare":
       return `#/compare/${encodeURIComponent(route.left)}/${encodeURIComponent(route.right)}`;
     case "missing":
-      return route.hash;
+      return route.hash.startsWith("#") ? route.hash : `#${route.hash}`;
   }
 }
 

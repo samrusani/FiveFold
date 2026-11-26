@@ -24,6 +24,13 @@ afterEach(() => {
   window.location.hash = "";
 });
 
+it("keeps navigation visible when a page cannot render a malformed record", async () => {
+  vi.stubGlobal("fetch", async () => new Response('{"registry":"registry","runs":[null]}'));
+  render(<App />, { onCaughtError: () => {} });
+  expect((await screen.findByRole("alert")).textContent).toContain("could not display this page");
+  expect(screen.getByRole("link", { name: "FiveFold viewer" })).toBeTruthy();
+});
+
 describe("the timeline", () => {
   it("shows one row per event and marks events that share a virtual time", () => {
     render(<Timeline events={g2Timeline} />);
@@ -68,10 +75,10 @@ const responses: Record<string, unknown> = {
   },
   "/api/runs/demo_1_b0": summary("demo_1_b0", "B0", b0Scorecard),
   "/api/runs/demo_1_b0/timeline": timeline("demo_1_b0", b0Timeline),
-  "/api/runs/demo_1_b0/ledger": b0Ledger,
+  "/api/runs/demo_1_b0/ledger": { ...b0Ledger, database: "demo_1_b0" },
   "/api/runs/demo_1_g2": summary("demo_1_g2", "G2", null),
   "/api/runs/demo_1_g2/timeline": timeline("demo_1_g2", g2Timeline),
-  "/api/runs/demo_1_g2/ledger": g2Ledger,
+  "/api/runs/demo_1_g2/ledger": { ...g2Ledger, database: "demo_1_g2" },
 };
 
 describe("the pages, over a stubbed API", () => {

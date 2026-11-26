@@ -42,6 +42,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1", help="address to listen on")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="port to listen on")
     parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="also accept this exact HTTP host name or address without a port (repeatable)",
+    )
+    parser.add_argument(
         "--dsn",
         default=os.environ.get("FIVEFOLD_ADMIN_DSN", DEFAULT_SERVER),
         help="connection string of the server with the runs; the viewer connects as"
@@ -63,9 +70,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         registry = registry_name(
             os.environ if args.registry is None else {REGISTRY_ENV: args.registry}
         )
+        app = create_app(RunSource(args.dsn, registry), args.static, extra_hosts=args.allow_host)
     except ValueError as error:
         parser.error(str(error))
-    app = create_app(RunSource(args.dsn, registry), args.static)
     print(f"Viewer on http://{args.host}:{args.port}/ (registry {registry})", flush=True)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

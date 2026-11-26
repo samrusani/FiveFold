@@ -13,13 +13,13 @@ export function Ledger({ ledger }: { ledger: LedgerData }) {
         <table>
           <thead>
             <tr>
-              <th>Effect</th>
-              <th>Intent</th>
-              <th>Committed at vt</th>
-              <th>Approval</th>
-              <th>Basis</th>
-              <th>Idempotency key</th>
-              <th>Arguments</th>
+              <th scope="col">Effect</th>
+              <th scope="col">Intent</th>
+              <th scope="col">Committed at vt</th>
+              <th scope="col">Approval</th>
+              <th scope="col">Basis</th>
+              <th scope="col">Idempotency key</th>
+              <th scope="col">Arguments</th>
             </tr>
           </thead>
           <tbody>
@@ -51,11 +51,11 @@ export function Ledger({ ledger }: { ledger: LedgerData }) {
       <table>
         <thead>
           <tr>
-            <th>Fact</th>
-            <th>Version</th>
-            <th>From vt</th>
-            <th>Cause</th>
-            <th>Value</th>
+            <th scope="col">Fact</th>
+            <th scope="col">Version</th>
+            <th scope="col">From vt</th>
+            <th scope="col">Cause</th>
+            <th scope="col">Value</th>
           </tr>
         </thead>
         <tbody>

@@ -18,12 +18,12 @@ export async function loadRun(database: string, signal: AbortSignal): Promise<Ru
   return { summary, timeline, ledger };
 }
 
-/** Two runs, named by a key of their two database names on separate lines. */
+/** Two runs, named by the key from pairKey. */
 export async function loadPair(key: string, signal: AbortSignal): Promise<[RunData, RunData]> {
-  const [left = "", right = ""] = key.split("\n");
+  const [left, right] = JSON.parse(key) as [string, string];
   return Promise.all([loadRun(left, signal), loadRun(right, signal)]);
 }
 
 export function pairKey(left: string, right: string): string {
-  return `${left}\n${right}`;
+  return JSON.stringify([left, right]);
 }

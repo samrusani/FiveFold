@@ -96,7 +96,9 @@ export function ledgerEntries(ledger: Ledger): LedgerEntry[] {
       .map((field) => ({ field, from: before.value[field], to: fact.value[field] ?? null }));
     entries.push({ kind: "fact", vt: fact.valid_from_vt, seq: fact.valid_from_seq, fact, changes });
   }
-  return entries.sort((a, b) => a.vt - b.vt || a.seq - b.seq || (a.kind === "effect" ? -1 : 1));
+  return entries.sort((a, b) =>
+    a.vt - b.vt || a.seq - b.seq || Number(a.kind === "fact") - Number(b.kind === "fact"),
+  );
 }
 
 /** Whether a budget's committed amount is above its limit. */
@@ -122,13 +124,19 @@ export interface AlignedRow {
  * an item, and in each row, each column's items at that time, in their own order.
  */
 export function alignByVt(columns: Column<unknown>[]): AlignedRow[] {
-  const times = [...new Set(columns.flatMap((c) => c.items.map((item) => c.vt(item))))].sort(
-    (a, b) => a - b,
-  );
-  return times.map((vt) => ({
-    vt,
-    cells: columns.map((c) => c.items.filter((item) => c.vt(item) === vt)),
-  }));
+  const rows = new Map<number, AlignedRow>();
+  columns.forEach((column, index) => {
+    for (const item of column.items) {
+      const vt = column.vt(item);
+      let row = rows.get(vt);
+      if (row === undefined) {
+        row = { vt, cells: columns.map(() => []) };
+        rows.set(vt, row);
+      }
+      row.cells[index]!.push(item);
+    }
+  });
+  return [...rows.values()].sort((a, b) => a.vt - b.vt);
 }
 
 /**

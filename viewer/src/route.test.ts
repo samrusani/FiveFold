@@ -26,4 +26,8 @@ describe("routes in the URL's fragment", () => {
       expect(parseRoute(href(route))).toEqual(route);
     }
   });
+
+  it("writes a missing route as a fragment", () => {
+    expect(href({ page: "missing", hash: "/unknown" })).toBe("#/unknown");
+  });
 });

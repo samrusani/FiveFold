@@ -29,19 +29,24 @@ because it was dropped), 404 `not_a_run` (it holds no run), and 503
 Every other path serves the frontend's built files (`viewer/dist`, from `npm run build`)
 when they exist. The frontend routes in the URL's fragment, so `/` is its only page.
 
-Checked in starlette 1.10.0: `Starlette(routes=..., exception_handlers=...)`
+Checked in starlette 1.10.0: `Starlette(routes=..., exception_handlers=..., lifespan=...)`
 (`applications.py`); `Route(path, endpoint, methods=...)`, which runs a plain function
 in a thread pool, and `Mount(path, app=..., name=...)` (`routing.py`);
 `StaticFiles(directory=..., html=True)` (`staticfiles.py`); `JSONResponse` and
-`HTMLResponse` (`responses.py`); `Request.path_params` (`requests.py`).
+`HTMLResponse` (`responses.py`); `Request.path_params` and `Request.state` (`requests.py`).
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Final
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import BaseRoute, Mount, Route
@@ -54,6 +59,9 @@ from fivefold.viewer.timeline import merge
 DEFAULT_STATIC: Final = Path(__file__).resolve().parents[3] / "viewer" / "dist"
 """Where `npm run build` in `viewer/` puts the frontend."""
 
+LOCAL_HOSTS: Final = ("localhost", "127.0.0.1", "[::1]")
+RUN_LIST_WORKERS: Final = 8
+
 NO_STORE: Final = {"Cache-Control": "no-store"}
 """A run that is still going on changes between two requests."""
 
@@ -65,11 +73,23 @@ NOT_BUILT: Final = (
 )
 
 
-def create_app(source: RunSource, static: Path | None = DEFAULT_STATIC) -> Starlette:
+def create_app(
+    source: RunSource, static: Path | None = DEFAULT_STATIC, *, extra_hosts: Sequence[str] = ()
+) -> Starlette:
     """The viewer: its API over `source`, and the frontend from `static` if it exists."""
+    if any(not host or "*" in host for host in extra_hosts):
+        raise ValueError("viewer hosts must be nonempty names or addresses without wildcards")
+
+    @asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[dict[str, ThreadPoolExecutor]]:
+        with ThreadPoolExecutor(
+            max_workers=RUN_LIST_WORKERS, thread_name_prefix="fivefold-viewer"
+        ) as reads:
+            yield {"run_list_reads": reads}
 
     def run_list(request: Request) -> Response:
-        return _json({"registry": source.registry, "runs": source.runs()})
+        reads = getattr(request.state, "run_list_reads", None)
+        return _json({"registry": source.registry, "runs": source.runs(reads=reads)})
 
     def run_summary(request: Request) -> Response:
         database = str(request.path_params["database"])
@@ -106,7 +126,18 @@ def create_app(source: RunSource, static: Path | None = DEFAULT_STATIC) -> Starl
         routes.append(Mount("/", app=StaticFiles(directory=static, html=True), name="frontend"))
     else:
         routes.append(Route("/", not_built, methods=["GET"]))
-    return Starlette(routes=routes, exception_handlers={ViewerError: _viewer_error})
+    return Starlette(
+        routes=routes,
+        lifespan=lifespan,
+        exception_handlers={ViewerError: _viewer_error},
+        middleware=[
+            Middleware(
+                TrustedHostMiddleware,
+                allowed_hosts=[*LOCAL_HOSTS, *extra_hosts],
+                www_redirect=False,
+            )
+        ],
+    )
 
 
 def _json(content: Any) -> Response:

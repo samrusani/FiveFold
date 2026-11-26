@@ -271,7 +271,10 @@ def test_the_viewer_lists_a_branch_as_a_new_experiment_of_its_parent(
     `harness.run`, as `ff_viewer` (0009, 0012): set for the branch, null for its parent."""
     dsn = run_database("viewer_branch")
     record(branch_spec(parents["G2"].cassette, SCENARIO, 4), dsn)
-    client = TestClient(create_app(RunSource(admin_dsn, registry_database()), static=None))
+    client = TestClient(
+        create_app(RunSource(admin_dsn, registry_database()), static=None),
+        base_url="http://localhost",
+    )
     listed = {run["database"]: run for run in client.get("/api/runs").json()["runs"]}
     branch, parent = listed[database_of(dsn)], listed[database_of(parents["G2"].dsn)]
     assert (branch["run_id"], branch["parent_run_id"], branch["branch_point"]) == (

@@ -22,4 +22,6 @@ The viewer connects to the server `FIVEFOLD_ADMIN_DSN` names, always as `ff_view
 
 With Docker Compose, `docker compose up viewer` builds the frontend and the API into one image and serves the viewer on 127.0.0.1:8300 against the Compose database.
 
+The viewer accepts HTTP requests addressed to `localhost`, `127.0.0.1` or `[::1]` by default. For a local name of your own, pass `--allow-host NAME` without the port. Repeat the flag for each name. `--host` controls the listening address. The viewer allows up to eight concurrent run-list metadata reads. PostgreSQL stops each viewer query after 5 s.
+
 To work on the frontend, `cd viewer`, then `npm run dev` serves it with hot reload on port 5173 and passes `/api` to a viewer on port 8300; `npm test` runs the Vitest tests, `npm run lint` runs ESLint, and `npm run build` type checks and builds. `make viewer-e2e` checks a running viewer in Chromium against a demo's runs and saves a screenshot of the side-by-side page; it needs Playwright's Chromium (`npx playwright install chromium`, once).

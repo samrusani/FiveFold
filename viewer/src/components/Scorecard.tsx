@@ -26,10 +26,10 @@ export function Scorecard({ card }: { card: Card | null }) {
       <table className="scorecard">
         <thead>
           <tr>
-            <th>Property</th>
-            <th>Verdict</th>
-            <th>Reason codes</th>
-            <th>Failed checks</th>
+            <th scope="col">Property</th>
+            <th scope="col">Verdict</th>
+            <th scope="col">Reason codes</th>
+            <th scope="col">Failed checks</th>
           </tr>
         </thead>
         <tbody>
@@ -89,11 +89,11 @@ export function Scorecard({ card }: { card: Card | null }) {
         <table className="claims">
           <thead>
             <tr>
-              <th>Intent</th>
-              <th>Claim</th>
-              <th>What the stack knew</th>
-              <th>Ledger</th>
-              <th>Judged</th>
+              <th scope="col">Intent</th>
+              <th scope="col">Claim</th>
+              <th scope="col">What the stack knew</th>
+              <th scope="col">Ledger</th>
+              <th scope="col">Judged</th>
             </tr>
           </thead>
           <tbody>

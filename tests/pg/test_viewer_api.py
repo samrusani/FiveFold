@@ -64,7 +64,10 @@ def demo_1(admin_dsn: str, sim_template: str, db_prefix: str) -> Iterator[dict[C
 @pytest.fixture
 def client(admin_dsn: str) -> TestClient:
     """The viewer's API over the tests' registry, with no frontend."""
-    return TestClient(create_app(RunSource(admin_dsn, registry_database()), static=None))
+    return TestClient(
+        create_app(RunSource(admin_dsn, registry_database()), static=None),
+        base_url="http://localhost",
+    )
 
 
 def get(client: TestClient, path: str) -> Any:
@@ -259,6 +262,7 @@ def test_the_viewer_reads_as_ff_viewer_in_read_only_transactions(
     source = RunSource(admin_dsn, registry_database())
     with source.run(demo_1["B0"]) as conn:
         assert conn.execute("SELECT current_user AS role").fetchone() == {"role": "ff_viewer"}
+        assert conn.execute("SHOW statement_timeout").fetchone() == {"statement_timeout": "5s"}
         with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
             conn.execute("INSERT INTO eval.result SELECT * FROM eval.result")
 
@@ -301,7 +305,9 @@ def test_a_registry_that_cannot_be_read_is_503(admin_dsn: str, db_prefix: str) -
     recreate_database(admin_dsn, unmigrated)
     try:
         for registry in (missing, unmigrated):
-            client = TestClient(create_app(RunSource(admin_dsn, registry), static=None))
+            client = TestClient(
+                create_app(RunSource(admin_dsn, registry), static=None), base_url="http://localhost"
+            )
             response = client.get("/api/runs")
             assert response.status_code == 503, registry
             assert response.json()["error"] == "registry_unavailable"
@@ -313,9 +319,15 @@ def test_the_built_frontend_is_served_and_its_absence_is_explained(
     admin_dsn: str, tmp_path: Path
 ) -> None:
     (tmp_path / "index.html").write_text("<!doctype html><title>FiveFold</title>", "utf-8")
-    built = TestClient(create_app(RunSource(admin_dsn, registry_database()), static=tmp_path))
+    built = TestClient(
+        create_app(RunSource(admin_dsn, registry_database()), static=tmp_path),
+        base_url="http://localhost",
+    )
     assert built.get("/").text == "<!doctype html><title>FiveFold</title>"
-    absent = TestClient(create_app(RunSource(admin_dsn, registry_database()), static=None))
+    absent = TestClient(
+        create_app(RunSource(admin_dsn, registry_database()), static=None),
+        base_url="http://localhost",
+    )
     response = absent.get("/")
     assert response.status_code == 404
     assert "npm run build" in response.text
