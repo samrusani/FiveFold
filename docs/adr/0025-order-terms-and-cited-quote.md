@@ -1,6 +1,6 @@
 # 0025: Order terms and the cited quote
 
-Status: Proposed
+Status: Accepted on 26 Nov 2026 by the maintainer
 Date: 2026-11-26
 Spec sections affected on acceptance: Evaluator, Testing
 Other documents affected: `docs/limitations.md`, `docs/adr/0004-five-properties.md`
@@ -47,6 +47,16 @@ contracts FiveFold compares, and a G2 admission check would cover only one
 configuration. Document the limit in the scoring contract so readers can
 distinguish detecting a mismatch from preventing the write or constraining
 the authority's auto-approval policy.
+
+## Decision
+
+The maintainer accepts option A.
+
+1. Property 3 checks an order's terms against the quote version the order cites. The terms match when the order's unit price and currency equal the quote's, its quantity is at least the quote's minimum quantity, and the quote is active. A mismatch fails property 3 with the reason `quote_terms_mismatch`. The existing check, that the cited version is unchanged before the commit, stays as it is.
+2. The code comes in a later release, not in 0.2.1. Its pull request amends property 3 in record 0004.
+3. Before that pull request merges, it replays every cell in `faults/expected.yaml` and `faults/expected-f8.yaml` (none is expected to change) and rescores the saved study bundles. It lists every verdict that changes. A changed published verdict gets a dated note in the report, not a silent edit.
+4. The same pull request adds cells for an order that cuts the price and one that overpays, in B0 and G2. Each fails property 3 with `quote_terms_mismatch`.
+5. Until then, `docs/limitations.md` states the current limit, as option D describes it. The 0.2.1 version pull request adds that sentence.
 
 ## Consequences
 
