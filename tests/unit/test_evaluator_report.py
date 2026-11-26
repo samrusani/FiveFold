@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import itertools
+import json
 import re
 import shutil
 import subprocess
@@ -25,7 +26,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from langchain_core.messages.ai import UsageMetadata
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from fivefold.agents.live import SpendMeter, live_name, parse_live_name
 from fivefold.domain.contracts import Contract, ContractParams
@@ -950,6 +951,42 @@ def test_the_tokens_are_in_the_csv_and_summed_by_configuration() -> None:
     ]
     totals = table(markdown_report(results), "Metric totals by configuration")
     assert totals[-2:] == [["tokens_in", "0", "10000"], ["tokens_out", "0", "450"]]
+
+
+def test_report_labels_render_as_text_in_the_run_summary_and_cost_table() -> None:
+    label = "[sample](https://example.invalid)"
+    result = make_result(
+        scenario_id="# sample", code_version=label, model=f"fake:{label}", adapter="live"
+    )
+    prices = price_file_from_text(
+        f"price_date: 2026-11-26\nprices:\n  fake:\n    '{label}':\n"
+        "      input_usd_per_million_tokens: 1\n"
+        "      output_usd_per_million_tokens: 2\n"
+    )
+    report = markdown_report([result], prices)
+    overview = section(report, "What was run")
+    assert r"- Code versions: \[sample\](https://example.invalid) (1 run)." in overview
+    assert f"  - \\# sample, {DIGEST} (1 run)." in overview
+    assert any(
+        line.startswith(r"| fake:\[sample\](https://example.invalid) |")
+        for line in section(report, "Cost")
+    )
+
+
+@pytest.mark.parametrize("value", ["7", 7.0, True])
+def test_results_refuse_integer_coercion(value: object) -> None:
+    data = make_result().model_dump(mode="json")
+    data["run"]["seed"] = value
+    with pytest.raises(ValidationError, match="valid integer"):
+        RunResult.model_validate_json(json.dumps(data))
+
+
+@pytest.mark.parametrize(("parent", "point"), [("parent-run", None), (None, 12)])
+def test_results_require_both_branch_fields(parent: str | None, point: int | None) -> None:
+    data = make_result().model_dump(mode="json")
+    data["run"].update(parent_run_id=parent, branch_point=point)
+    with pytest.raises(ValidationError, match="must be set together"):
+        RunResult.model_validate_json(json.dumps(data))
 
 
 def test_a_run_s_cost_is_its_tokens_at_its_model_s_prices_exactly() -> None:

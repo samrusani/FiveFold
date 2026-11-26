@@ -178,17 +178,18 @@ def price_file_from_text(text: str, where: str = "the price file") -> PriceFile:
                 exponent = amount.as_tuple().exponent
                 assert isinstance(exponent, int)  # ModelPrice already requires a finite Decimal.
                 if amount > MAX_FILE_PRICE or not -MAX_PRICE_PLACES <= exponent <= 9:
-                    raise PriceFileError(
+                    message = (
                         f"{where}: {provider}:{model} prices must be at most"
                         f" {MAX_FILE_PRICE:,} USD per million tokens, with a decimal exponent"
                         f" from {-MAX_PRICE_PLACES} to 9"
                     )
+                    raise PriceFileError(_one_line(message))
     return priced
 
 
-def _one_line(error: Exception) -> str:
-    """`error`'s message with every run of whitespace, line breaks included, as one space."""
-    return " ".join(str(error).split())
+def _one_line(value: str | Exception) -> str:
+    """Render a message on one line."""
+    return " ".join(str(value).split())
 
 
 def load_price_file(path: Path) -> PriceFile:

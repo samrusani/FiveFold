@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 from enum import StrEnum
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, model_validator
 
 from fivefold.domain.report import ClaimStatus
 from fivefold.evaluator.evidence import Knowledge, Settlement
@@ -142,7 +143,7 @@ class SettledBy(StrEnum):
 
 
 class ResultModel(BaseModel):
-    """Base of the result models: unknown fields are refused and values never change."""
+    """Frozen result models with strict integer fields and no unknown fields."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -169,26 +170,26 @@ class ExcusedIntent(ResultModel):
 class PropertyResult(ResultModel):
     """One property's verdict, reason codes, failures and metrics."""
 
-    property: int
+    property: StrictInt
     name: str
     verdict: PropertyVerdict
     reason_codes: tuple[ReasonCode, ...] = ()
     """Each code among the failures, once, sorted."""
     failures: tuple[Failure, ...] = ()
-    metrics: dict[str, int] = {}
+    metrics: dict[str, StrictInt] = {}
 
 
 class RequestOutcome(ResultModel):
     """A write request the stack sent for an intent before `t_r`, and whether the
     evidence shows it never commits."""
 
-    seq: int
+    seq: StrictInt
     """The harness seq of its send, or of the crash that left it possibly sent."""
     possibly_sent: bool
-    sent_vt: int
+    sent_vt: StrictInt
     idempotency_key: str | None
     settled_by: Settlement | None
-    evidence_seq: int | None
+    evidence_seq: StrictInt | None
 
 
 class ClaimJudgment(ResultModel):
@@ -211,13 +212,13 @@ class ClaimJudgment(ResultModel):
 class CountedReport(ResultModel):
     """The report that counts: the last valid one before the run stopped (0004)."""
 
-    seq: int
+    seq: StrictInt
     """Its row in `harness.final_report`."""
     worker: str
     accepted_by: str
-    message_seq: int
+    message_seq: StrictInt
     """The message that carried it to the component that accepted it."""
-    t_r: int
+    t_r: StrictInt
     """That message's delivery seq: evidence counts only if delivered before it."""
     claims: tuple[ClaimJudgment, ...]
 
@@ -234,21 +235,21 @@ class RecoveryEntry(ResultModel):
     """
 
     intent_id: str
-    fault_seq: int
+    fault_seq: StrictInt
     """The harness seq of the first fault that touched the intent."""
     fault: str
     """That fault's id, such as `F2`."""
-    start_vt: int
+    start_vt: StrictInt
     """When that fault fired."""
     outcome: Outcome
     settled_by: SettledBy | None
-    end_seq: int | None
-    end_vt: int | None
+    end_seq: StrictInt | None
+    end_vt: StrictInt | None
     """When the evidence that settled the outcome reached the stack: a delivery's
     `delivered_vt`, or an attestation's `vt`."""
-    latency_ms: int | None
+    latency_ms: StrictInt | None
     """`end_vt - start_vt`, in virtual ms."""
-    latency_wall_ms: int | None
+    latency_wall_ms: StrictInt | None
     """The same span by the wall clock, rounded to the nearest ms: from the start fault's
     `wall_at` to the delivery's `delivered_wall_at` or the attestation's `wall_at`, and 0
     when the end is the start. None when a wall-clock time it needs is missing. For
@@ -270,16 +271,22 @@ class RunSummary(ResultModel):
     scenario_digest: str
     config: str
     contract: str
-    seed: int
+    seed: StrictInt
     topology: str
     model_adapter: str
     model: str
     cassette_digest: str | None
     parent_run_id: str | None
-    branch_point: int | None
+    branch_point: StrictInt | None
     params: JsonValue
-    end_vt: int
+    end_vt: StrictInt
     """When the run ended, as property 4 judges "at the end": the harness's stop time."""
+
+    @model_validator(mode="after")
+    def check_branch_fields(self) -> Self:
+        if (self.parent_run_id is None) != (self.branch_point is None):
+            raise ValueError("parent_run_id and branch_point must be set together")
+        return self
 
 
 class RunResult(ResultModel):
@@ -288,11 +295,11 @@ class RunResult(ResultModel):
     code_version: str
     run: RunSummary
     verdict: Verdict
-    evaluated: tuple[int, ...]
+    evaluated: tuple[StrictInt, ...]
     """The properties checked, which the verdict covers: all five."""
     properties: tuple[PropertyResult, ...]
     """All five properties, in order."""
-    metrics: dict[str, int]
+    metrics: dict[str, StrictInt]
     """Every metric: each property's, the run's own counts of human actions and
     approvals, the intents a fault touched and those left unresolved, and the tokens its
     model calls used (`fivefold.evaluator.metrics`)."""
