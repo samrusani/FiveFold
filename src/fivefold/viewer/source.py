@@ -27,11 +27,10 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Executor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from threading import Lock
 from typing import Any, Final, LiteralString
 
 import psycopg
@@ -52,9 +51,6 @@ DATABASE_NAME: Final = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 CONNECT_TIMEOUT_S: Final = 5
 """Seconds to wait for the server before a request fails."""
-
-_RUN_LIST_LOCK = Lock()
-"""Let one request at a time open concurrent run database connections."""
 
 _CELL_FIELDS = ("scenario_digest", "topology", "model_adapter", "model", "planned_faults", "params")
 _RUN_LIST_FIELDS = ("parent_run_id", "branch_point", *_CELL_FIELDS[:4])
@@ -120,18 +116,20 @@ class RunSource:
         with psycopg.connect(self._conninfo(database), row_factory=dict_row) as conn:
             conn.read_only = True
             conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+            conn.execute("SET LOCAL statement_timeout = '5s'")
             row = conn.execute("SELECT current_user AS role").fetchone()
             if row is None or row["role"] != VIEWER_ROLE:
                 raise WrongRole(f"the viewer connects as {VIEWER_ROLE}, not {row}")
             yield conn
 
-    def runs(self) -> list[dict[str, Any]]:
+    def runs(self, *, reads: Executor | None = None) -> list[dict[str, Any]]:
         """Every run database the registry lists, newest first: by the wall-clock time its
         row was written, which serves display only (0009). Each row includes comparison
         fields and branch metadata from its own `harness.run`, when available."""
         rows = self._registry_rows("TRUE", ())
-        with _RUN_LIST_LOCK, ThreadPoolExecutor(max_workers=8) as reads:
-            return list(reads.map(self._listed_run, rows))
+        if reads is None:
+            return [self._listed_run(row) for row in rows]
+        return list(reads.map(self._listed_run, rows))
 
     def _listed_run(self, registered: dict[str, Any]) -> dict[str, Any]:
         """Read one registry entry's run metadata. Unavailable runs stay manually listed."""
@@ -147,6 +145,7 @@ class RunSource:
             psycopg.OperationalError,
             psycopg.errors.UndefinedTable,
             psycopg.errors.InsufficientPrivilege,
+            psycopg.errors.QueryCanceled,
         ):
             row = None
         if row is None or any(
@@ -175,6 +174,8 @@ class RunSource:
         try:
             with self._read(self.registry) as conn:
                 rows = conn.execute(query, args).fetchall()
+        except psycopg.errors.QueryCanceled as error:
+            raise ViewerError(503, "query_timeout", "the registry query exceeded 5 s") from error
         except (psycopg.OperationalError, psycopg.errors.UndefinedTable) as error:
             raise ViewerError(
                 503,
@@ -191,6 +192,8 @@ class RunSource:
         try:
             with self._read(database) as conn:
                 yield conn
+        except psycopg.errors.QueryCanceled as error:
+            raise ViewerError(503, "query_timeout", "the run query exceeded 5 s") from error
         except psycopg.OperationalError as error:
             raise ViewerError(
                 404, "run_unavailable", f"the run database {database} cannot be read: {error}"

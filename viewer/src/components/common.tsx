@@ -16,7 +16,7 @@ export function Verdict({ verdict }: { verdict: string | null }) {
 }
 
 export function Loaded<T>({ load, children }: { load: Load<T>; children: (data: T) => ReactNode }) {
-  if (load.state === "loading") return <p className="muted">Loading…</p>;
+  if (load.state === "loading") return <p className="muted" role="status">Loading…</p>;
   if (load.state === "failed") {
     const code = load.error instanceof ApiFailure ? `${load.error.code}: ` : "";
     return (

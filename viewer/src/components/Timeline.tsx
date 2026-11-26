@@ -42,9 +42,9 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
       <table className="timeline">
         <thead>
           <tr>
-            <th>vt (ms)</th>
-            <th>Source</th>
-            <th>Event</th>
+            <th scope="col">vt (ms)</th>
+            <th scope="col">Source</th>
+            <th scope="col">Event</th>
           </tr>
         </thead>
         <tbody>
@@ -60,7 +60,7 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
                 <td className="vt">
                   {event.vt}
                   {event.shares_vt ? (
-                    <span className="tie" title={SHARED_VT_NOTE} aria-label="shares its virtual time">
+                    <span className="tie" title={SHARED_VT_NOTE} role="img" aria-label="shares its virtual time">
                       =
                     </span>
                   ) : null}

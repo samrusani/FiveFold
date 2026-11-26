@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
 import uvicorn
 from starlette.applications import Starlette
+from starlette.testclient import TestClient
 
 from fivefold.viewer import __main__ as cli
-from fivefold.viewer.source import REGISTRY_ENV
+from fivefold.viewer.app import create_app
+from fivefold.viewer.source import REGISTRY_ENV, RunSource
 
 
 def test_it_serves_the_api_over_the_named_server_and_registry(
@@ -42,3 +45,58 @@ def test_the_registry_comes_from_the_environment_unless_named(
 def test_a_registry_name_the_harness_cannot_make_is_refused() -> None:
     with pytest.raises(SystemExit):
         cli.main(["--registry", "Not-A-Database"])
+
+
+def test_the_viewer_only_serves_a_local_or_explicit_host(tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("viewer")
+    source = RunSource("")
+    client = TestClient(create_app(source, static=tmp_path))
+    assert client.get("/", headers={"Host": "testserver"}).status_code == 400
+    for host in ("localhost:8300", "127.0.0.1:8300", "[::1]:8300"):
+        assert client.get("/", headers={"Host": host}).text == "viewer"
+
+
+def test_the_viewer_joins_its_run_list_workers_at_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {"database": "fivefold_test_run"}
+    threads: list[threading.Thread] = []
+
+    def metadata(source: RunSource, listed: dict[str, str]) -> dict[str, str]:
+        threads.append(threading.current_thread())
+        return listed
+
+    monkeypatch.setattr(RunSource, "_registry_rows", lambda *_: [row])
+    monkeypatch.setattr(RunSource, "_listed_run", metadata)
+    with TestClient(create_app(RunSource(""), static=None), base_url="http://localhost") as client:
+        for _ in range(2):
+            assert client.get("/api/runs").json()["runs"] == [row]
+        first, second = threads
+        assert first is second and first.name.startswith("fivefold-viewer")
+    assert not first.is_alive()
+
+
+def test_allows_each_named_host_but_rejects_wildcards(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "index.html").write_text("viewer")
+
+    def run(app: Starlette, *, host: str, port: int) -> None:
+        client = TestClient(app)
+        for name in ("viewer.local", "runs.local"):
+            assert client.get("/", headers={"Host": name}).text == "viewer"
+
+    monkeypatch.setattr(uvicorn, "run", run)
+    assert (
+        cli.main(
+            [
+                "--static",
+                str(tmp_path),
+                "--allow-host",
+                "viewer.local",
+                "--allow-host",
+                "runs.local",
+            ]
+        )
+        == 0
+    )
+    with pytest.raises(SystemExit):
+        cli.main(["--allow-host", "*"])

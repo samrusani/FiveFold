@@ -14,8 +14,7 @@
 // - the browser logged no error.
 //
 // It saves a screenshot of the side-by-side page. `--b0` and `--g2` choose the runs;
-// by default it takes the first B0 run with a G2 run of the same scenario, contract level
-// and seed, preferring the one whose database is named after it, as the run list does.
+// by default it takes the first experiment pair offered by the run list.
 
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -23,6 +22,7 @@ import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 
 import { chromium } from "playwright";
+import { pairs } from "../src/views.ts";
 
 const { values: options } = parseArgs({
   options: {
@@ -42,19 +42,9 @@ async function api(path) {
 
 function choosePair(runs) {
   if (options.b0 && options.g2) return [options.b0, options.g2];
-  for (const b0 of runs.filter((run) => run.config === "B0")) {
-    const fits = runs.filter(
-      (run) =>
-        run.config === "G2" &&
-        run.scenario_id === b0.scenario_id &&
-        run.contract === b0.contract &&
-        run.seed === b0.seed,
-    );
-    const twin = fits.find((run) => run.database === b0.database.replace(/b0$/, "g2"));
-    const g2 = twin ?? fits[0];
-    if (g2) return [b0.database, g2.database];
-  }
-  throw new Error("the registry lists no B0 run with a G2 run of the same scenario, contract and seed");
+  const pair = pairs(runs)[0];
+  if (pair) return [pair.b0.database, pair.g2.database];
+  throw new Error("the registry lists no B0 and G2 runs that share an experiment cell");
 }
 
 const { runs } = await api("/api/runs");

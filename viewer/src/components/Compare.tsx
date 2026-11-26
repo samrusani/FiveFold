@@ -89,15 +89,15 @@ function SideBySide({ runs }: { runs: [RunData, RunData] }) {
       <table className="compare">
         <thead>
           <tr>
-            <th rowSpan={2}>vt (ms)</th>
+            <th rowSpan={2} scope="col">vt (ms)</th>
             <Heading data={runs[0]} />
             <Heading data={runs[1]} />
           </tr>
           <tr>
-            <th>Agent's view</th>
-            <th>Ledger</th>
-            <th>Agent's view</th>
-            <th>Ledger</th>
+            <th scope="col">Agent's view</th>
+            <th scope="col">Ledger</th>
+            <th scope="col">Agent's view</th>
+            <th scope="col">Ledger</th>
           </tr>
         </thead>
         <tbody>

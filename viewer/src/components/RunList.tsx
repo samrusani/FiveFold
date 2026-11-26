@@ -66,14 +66,14 @@ function Runs({ list }: { list: RunListData }) {
         <table className="runs">
           <thead>
             <tr>
-              <th>Pick</th>
-              <th>Database</th>
-              <th>Run</th>
-              <th>Scenario</th>
-              <th>Config</th>
-              <th>Contract</th>
-              <th>Seed</th>
-              <th>Registered</th>
+              <th scope="col">Pick</th>
+              <th scope="col">Database</th>
+              <th scope="col">Run</th>
+              <th scope="col">Scenario</th>
+              <th scope="col">Config</th>
+              <th scope="col">Contract</th>
+              <th scope="col">Seed</th>
+              <th scope="col">Registered</th>
             </tr>
           </thead>
           <tbody>
