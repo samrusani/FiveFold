@@ -14,7 +14,9 @@ from typing import Any
 
 import pytest
 from mcp.client.session import ClientSession
+from mcp_types import CallToolResult
 
+from fivefold.agents.tools import Timeouts, gateway_tools
 from fivefold.domain.api import FactRead, GetBudget, GetInventory, GetQuote, ListSuppliers
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.faults.plan import FaultInjector, parse_plan
@@ -349,25 +351,82 @@ def test_a_write_that_breaks_the_schema_is_refused_and_recorded() -> None:
     assert (record.admission, record.reason) == (Admission.REFUSED, RefusalReason.INVALID_ARGS)
 
 
-def test_an_unencodable_argument_is_refused_before_proposing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fivefold.gateway import tools as gateway_tools_module
-
-    def encode(*args: object) -> None:
-        raise RecursionError("the store cannot encode this argument")
-
-    monkeypatch.setattr(gateway_tools_module, "storable", encode, raising=False)
+def test_a_nested_schema_error_is_sent_and_its_arguments_are_kept() -> None:
     run = Run()
-    seen: list[dict[str, Any]] = []
+    args = {**ORDER, "based_on": _nested_list(253)}
 
     async def agent(client: Client) -> None:
-        seen.append(await client.ok("submit_purchase_order", **ORDER))
+        tools = await client.session.list_tools()
+
+        class Caller:
+            async def call_tool(
+                self, name: str, arguments: dict[str, Any], timeout_ms: int
+            ) -> CallToolResult:
+                return await client.session.call_tool(name, arguments)
+
+        wrapped = {
+            tool.name: tool for tool in gateway_tools(Caller(), tools, Timeouts(200, 500, 60))
+        }
+        answer = json.loads(await wrapped["submit_purchase_order"].ainvoke(args))
+        assert (answer["result"], answer["reason"]) == ("refused", "invalid_args")
+        assert "based_on" in answer["details"]["message"]
 
     run.go(agent)
-    (refused,) = seen
-    assert (refused["result"], refused["reason"]) == ("refused", "invalid_args")
-    assert not run.store.snapshot().actions
+    snapshot = run.store.snapshot()
+    assert not snapshot.actions
+    (record,) = snapshot.tool_calls
+    assert json.loads(json.dumps(dict(record.args))) == args
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "field", "refusal"),
+    [
+        ("get_quote", "supplier_id", False),
+        ("get_action_status", "action_id", False),
+        ("submit_purchase_order", "based_on", True),
+        ("submit_final_report", "claims", True),
+    ],
+)
+def test_arguments_beyond_the_mcp_serializer_depth_are_refused_locally(
+    tool_name: str, field: str, refusal: bool
+) -> None:
+    run = Run()
+    seen = []
+
+    async def agent(client: Client) -> None:
+        listed = await client.session.list_tools()
+
+        class Caller:
+            async def call_tool(
+                self, name: str, arguments: dict[str, Any], timeout_ms: int
+            ) -> CallToolResult:
+                seen.append(name)
+                return await client.session.call_tool(name, arguments)
+
+        tools = {
+            tool.name: tool for tool in gateway_tools(Caller(), listed, Timeouts(200, 500, 60))
+        }
+        reply = json.loads(await tools[tool_name].ainvoke({field: _nested_list(256)}))
+        message = "the MCP client cannot encode the arguments as JSON"
+        if refusal:
+            assert reply == {
+                "result": "refused",
+                "reason": "invalid_args",
+                "details": {"message": message},
+            }
+        else:
+            assert reply == {"error": "invalid_args", "message": message}
+
+    run.go(agent)
+    assert not seen
+    assert not run.store.snapshot().tool_calls
+
+
+def _nested_list(depth: int) -> object:
+    item: object = "R-0001"
+    for _ in range(depth):
+        item = [item]
+    return item
 
 
 def test_a_write_without_citations_is_refused_for_its_missing_basis() -> None:

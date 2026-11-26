@@ -29,6 +29,7 @@ from fivefold.domain.scenario import load_scenario_file
 from fivefold.harness.demo import DEV_001
 from fivefold.recorder.cassette import (
     Cassette,
+    CassetteError,
     ModelInfo,
     RunHeader,
     request_hash,
@@ -282,6 +283,22 @@ def test_a_call_that_fails_records_nothing() -> None:
     recorder = CassetteRecorder(ModelInfo(adapter="live", name="down"))
     with pytest.raises(ConnectionError, match="the model is down"):
         asyncio.run(RecordingModel(Down(), recorder, worker="agent-1").ainvoke("hi"))
+    assert recorder.calls == ()
+
+
+def test_a_reply_beyond_the_cassette_format_limit_has_a_recording_error() -> None:
+    recorder = CassetteRecorder(SCRIPTED)
+    argument: object = "R-0001"
+    for _ in range(1_200):
+        argument = [argument]
+    message = AIMessage(
+        "",
+        tool_calls=[
+            {"name": "submit_purchase_order", "args": {"based_on": argument}, "id": "call-0001"}
+        ],
+    )
+    with pytest.raises(CassetteError, match="the reply cannot be stored in the cassette format"):
+        recorder.record("agent-1", "00" * 32, message)
     assert recorder.calls == ()
 
 

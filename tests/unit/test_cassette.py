@@ -38,6 +38,7 @@ from fivefold.recorder.cassette import (
     ModelInfo,
     RunHeader,
     canonical_json,
+    plain,
     request_hash,
     request_json,
     request_params,
@@ -503,3 +504,21 @@ def test_a_reply_is_kept_whole_but_for_its_random_id() -> None:
 
 def test_a_short_reply_keeps_only_its_content() -> None:
     assert response_json(AIMessage(content="Done.", id="lc_run--0007-0")) == {"content": "Done."}
+
+
+def test_plain_copies_nested_sequences_without_python_recursion() -> None:
+    value: object = "leaf"
+    for _ in range(1_200):
+        value = (value,)
+    normalized = plain(value)
+    for _ in range(1_200):
+        assert isinstance(normalized, list) and len(normalized) == 1
+        normalized = normalized[0]
+    assert normalized == "leaf"
+
+
+def test_plain_rejects_a_cycle_with_its_path() -> None:
+    value: dict[str, object] = {}
+    value["self"] = value
+    with pytest.raises(ValueError, match=r"value\.self contains a cycle"):
+        plain(value)

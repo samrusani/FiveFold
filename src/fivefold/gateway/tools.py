@@ -334,16 +334,21 @@ class GatewayTools:
                 if model is PurchaseOrderArgs
                 else Operation.RESERVE_INVENTORY
             )
-            if not encodable_json(dict(arguments)):
-                return self._invalid(operation, {}, "the arguments cannot be stored as JSON")
             try:
-                # This store also converts accepted extras and its recursion budget
-                # can be smaller than the transport encoder's.
-                storable(arguments)
+                kept = storable(arguments)
+                if not encodable_json(kept):
+                    return self._invalid(operation, {}, "the arguments cannot be stored as JSON")
+            except RecursionError:
+                return self._invalid(operation, {}, "the arguments cannot be stored as JSON")
+            if not encodable_json(dict(arguments)):
+                return self._invalid(
+                    operation, arguments, "the arguments cannot be encoded as JSON"
+                )
+            try:
                 args = model.model_validate(dict(arguments))
                 normal = normalize(operation, args.model_dump())
             except (PydanticSerializationError, RecursionError):
-                return self._invalid(operation, {}, "the arguments cannot be stored as JSON")
+                return self._invalid(operation, arguments, "the arguments cannot be normalized")
             except ValidationError as error:
                 return self._invalid(operation, arguments, "; ".join(validation_messages(error)))
             except InvalidArgs as error:

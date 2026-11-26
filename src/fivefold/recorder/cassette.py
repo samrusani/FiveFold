@@ -48,7 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -75,40 +75,70 @@ class CassetteError(ValueError):
 
 
 def plain(value: object, where: str = "value") -> JsonValue:
-    """`value` as plain JSON data: dicts with text keys, lists, text, numbers, booleans and None.
+    """Copy mappings and sequences to plain JSON, preserving order and rejecting cycles."""
+    root: list[JsonValue] = []
+    pending: list[
+        tuple[Iterator[tuple[object, object]], dict[str, JsonValue] | list[JsonValue], str, int]
+    ] = [(iter([(0, value)]), root, where, id(root))]
+    ancestors = {id(root)}
+    while pending:
+        items, target, path, identity = pending[-1]
+        entry = next(items, None)
+        if entry is None:
+            pending.pop()
+            ancestors.remove(identity)
+            continue
 
-    Mappings become dicts and tuples become lists. Raises `TypeError` or `ValueError`,
-    naming the place, for anything JSON cannot hold: other types, keys that are not text,
-    NaN and infinity.
-    """
-    if value is None or isinstance(value, str | bool | int):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(f"{where} is {value}, which JSON cannot hold")
-        return value
-    if isinstance(value, Mapping):
-        return plain_object(value, where)
-    if isinstance(value, list | tuple):
-        return [plain(item, f"{where}[{index}]") for index, item in enumerate(value)]
-    raise TypeError(f"{where} is a {type(value).__name__}, which JSON cannot hold")
+        key, item = entry
+        if isinstance(target, dict):
+            if not isinstance(key, str):
+                raise TypeError(f"{path} has a key that is not text: {key!r}")
+            child_path = f"{path}.{key}"
+        else:
+            child_path = where if target is root else f"{path}[{key}]"
+
+        if item is None or isinstance(item, str | bool | int):
+            child: JsonValue = item
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError(f"{child_path} is {item}, which JSON cannot hold")
+            child = item
+        elif isinstance(item, Mapping | list | tuple):
+            if id(item) in ancestors:
+                raise ValueError(f"{child_path} contains a cycle, which JSON cannot hold")
+            if isinstance(item, Mapping):
+                child = {}
+                children = iter(item.items())
+            else:
+                child = []
+                children = enumerate(item)
+            ancestors.add(id(item))
+            pending.append((children, child, child_path, id(item)))
+        else:
+            raise TypeError(f"{child_path} is a {type(item).__name__}, which JSON cannot hold")
+        if isinstance(target, dict):
+            assert isinstance(key, str)
+            target[key] = child
+        else:
+            target.append(child)
+    return root[0]
 
 
 def plain_object(value: Mapping[Any, Any], where: str = "value") -> dict[str, JsonValue]:
     """A mapping as a plain JSON object; see `plain`."""
-    data: dict[str, JsonValue] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            raise TypeError(f"{where} has a key that is not text: {key!r}")
-        data[key] = plain(item, f"{where}.{key}")
+    data = plain(value, where)
+    assert isinstance(data, dict)
     return data
 
 
 def canonical_json(value: object) -> str:
     """`value` as canonical JSON: sorted keys, no spaces, non-ASCII characters as they are."""
-    return json.dumps(
-        plain(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    )
+    try:
+        return json.dumps(
+            plain(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        )
+    except RecursionError:
+        raise CassetteError("the value exceeds the cassette JSON encoder's nesting limit") from None
 
 
 def sha256(text: str) -> str:

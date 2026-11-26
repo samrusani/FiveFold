@@ -99,6 +99,16 @@ class SimulatorFaults:
             raise FaultEffectError(f"{fired.fault} has no variant {variant!r}")
         self._control.change_fact(key, changes, actor=FAULT_ACTOR, vt=self._scheduler.now)
 
+    def has_memory_to_correct(self, target: object) -> bool:
+        """Whether a message or dispatch has a memory fact that F8 can correct."""
+        context = message_context(target)
+        supplier_id, sku = context.get("supplier_id"), context.get("sku")
+        return (
+            isinstance(supplier_id, str)
+            and isinstance(sku, str)
+            and self._control.current_fact(memory_key(supplier_id, sku)) is not None
+        )
+
     def _change_memory(self, fired: Fired, context: Mapping[str, object]) -> None:
         supplier_id, sku = context.get("supplier_id"), context.get("sku")
         if not isinstance(supplier_id, str) or not isinstance(sku, str):
@@ -106,8 +116,7 @@ class SimulatorFaults:
         key = memory_key(supplier_id, sku)
         current = self._control.current_fact(key)
         if current is None:
-            # A trigger can fire on a supplier that has no memory to correct.
-            return
+            raise FaultEffectError(f"F8: there is no memory fact {key}")
         if str(fired.planned.variant).endswith("_relevant"):
             changes = {"order_channel": "portal"}
         else:

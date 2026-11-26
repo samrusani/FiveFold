@@ -43,7 +43,9 @@ CI checks 379 expected outcomes on dev-001 in [faults/expected.yaml](../faults/e
 `dev-001-memory-po` adds the selected supplier's order channel as an exact
 dependency. A relevant correction changes `order_channel` from `edi` to
 `portal`. A harmless correction changes `notes` only. The correction fires
-once at occurrence 1, before the scheduler delivers the next message.
+once at occurrence 1, before the scheduler delivers the next message. If the
+selected supplier and SKU have no current memory fact, F8 writes no fault
+record and leaves the occurrence available for a later matching event.
 
 | Variants | B0, B1 and B2 | G1 and G2 |
 | --- | --- | --- |
