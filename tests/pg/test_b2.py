@@ -64,17 +64,15 @@ def test_b2_cell(
     cell: Cell,
     monkeypatch: pytest.MonkeyPatch,
     assert_f8_records: Callable[[str, str | None], None],
+    baseline_repeats: Callable[[str, str, str], list[str] | None],
 ) -> None:
     memory = cell.fault == "F8"
     spec = cell_spec(cell)
-    if os.environ.get("FIVEFOLD_B2_REPEATS") == "20":
-        treatments = ["normal"] * 10 + ["delay"] * 5 + ["stop"] * 5
-    elif cell.name in DETERMINISM_CELLS:
+    treatments = baseline_repeats("FIVEFOLD_B2_REPEATS", "delay", "stop")
+    if treatments is None and cell.name in DETERMINISM_CELLS:
         treatments = ["normal", "delay", "stop"]
-    elif memory:
-        treatments = ["normal", "normal"]
-    else:
-        treatments = ["normal"]
+    if treatments is None:
+        treatments = ["normal"] * (2 if memory else 1)
 
     first: dict[str, list[str]] | None = None
     first_digests: dict[str, str] | None = None

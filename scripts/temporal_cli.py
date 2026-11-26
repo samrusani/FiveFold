@@ -22,21 +22,37 @@ CHECKSUMS = {
     "linux_amd64": "4c1500e2ce2d4de136e5fe8852d9b7f82eb62f19b6b383b3e0c040519a9d20b1",
     "linux_arm64": "2f748e9411b37c9cabb57f1f08e37765388c12b5534432c7aea28b593df9145d",
 }
+# Hash of the regular `temporal` member in each archive verified above.
+EXECUTABLE_CHECKSUMS = {
+    "darwin_amd64": "cd364ad328a745a0afc562b8cae64cb3ea99117825950ae87d5db7440a96362f",
+    "darwin_arm64": "3aa75ebc866fc7a995a560b748546902ac294ae071121ef091ccff48d5bcd8be",
+    "linux_amd64": "960afddde142595ea4bf6c74f0213b4634a4ef2ef8778c2e930af2cce30d7c8a",
+    "linux_arm64": "fcd71cb3898fc91ce7c8e934d70a0a32c11d73c8955c462eaab2becf88effa1a",
+}
 ARCHITECTURES = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
 
+def target_platform() -> str:
+    machine = platform.machine().lower()
+    target = f"{sys.platform}_{ARCHITECTURES.get(machine, machine)}"
+    if target not in CHECKSUMS:
+        raise ValueError(f"Temporal CLI {VERSION} has no pinned archive for {target}")
+    return target
+
+
 def check(binary: Path) -> None:
+    expected = EXECUTABLE_CHECKSUMS[target_platform()]
+    with binary.open("rb") as data:
+        if hashlib.file_digest(data, "sha256").hexdigest() != expected:
+            raise ValueError("Temporal CLI executable SHA-256 mismatch")
     result = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
     if result.returncode != 0 or result.stdout.split()[:3] != ["temporal", "version", VERSION]:
         raise ValueError(f"expected Temporal CLI {VERSION}")
 
 
 def install(binary: Path) -> None:
-    machine = platform.machine().lower()
-    target = f"{sys.platform}_{ARCHITECTURES.get(machine, machine)}"
-    checksum = CHECKSUMS.get(target)
-    if checksum is None:
-        raise ValueError(f"Temporal CLI {VERSION} has no pinned archive for {target}")
+    target = target_platform()
+    checksum = CHECKSUMS[target]
     archive_name = f"temporal_cli_{VERSION}_{target}.tar.gz"
     binary.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=binary.parent) as directory:

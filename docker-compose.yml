@@ -66,9 +66,15 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      FIVEFOLD_ADMIN_DSN: postgresql://postgres@postgres:5432/postgres
+      FIVEFOLD_ADMIN_DSN: postgresql://ff_viewer@postgres:5432/postgres
     ports:
       - "127.0.0.1:8300:8300"
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   # The run's commands: start, end and score. `start` writes the run's directory, with
   # its secrets, to the volume the services read.

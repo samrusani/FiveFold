@@ -435,3 +435,24 @@ def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], 
     for name in made:
         drop_database(admin_dsn, name)
         forget(admin_dsn, name)
+
+
+@pytest.fixture
+def baseline_repeats() -> Callable[[str, str, str], list[str] | None]:
+    """If requested, run exactly this many episodes, including the two host pauses."""
+
+    def treatments(name: str, first_pause: str, second_pause: str) -> list[str] | None:
+        raw = os.environ.get(name)
+        if raw is None:
+            return None
+        try:
+            count = int(raw)
+        except ValueError:
+            raise pytest.UsageError(f"{name} must be a positive integer") from None
+        if count <= 0:
+            raise pytest.UsageError(f"{name} must be a positive integer")
+        cycle = ["normal", first_pause, second_pause, "normal"]
+        blocks, remaining = divmod(count, len(cycle))
+        return cycle * blocks + cycle[:remaining]
+
+    return treatments

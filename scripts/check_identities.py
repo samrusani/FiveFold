@@ -2,8 +2,8 @@
 
 Usage: python3 scripts/check_identities.py BASE..HEAD
 
-Every commit in the range must use a GitHub noreply address as both its author email and
-its committer email, and a commit under the maintainer's noreply address must carry the
+Every author must use a GitHub user noreply address. A committer may also use GitHub's
+own noreply address. A commit under the maintainer's noreply address must carry the
 maintainer's GitHub username as its name (CLAUDE.md, "Commits and attribution"). CI runs
 this on every pull request. The report names each commit and the field at fault, never
 the value, so a public log cannot repeat what it found.
@@ -29,7 +29,8 @@ MAINTAINER_EMAIL = re.compile(r"(?:\d+\+)?samrusani@users\.noreply\.github\.com"
 def problems(name: str, email: str, role: str) -> list[str]:
     """What is wrong with one identity, `role` being "author" or "committer"."""
     found: list[str] = []
-    if email != GITHUB and not NOREPLY.fullmatch(email):
+    email = email.lower()
+    if not NOREPLY.fullmatch(email) and (role != "committer" or email != GITHUB):
         found.append(f"{role} email is not a GitHub noreply address")
     if MAINTAINER_EMAIL.fullmatch(email) and name != MAINTAINER:
         found.append(f"{role} name is not {MAINTAINER}, for the maintainer's noreply address")
@@ -39,7 +40,7 @@ def problems(name: str, email: str, role: str) -> list[str]:
 def check(revisions: str) -> list[str]:
     """One line per problem in the commits `git log revisions` lists."""
     listed = subprocess.run(
-        ["git", "log", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", revisions],
+        ["git", "log", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", "--end-of-options", revisions],
         check=True,
         capture_output=True,
         text=True,

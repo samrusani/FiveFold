@@ -69,20 +69,18 @@ def test_b1_cell(
     cell: Cell,
     temporal_host: TemporalHost,
     assert_f8_records: Callable[[str, str | None], None],
+    baseline_repeats: Callable[[str, str, str], list[str] | None],
 ) -> None:
     memory = cell.fault == "F8"
     scenario = cell_scenario(cell, load_scenario_file(DEV_MEMORY_PO if memory else DEV_001))
     expected = F8 if memory else EXPECTED
     plan = cell_plan(cell)
     spec = RunSpec(scenario, "B1", cell.contract, expected.seed, plan=plan)
-    if os.environ.get("FIVEFOLD_B1_REPEATS") == "20":
-        treatments = ["normal"] * 10 + ["async"] * 5 + ["blocked"] * 5
-    elif cell.name in DETERMINISM_CELLS:
+    treatments = baseline_repeats("FIVEFOLD_B1_REPEATS", "async", "blocked")
+    if treatments is None and cell.name in DETERMINISM_CELLS:
         treatments = ["normal", "async", "blocked"]
-    elif memory:
-        treatments = ["normal", "normal"]
-    else:
-        treatments = ["normal"]
+    if treatments is None:
+        treatments = ["normal"] * (2 if memory else 1)
 
     async def before_activity(activity_id: str, attempt: int) -> None:
         await pause_activity(treatment, activity_id, attempt)

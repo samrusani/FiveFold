@@ -30,6 +30,13 @@ to `split start`. When finished, use `docker compose --profile split down`.
 
 Start a run before the services, and start the services again for each run. Without Docker, run the same commands with `uv run python -m fivefold.harness.split` against your PostgreSQL server, and serve each service in its own terminal: `serve simulator`, then `serve gateway`. Without Docker there is no agent network, so a G1 or G2 agent there is outside record 0008's boundary. The run's directory is `split-run` unless `--run-dir` or `FIVEFOLD_RUN_DIR` says otherwise. It holds the run's secrets, so keep it to yourself; git ignores it.
 
+The images run as user `fivefold` (UID 10001). When upgrading a split volume from an image that ran as root, first stop the simulator and gateway. Transfer ownership of the dedicated run volume once, then use the normal commands above. The PostgreSQL volume is separate.
+
+```sh
+docker compose --profile split stop simulator gateway
+docker compose --profile split run --rm --no-deps --user root --entrypoint /bin/chown split -R fivefold:fivefold /var/lib/fivefold
+```
+
 The split commands use Linux or macOS file permissions. With Docker they run in Linux containers. `start` creates an owner-only directory (mode `0700`) and creates each token as a new owner-only file (mode `0600`). If `start` fails, it removes the files it created and the directory if it is empty. A successful run's directory stays available for `end` and `score`. Save the files you need and clear the directory before reusing its path.
 
 `start` takes the scenario, the configuration, the contract level, the seed (default 7) and the fault plan: the scenario's own by default, `--plan none` for no fault, or `--plan FILE`, a YAML list in the format of a scenario's `faults`. A random plan runs only in the inproc topology, so `start` refuses a scenario that has one. `--model NAME` names the model your agent uses; the run records it with the model adapter `external`, since the harness runs no model here. Each run gets its own database, made from a migrated template database, and a row in the run registry, as every run does (see [Viewer](viewer.md)). `start` refuses a taken database name. `--replace` requires FiveFold's marker or its complete matching migration history. The database must hold the same run or no run yet. Use an unused name for an unrelated database. For example, F2 on the purchase order's answer in G1 or G2:

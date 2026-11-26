@@ -14,12 +14,21 @@ needs each one to match row for row and by digest.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
 
+import mcp_types as types
 import pytest
+from langgraph.pregel import _retry
 
-from fivefold.harness.demo import DEMOS, Demo
-from fivefold.harness.run import Config, InprocRun
+from fivefold.agents.connection import GatewayConnection
+from fivefold.domain.contracts import Contract
+from fivefold.domain.scenario import load_scenario_file
+from fivefold.harness.demo import DEMOS, DEV_001, Demo
+from fivefold.harness.run import Config, InprocRun, RunSpec
+from fivefold.harness.transport import Reply, Transport
 from fivefold.recorder.cassette import sha256
 from fivefold.recorder.playback import RECORDS, _comparable, compare, records
 
@@ -70,6 +79,78 @@ def test_another_seed_gives_other_records(run_database: Callable[[str], str]) ->
         runs.append(records(dsn))
     differing = {difference.records for difference in compare(runs[0], runs[1])}
     assert "message log" in differing
+
+
+@pytest.mark.parametrize("config", ["B0", "G1", "G2"])
+def test_f9_workers_with_equal_virtual_retry_times_ignore_host_jitter(
+    run_database: Callable[[str], str], monkeypatch: pytest.MonkeyPatch, config: Config
+) -> None:
+    scenario = load_scenario_file(DEV_001)
+    hop = "agent_sim" if config == "B0" else "agent_gw"
+    order = "submit_purchase_order"
+    plan = [
+        {"fault": "F9", "variant": "same_args", "at": {"point": "agent.step"}},
+        *[
+            {
+                "fault": "F12",
+                "at": {"point": f"net.{hop}.request", "occurrence": n, "match": {"api": order}},
+            }
+            for n in (1, 2)
+        ],
+    ]
+
+    def observe(trial: int, jitter: float) -> dict[str, list[str]]:
+        dsn = run_database(f"det_lockstep_{config.lower()}_{trial}")
+        scheduler_run = InprocRun(RunSpec(scenario, config, Contract.C2, SEED, plan=plan), dsn)
+        gate = asyncio.Event()
+        arrivals: list[int] = []
+        jitters: list[float] = []
+
+        async def meet() -> None:
+            if not gate.is_set():
+                arrivals.append(scheduler_run.scheduler.now)
+                if len(arrivals) == 2:
+                    gate.set()
+                await gate.wait()
+
+        original_call = Transport.call
+        original_tool = GatewayConnection.call_tool
+
+        async def baseline(transport: Transport, **kwargs: Any) -> Reply:
+            if kwargs["api"] == order and kwargs["hop"] == "agent_sim":
+                await meet()
+            return await original_call(transport, **kwargs)
+
+        async def gateway(
+            connection: GatewayConnection, name: str, arguments: dict[str, Any], timeout_ms: int
+        ) -> types.CallToolResult:
+            if name == order:
+                await meet()
+            return await original_tool(connection, name, arguments, timeout_ms)
+
+        def uniform(low: float, high: float) -> float:
+            assert (low, high) == (0, 1)
+            jitters.append(jitter)
+            return jitter
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Transport, "call", baseline)
+            patch.setattr(GatewayConnection, "call_tool", gateway)
+            patch.setattr(_retry, "random", SimpleNamespace(uniform=uniform))
+            asyncio.run(scheduler_run.execute())
+        assert len(arrivals) == 2 and len(jitters) == 2
+        trace = records(dsn)
+        faults = [json.loads(row) for row in trace["fault log"]]
+        drops = [row for row in faults if row["fault"] == "F12"]
+        messages = {row["seq"]: row for row in map(json.loads, trace["message log"])}
+        assert len(drops) == 2
+        sent = [messages[drop["target_seq"]]["sent_vt"] for drop in drops]
+        assert sent[0] == sent[1]
+        return trace
+
+    first, second = observe(0, 0.0), observe(1, 0.9)
+    assert compare(first, second) == ()
+    assert digests(first) == digests(second)
 
 
 def test_the_check_ignores_wall_clock_fields_in_the_evaluation_and_nothing_else() -> None:

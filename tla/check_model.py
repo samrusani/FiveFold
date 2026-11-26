@@ -6,6 +6,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -67,6 +68,7 @@ def check_tables(path: Path) -> bytes:
 
 
 def run_tlc(profile: str) -> None:
+    subprocess.run([sys.executable, HERE.parent / "scripts/tla_tools.py", "check"], check=True)
     generated = check_tables(TABLES)
     workers, heap = PROFILES[profile]
     with TemporaryDirectory(prefix="fivefold-tlc-") as directory:
