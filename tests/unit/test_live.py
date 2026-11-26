@@ -335,9 +335,9 @@ class Stalled(BaseChatModel):
         raise AssertionError("never answered")
 
 
-def test_a_call_past_its_time_limit_fails_and_ends_its_real_wait() -> None:
+def test_a_call_past_its_time_limit_marks_its_cost_unknown_and_ends_its_wait() -> None:
     """A provider that never answers cannot hold the run: the call fails after its limit,
-    the real wait ends, and nothing is charged."""
+    the real wait ends, and the cap refuses the next call."""
     real = RealWaits()
     meter = SpendMeter(Decimal(1), prices())
 
@@ -359,6 +359,32 @@ def test_a_call_past_its_time_limit_fails_and_ends_its_real_wait() -> None:
             await asyncio.wait_for(model.ainvoke([HumanMessage("Order W-100.")]), 5)
         assert not real.active
         assert meter.calls == 0
+        assert meter.spent_usd == 0 and meter.unknown is not None
+        reply = await model.ainvoke([HumanMessage("Order W-100.")])
+        assert refusal(reply) == SPEND_CAP
+        assert meter.calls == 0
+
+    asyncio.run(call())
+
+
+@pytest.mark.parametrize("priced", [True, False])
+def test_a_provider_error_closes_the_cap_if_priced(priced: bool) -> None:
+    events: list[str] = []
+    rate = "1" if priced else "0"
+    meter = SpendMeter(Decimal(1), prices(rate, rate))
+    provider = FakeProvider([RuntimeError("provider failed"), AIMessage("Done.")], events)
+    model = live_model(provider, meter, events)
+    request = [HumanMessage("Order W-100.")]
+
+    async def call() -> None:
+        with pytest.raises(RuntimeError, match="provider failed"):
+            await model.ainvoke(request)
+        assert meter.calls == 0
+        assert meter.spent_usd == 0 and meter.reached() is priced
+        reply = await model.ainvoke(request)
+        assert refusal(reply) == (SPEND_CAP if priced else None)
+        assert events.count("provider") == (1 if priced else 2)
+        assert meter.calls == (0 if priced else 1)
 
     asyncio.run(call())
 
@@ -422,10 +448,10 @@ def test_a_refused_call_is_recorded_and_its_replay_serves_the_same_refusal() -> 
     player.finish()
 
 
-def test_a_call_the_provider_fails_ends_the_hold_and_charges_nothing() -> None:
+def test_a_failed_free_call_ends_the_hold_and_charges_nothing() -> None:
     events: list[str] = []
     down = FakeProvider([ConnectionError("Failed to connect to Ollama.")], events)
-    meter = SpendMeter(Decimal(1), prices())
+    meter = SpendMeter(Decimal(1), prices("0", "0"))
     model = live_model(down, meter, events)
     with pytest.raises(ConnectionError, match="Failed to connect"):
         asyncio.run(model.ainvoke([HumanMessage("Order W-100.")]))

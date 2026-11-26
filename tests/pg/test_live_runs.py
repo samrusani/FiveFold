@@ -696,6 +696,7 @@ def test_a_provider_that_never_answers_ends_its_worker_and_the_run_goes_on(
     assert end is WorkerEnd.ERROR, text
     assert "fake:m did not answer within 0.2 s" in text
     assert meter.calls == 0
+    assert meter.unknown is not None and meter.reached()
 
 
 def test_the_command_records_a_live_run_and_plays_it_back_with_no_network(

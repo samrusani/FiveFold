@@ -17,14 +17,15 @@ is checked just before it is sent, once every earlier call has been charged. So 
 spend passes the cap by at most one call's cost: its input tokens at the input price plus
 its output tokens at the output price. The provider's output limit bounds the output:
 `num_predict` for Ollama, `max_tokens` for Anthropic and OpenAI, `max_output_tokens` for
-Google. A reply that reports no usage, from a model that is not free, makes the spend
-unknown, and the cap then counts as reached.
+Google. SDK retries are disabled, so each adapter call sends one provider attempt.
+An error, timeout or reply without usage makes paid spend unknown. The cap then counts
+as reached.
 
 The harness records every live call into the run's cassette (0009), a refused one too, so
 the replay adapter serves the same replies and the run plays back with no network. A call
 the provider fails, for example because no server answers, raises: the worker ends with an
-error, as for any exception in its graph (0008), and nothing is charged or recorded. Its
-cassette then ends before that call, so a replay of the run stops there with `ReplayError`.
+error, as for any exception in its graph (0008). Its cassette ends before that call, so
+a replay of the run stops there with `ReplayError`.
 
 The providers (`PROVIDERS`), each through its LangChain package, which reads the key and
 the base URL from its own environment variables:
@@ -43,8 +44,9 @@ Nothing here passes, prints or records a key or a base URL. A live run of a prov
 needs a key is refused unless one of its key variables is set, which is all that the
 check reads (`fivefold.harness.models.check_live`). A live run of `google_genai` is also
 refused while `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_ENTERPRISE` is set: either
-one sends its requests to Vertex AI instead, with Google's default credentials
-(`Provider.forbidden`).
+one can send its requests to Vertex AI with Google's default credentials. Google SDK
+record and replay modes are refused too (`Provider.forbidden`). All live runs refuse
+`LANGSMITH_GATEWAY` and enabled LangSmith tracing.
 
 Each run executes on an event loop of its own (`asyncio.run`), but langchain-anthropic
 1.7.10 and langchain-openai 1.8.0 keep one async HTTP client for the whole process: each
@@ -140,6 +142,7 @@ request and one reply.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -153,7 +156,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from pydantic import JsonValue, PrivateAttr, ValidationError
 
-from fivefold.agents.worker import SPEND_CAP_TEXT
+from fivefold.agents.worker import REFUSED, SPEND_CAP_TEXT
+from fivefold.agents.worker import SPEND_CAP as SPEND_CAP
 from fivefold.domain.prices import ModelPrice, PriceFile
 from fivefold.harness.clock import within
 from fivefold.recorder.cassette import Tool
@@ -163,12 +167,6 @@ Think = Callable[[], Awaitable[None]]
 
 Hold = Callable[[Awaitable[AIMessage]], Awaitable[AIMessage]]
 """Awaits a real wait with virtual time held still (`Scheduler.hold`)."""
-
-REFUSED: Final = "fivefold_refused"
-"""The reply metadata that marks a reply the harness gave instead of the model, and why."""
-
-SPEND_CAP: Final = "spend_cap"
-"""Why the harness refused a call: the spend cap was reached."""
 
 CALL_LIMIT_S: Final = 600.0
 """How long, in wall-clock seconds, a live call may wait for its provider by default. A
@@ -201,8 +199,7 @@ class Provider:
     """The environment variables the provider's package reads its API key from, any one of
     which is enough; none for a provider that needs no key."""
     forbidden: tuple[str, ...] = ()
-    """Environment variables that would send the provider's requests to another backend,
-    with other credentials; a live run is refused while one is set."""
+    """Environment flags that switch the provider's backend or record or replay requests."""
 
 
 def _ollama(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
@@ -221,14 +218,18 @@ def _anthropic(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
 
     arguments: dict[str, Any] = dict(params)
-    return ChatAnthropic(model=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
+    return ChatAnthropic(
+        model=model, max_retries=0, default_headers=dict(CLOSE_AFTER_REPLY), **arguments
+    )
 
 
 def _openai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
     from langchain_openai import ChatOpenAI
 
     arguments: dict[str, Any] = dict(params)
-    return ChatOpenAI(model_name=model, default_headers=dict(CLOSE_AFTER_REPLY), **arguments)
+    return ChatOpenAI(
+        model_name=model, max_retries=0, default_headers=dict(CLOSE_AFTER_REPLY), **arguments
+    )
 
 
 def _google_genai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
@@ -236,7 +237,7 @@ def _google_genai(model: str, params: Mapping[str, JsonValue]) -> BaseChatModel:
 
     arguments: dict[str, Any] = dict(params)
     return ChatGoogleGenerativeAI(
-        model=model, additional_headers=dict(CLOSE_AFTER_REPLY), **arguments
+        model=model, max_retries=1, additional_headers=dict(CLOSE_AFTER_REPLY), **arguments
     )
 
 
@@ -297,7 +298,7 @@ PROVIDERS: dict[str, Provider] = {
         _google_genai,
         GOOGLE_GENAI_PARAMS,
         ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-        ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE"),
+        ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_CLIENT_MODE"),
     ),
 }
 """The live providers, by name."""
@@ -386,6 +387,11 @@ class SpendMeter:
         elif not price.free:
             self.unknown = f"a reply of {model} reported no token usage, so its cost is unknown"
 
+    def failed_call(self, model: str, price: ModelPrice) -> None:
+        """Mark spend unknown when a failed attempt may have been billed."""
+        if not price.free:
+            self.unknown = f"a call to {model} ended without usage, so its cost is unknown"
+
     def summary(self) -> str:
         """The spend so far against the cap, and the price file's date, in one line."""
         line = (
@@ -467,13 +473,17 @@ class LiveModel(BaseChatModel):
         await self._think()
         if self._meter.reached():
             return ChatResult(generations=[ChatGeneration(message=spend_cap_reply())])
-        call = self._bound.ainvoke(messages, stop=stop, **kwargs)
         try:
+            call = self._bound.ainvoke(messages, stop=stop, **kwargs)
             reply = await self._hold(within(call, self._limit_s))
         except TimeoutError:
+            self._meter.failed_call(self._name, self._price)
             raise LiveError(
                 f"the live model {self._name} did not answer within {self._limit_s:g} s"
             ) from None
+        except (Exception, asyncio.CancelledError):
+            self._meter.failed_call(self._name, self._price)
+            raise
         self._meter.charge(self._name, self._price, reply.usage_metadata)
         return ChatResult(generations=[ChatGeneration(message=reply)])
 

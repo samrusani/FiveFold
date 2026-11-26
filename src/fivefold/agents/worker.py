@@ -49,9 +49,10 @@ from langgraph.types import RetryPolicy
 BUDGET_TEXT: Final = "Step budget used up."
 TOKEN_BUDGET_TEXT: Final = "Token budget used up."
 SPEND_CAP_TEXT: Final = "Spend cap reached."
-BUDGET_TEXTS: Final = (BUDGET_TEXT, TOKEN_BUDGET_TEXT, SPEND_CAP_TEXT)
-"""The last message of a worker that ended as `budget`: its steps or tokens ran out, or
-the live adapter's spend cap refused its call."""
+REFUSED: Final = "fivefold_refused"
+SPEND_CAP: Final = "spend_cap"
+BUDGET_TEXTS: Final = (BUDGET_TEXT, TOKEN_BUDGET_TEXT)
+"""The last message of a worker whose steps or tokens ran out."""
 
 CallLog = Callable[[], Callable[[AIMessage], None]]
 """The harness's model-call log: called as a model call starts, it returns what to call
@@ -84,6 +85,8 @@ def budget_end(message: BaseMessage) -> str | None:
         content = message.content
         if isinstance(content, str) and content in BUDGET_TEXTS:
             return content
+        if content == SPEND_CAP_TEXT and message.response_metadata.get(REFUSED) == SPEND_CAP:
+            return SPEND_CAP_TEXT
     return None
 
 

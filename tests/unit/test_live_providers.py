@@ -134,9 +134,14 @@ ENVIRONMENT: Final = (
     "GOOGLE_VERTEX_BASE_URL",
     "GOOGLE_GENAI_USE_VERTEXAI",
     "GOOGLE_GENAI_USE_ENTERPRISE",
+    "GOOGLE_GENAI_CLIENT_MODE",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
     "LANGSMITH_GATEWAY",
+    "LANGSMITH_TRACING_V2",
+    "LANGCHAIN_TRACING_V2",
+    "LANGSMITH_TRACING",
+    "LANGCHAIN_TRACING",
 )
 """Variables that would change where a provider's model sends its requests."""
 
@@ -256,6 +261,7 @@ def test_the_anthropic_chat_model_is_built_from_its_environment_and_sends_nothin
     assert chat.anthropic_api_url == "https://api.anthropic.com"
     assert chat.default_headers == {"Connection": "close"}, "no connection outlives its run"
     assert chat.anthropic_proxy is None
+    assert chat.max_retries == chat._async_client.max_retries == 0
     assert DUMMY_KEY not in repr(chat) and DUMMY_KEY not in str(chat.model_dump())
     assert bound_tool_names("anthropic", chat, [quote_tool()]) == ["get_quote"]
 
@@ -283,6 +289,7 @@ def test_the_openai_chat_model_is_built_from_its_environment_and_sends_nothing()
     assert chat.root_async_client.default_headers["Connection"] == "close"
     assert chat.extra_body is None
     assert chat.include_response_headers is False, "no response header reaches a cassette"
+    assert chat.max_retries == chat.root_async_client.max_retries == 0
     assert DUMMY_KEY not in repr(chat) and DUMMY_KEY not in str(chat.model_dump())
     assert bound_tool_names("openai", chat, [quote_tool()]) == ["get_quote"]
 
@@ -308,6 +315,7 @@ def test_the_google_genai_chat_model_is_built_from_its_environment_and_sends_not
     key = chat.google_api_key
     assert key is not None and key.get_secret_value() == DUMMY_KEY, "read from the environment"
     assert chat.client is not None and chat.client.vertexai is False, "the Gemini API"
+    assert chat.max_retries == 1  # The Google SDK counts the first attempt.
     assert chat.base_url is None and chat.credentials is None and chat.project is None
     assert chat.additional_headers == {"Connection": "close"}, "no connection outlives its run"
     assert DUMMY_KEY not in repr(chat) and DUMMY_KEY not in str(chat.model_dump())
@@ -504,6 +512,7 @@ def test_google_genai_refuses_both_variables_that_switch_it_to_vertex_ai() -> No
     assert PROVIDERS["google_genai"].forbidden == (
         "GOOGLE_GENAI_USE_VERTEXAI",
         "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_GENAI_CLIENT_MODE",
     )
     assert PROVIDERS["anthropic"].forbidden == PROVIDERS["openai"].forbidden == ()
     meter = SpendMeter(Decimal(1), price_file("google_genai"))
@@ -515,6 +524,49 @@ def test_google_genai_refuses_both_variables_that_switch_it_to_vertex_ai() -> No
                 environ={**flag_and_key, "GOOGLE_GENAI_USE_ENTERPRISE": value},
             )
     RunModels(Live("google_genai", "m", spend=meter), environ=flag_and_key)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LANGSMITH_GATEWAY",
+        "LANGSMITH_TRACING_V2",
+        "LANGCHAIN_TRACING_V2",
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_TRACING",
+    ],
+)
+def test_a_live_run_refuses_langsmith_routing_and_tracing(name: str) -> None:
+    meter = SpendMeter(Decimal(1), price_file("openai"))
+    with pytest.raises(LiveRefused, match=name):
+        RunModels(
+            Live("openai", "m", spend=meter),
+            environ={"FIVEFOLD_LIVE": "1", "OPENAI_API_KEY": DUMMY_KEY, name: "true"},
+        )
+
+
+def test_a_live_run_refuses_an_enabled_tracing_context() -> None:
+    from langsmith import tracing_context
+
+    meter = SpendMeter(Decimal(1), price_file("openai"))
+    with tracing_context(enabled=True), pytest.raises(LiveRefused, match="LangSmith tracing"):
+        RunModels(
+            Live("openai", "m", spend=meter),
+            environ={"FIVEFOLD_LIVE": "1", "OPENAI_API_KEY": DUMMY_KEY},
+        )
+
+
+def test_google_genai_refuses_sdk_recording_and_replay() -> None:
+    meter = SpendMeter(Decimal(1), price_file("google_genai"))
+    with pytest.raises(LiveRefused, match="GOOGLE_GENAI_CLIENT_MODE"):
+        RunModels(
+            Live("google_genai", "m", spend=meter),
+            environ={
+                "FIVEFOLD_LIVE": "1",
+                "GEMINI_API_KEY": DUMMY_KEY,
+                "GOOGLE_GENAI_CLIENT_MODE": "replay",
+            },
+        )
 
 
 def test_a_provider_with_no_key_variables_needs_no_key(monkeypatch: pytest.MonkeyPatch) -> None:

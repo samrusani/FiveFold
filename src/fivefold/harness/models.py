@@ -48,6 +48,8 @@ from dataclasses import dataclass, field
 from typing import Final, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.tracers.context import tracing_v2_callback_var
+from langsmith.utils import tracing_is_enabled
 from pydantic import JsonValue
 
 from fivefold.agents.branch import BranchModel, BranchPlayer, check_branch_point
@@ -186,9 +188,8 @@ def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, Mode
     with a price file that prices its model, and `environ` sets the provider's API key and
     none of the variables the provider refuses; return the meter and the price.
 
-    The key and the refused variables are checked last, and only for being set; a
-    provider this build does not have is refused when its model is built
-    (`fivefold.agents.live.check_provider`).
+    Refuse LangSmith's gateway or enabled tracing before constructing a provider.
+    A provider this build does not have is refused when its model is built.
     """
     check_live_flag(environ)
     if spec.spend is None:
@@ -196,6 +197,23 @@ def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, Mode
     if not (math.isfinite(spec.limit_s) and spec.limit_s > 0):
         raise LiveRefused(f"a live call's time limit must be above 0 seconds, not {spec.limit_s}")
     price = spec.spend.prices.price(spec.provider, spec.model)
+    if environ.get("LANGSMITH_GATEWAY"):
+        raise LiveRefused("a live run refuses LANGSMITH_GATEWAY: unset it")
+    # LangSmith 0.14.17 checks V2 before TRACING, with LANGSMITH before LANGCHAIN.
+    for name in (
+        "LANGSMITH_TRACING_V2",
+        "LANGCHAIN_TRACING_V2",
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_TRACING",
+    ):
+        value = environ.get(name)
+        if value is not None and value.strip():
+            if value == "true":
+                raise LiveRefused(f"a live run refuses enabled LangSmith tracing in {name}")
+            break
+    # The SDK can also enable tracing from a context or keep an earlier setting cached.
+    if tracing_v2_callback_var.get() is not None or tracing_is_enabled():
+        raise LiveRefused("a live run refuses enabled LangSmith tracing")
     entry = PROVIDERS.get(spec.provider)
     if entry is not None and entry.keys and not any(environ.get(key) for key in entry.keys):
         raise LiveRefused(
@@ -204,8 +222,8 @@ def check_live(spec: Live, environ: Mapping[str, str]) -> tuple[SpendMeter, Mode
     for name in entry.forbidden if entry is not None else ():
         if environ.get(name):
             raise LiveRefused(
-                f"a live run of {spec.provider} refuses {name}, which would send its requests"
-                " to another backend, with other credentials: unset it"
+                f"a live run of {spec.provider} refuses {name}, which can switch backends"
+                " or enable SDK recording or replay: unset it"
             )
     return spec.spend, price
 
