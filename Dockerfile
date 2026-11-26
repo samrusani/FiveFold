@@ -1,6 +1,6 @@
 # The app image (0007): Python 3.12 with uv. By default it runs `make check`, which needs
 # the postgres service from docker-compose.yml.
-FROM python:3.12-slim AS base
+FROM python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b AS base
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends make \
@@ -37,24 +37,27 @@ COPY scripts/tla_tools.py scripts/tla_tools.py
 RUN make tla-setup
 
 FROM base
-RUN pip install --no-cache-dir uv==0.13.8
+RUN pip install --no-cache-dir uv==0.13.8 \
+    && useradd --create-home --user-group --uid 10001 fivefold \
+    && install -d -o fivefold -g fivefold /app /var/lib/fivefold
 
 # Use the image's Python 3.12; never download another.
 ENV UV_PYTHON_DOWNLOADS=never
+USER fivefold
 
 # Install the locked dependencies first, so code changes reuse this layer.
-COPY pyproject.toml uv.lock ./
+COPY --chown=fivefold:fivefold pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project
 
-COPY scripts/temporal_cli.py scripts/temporal_cli.py
+COPY --chown=fivefold:fivefold scripts/temporal_cli.py scripts/temporal_cli.py
 RUN python3 scripts/temporal_cli.py install
 
 COPY --from=formal-tools /opt/java /opt/java
-COPY --from=formal-tools /app/.tla/tla2tools.jar .tla/tla2tools.jar
+COPY --from=formal-tools --chown=fivefold:fivefold /app/.tla/tla2tools.jar .tla/tla2tools.jar
 ENV JAVA_HOME=/opt/java
 ENV PATH=/opt/java/bin:$PATH
 
-COPY . .
+COPY --chown=fivefold:fivefold . .
 RUN uv sync --locked
 
 CMD ["make", "check"]

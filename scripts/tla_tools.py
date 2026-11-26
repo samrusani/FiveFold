@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 VERSION = "1.7.3"
-JAR = Path(".tla/tla2tools.jar")
+JAR = Path(__file__).resolve().parents[1] / ".tla/tla2tools.jar"
 URL = f"https://github.com/tlaplus/tlaplus/releases/download/v{VERSION}/{JAR.name}"
 SHA256 = "ae7a33bbe99e5a3783c28d826d20e0028fc87f5a8cc8f9520afab00eabbc0bb1"
 JAVA_HELP = (

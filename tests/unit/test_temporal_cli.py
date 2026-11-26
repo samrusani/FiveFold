@@ -1,28 +1,23 @@
-import os
-import subprocess
-import sys
+"""The setup check verifies an executable before invoking it."""
+
+import runpy
 from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "temporal_cli.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts/temporal_cli.py"
 
 
-@pytest.mark.parametrize("version", [None, "1.9.0", "1.10.1"])
-def test_temporal_check_requires_the_pinned_cli(tmp_path: Path, version: str | None) -> None:
+def test_the_cli_digest_is_checked_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     binary = tmp_path / "temporal"
-    if version is not None:
-        binary.write_text(f"#!/bin/sh\necho 'temporal version {version}'\n", encoding="utf-8")
-        binary.chmod(0o755)
-    result = subprocess.run(
-        [sys.executable, SCRIPT, "check"],
-        env={**os.environ, "FIVEFOLD_TEMPORAL_CLI": str(binary)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if version == "1.10.1":
-        assert result.returncode == 0
-    else:
-        assert result.returncode == 1
-        assert "Run make temporal-setup" in result.stderr
+    binary.write_bytes(b"fixture executable bytes")
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the unverified file must not run")
+
+    check = runpy.run_path(str(SCRIPT))["check"]
+    monkeypatch.setattr("subprocess.run", unexpected)
+    with pytest.raises(ValueError, match="executable SHA-256 mismatch"):
+        check(binary)

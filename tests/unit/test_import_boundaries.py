@@ -20,6 +20,8 @@ FORBIDDEN: dict[str, frozenset[str]] = {
     "gateway": frozenset({"sim"}),
     "agents": frozenset({"gateway", "sim"}),
     "viewer": frozenset({"agents", "evaluator", "faults", "gateway", "harness", "recorder", "sim"}),
+    "conformance": frozenset({"agents", "gateway", "recorder", "sim", "shrink", "viewer"}),
+    "shrink": frozenset({"agents", "conformance", "gateway", "sim"}),
 }
 """For each component, the fivefold subpackages it must never import."""
 

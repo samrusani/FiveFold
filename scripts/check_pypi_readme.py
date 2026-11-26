@@ -48,6 +48,9 @@ def read_metadata(path: Path) -> bytes:
 
 
 def main(paths: list[str]) -> int:
+    if not paths:
+        print("Provide a wheel or source distribution to check.", file=sys.stderr)
+        return 1
     failed = False
     for name in paths:
         path = Path(name)

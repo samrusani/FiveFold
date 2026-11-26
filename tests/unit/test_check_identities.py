@@ -91,6 +91,22 @@ def test_the_maintainers_address_needs_the_maintainers_name(repo: Path) -> None:
     assert PERSONAL[0] not in result.stdout
 
 
+def test_the_maintainers_address_is_checked_regardless_of_case(repo: Path) -> None:
+    commit(repo, (PERSONAL[0], MAINTAINER[1].upper()), MAINTAINER)
+    result = check(repo)
+    assert result.returncode == 1
+    assert "author name is not samrusani" in result.stdout
+
+
+def test_githubs_address_is_only_allowed_for_the_committer(repo: Path) -> None:
+    identity = ("GitHub", "noreply@github.com")
+    commit(repo, identity, identity)
+    result = check(repo)
+    assert result.returncode == 1
+    assert "author email is not a GitHub noreply address" in result.stdout
+    assert "committer email" not in result.stdout
+
+
 def test_every_commit_in_the_range_is_checked(repo: Path) -> None:
     commit(repo, MAINTAINER, PERSONAL)
     commit(repo, MAINTAINER, MAINTAINER)
