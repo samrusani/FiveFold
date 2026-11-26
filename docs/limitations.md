@@ -186,7 +186,7 @@ The nightly row is from a local run. Times are TLC elapsed time and exclude setu
 
 ## Known limits
 
-`based_on` and `effect_ids` have no separate item limit. They must fit the tool transport, its JSON encoder and the run's PostgreSQL records. FiveFold checks encodability before applying an order, including the derived order amount. A trigger for F8 can reach an order whose supplier has no memory fact. The trigger is recorded and there is no fact correction.
+`based_on` and `effect_ids` have no separate item limit. They must fit the tool transport, its JSON encoder and the run's PostgreSQL records. FiveFold checks encodability before applying an order, including the derived order amount. When an F8 trigger reaches an order whose supplier has no memory fact, no fault row is written and the occurrence stays available for a later matching event.
 
 Version 0.2.0 includes F8 on the memory scenario. It includes B1, B2, the MCP lost-reply conformance test, run shrinking and the bounded TLA+ gateway model. The shrinker supports scored, in-process scripted B0, G1 and G2 failures. [Roadmap](plan.md#roadmap)
 
