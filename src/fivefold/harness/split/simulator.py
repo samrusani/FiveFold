@@ -45,14 +45,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
 from starlette.applications import Starlette
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
@@ -69,16 +69,28 @@ from fivefold.domain.report import validation_messages
 from fivefold.faults.plan import FaultInjector, Fired
 from fivefold.harness.actors import ScriptedApprover
 from fivefold.harness.fault_effects import SimulatorFaults, message_context
-from fivefold.harness.log import NUL_REFUSED, DropReason, holds_nul
+from fivefold.harness.log import DropReason
 from fivefold.harness.reports import ReportSink, sink_endpoint
 from fivefold.harness.sim_points import SimulatorPoints
 from fivefold.harness.split.credentials import GATEWAY, HARNESS
 from fivefold.harness.split.hops import SEQ_HEADER, WRITES, Hops, logged_message
 from fivefold.harness.split.rundir import SplitRun
-from fivefold.harness.split.service import OpenRun, open_run, unavailable, until_gone
+from fivefold.harness.split.service import (
+    OpenRun,
+    json_storage_problem,
+    open_run,
+    unavailable,
+    until_gone,
+)
 from fivefold.harness.transport import Envelope, Handler, Hop, Reply
 from fivefold.sim import Simulator
 from fivefold.sim.endpoint import endpoint
+
+MAX_REQUEST_BYTES = 4 * 1024 * 1024
+"""Match the MCP SDK's 4 MiB JSON request limit."""
+
+MAX_REQUEST_DEPTH = 200
+"""Maximum number of nested JSON containers in a simulator request."""
 
 SIMULATOR = "simulator"
 REPORT_SINK = "report_sink"
@@ -211,6 +223,8 @@ class SimulatorService:
             return JSONResponse({"error": "forbidden"}, status_code=401)
         action = request.path_params["action"]
         if action == "drain":
+            if self.serving.has_stopped():
+                return JSONResponse({"status": "stopped"})
             self.serving.draining = True
             return JSONResponse({"status": "draining"})
         if action == "stop":
@@ -225,26 +239,23 @@ class SimulatorService:
         caller = self._callers.identify(request.headers.get("authorization"))
         if caller is None or caller == HARNESS:
             return _forbidden(call, "no credential of this run", status=401)
+        if caller not in serving.simulator.config.credentials:
+            return _forbidden(call, f"{caller} holds no credential for this service", status=403)
         if serving.draining and caller != GATEWAY:
             return unavailable("the run's agents' phase is over")
-        try:
-            body = json.loads(await request.body())
-        except ValueError:
-            return _invalid("the body is not JSON")
-        if holds_nul(body):
-            return _invalid(f"the body is refused: {NUL_REFUSED}")
+        body = await _json_request(request)
+        if isinstance(body, JSONResponse):
+            return body
         if serving.has_stopped():
             return unavailable("the run has stopped")
         receiver, handler = SIMULATOR, serving.api
         if call == REPORT_CALL:
             # Only B0's agent reports here; in G1 and G2 reports go through the gateway
             # (0008), so no caller of the simulator may report.
-            if self.run.has_gateway or caller not in serving.simulator.config.credentials:
+            if self.run.has_gateway:
                 return _forbidden(
                     call, f"{caller} cannot report here in {self.run.config}", status=403
                 )
-            if not isinstance(body, dict):
-                return _invalid("a report is a JSON object")
             receiver, handler = REPORT_SINK, serving.sink
         else:
             try:
@@ -305,14 +316,18 @@ class SimulatorService:
         outcome = hops.fire(point, arrived)
         if outcome.dropped:
             hops.dropped(arrived, "fault")
-            await until_gone(request, serving.stopping)
-            return unavailable("the request was lost")
-        hops.delivered(arrived)
+        else:
+            hops.delivered(arrived)
         for fired in outcome.copies:
             self._deliver_copy_later(fired, point, arrived, handler)
+        if outcome.dropped:
+            await until_gone(request, serving.stopping)
+            return unavailable("the request was lost")
         reply = await self._handled(arrived, handler)
         if reply is None or serving.has_stopped():
             return unavailable("the run stopped while the request was handled")
+        if reply.answer_class == "aborted":
+            return unavailable("the write missed its commit deadline")
         answer = hops.sent(
             hop=arrived.hop,
             kind="answer",
@@ -430,3 +445,41 @@ def _forbidden(call: str, detail: str, *, status: int) -> JSONResponse:
 
 def _invalid(detail: str) -> JSONResponse:
     return JSONResponse({"error": "invalid_request", "detail": detail}, status_code=422)
+
+
+async def _json_request(request: Request) -> dict[str, Any] | JSONResponse:
+    data = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    {"error": "invalid_request", "detail": "the body exceeds 4 MiB"},
+                    status_code=413,
+                )
+            data.extend(chunk)
+        body = json.loads(data)
+    except (ValueError, RecursionError, ClientDisconnect):
+        return _invalid("the body is not a readable JSON object")
+    if not isinstance(body, dict):
+        return _invalid("the body is not a JSON object")
+    if _too_deep(body):
+        return _invalid(f"the body exceeds {MAX_REQUEST_DEPTH} nested JSON containers")
+    if problem := json_storage_problem(body):
+        return _invalid(f"the body is refused: {problem}")
+    return body
+
+
+def _too_deep(body: dict[str, Any]) -> bool:
+    pending: list[tuple[Iterator[Any], int]] = [(iter(body.values()), 1)]
+    while pending:
+        children, depth = pending[-1]
+        for child in children:
+            if isinstance(child, dict | list):
+                if depth == MAX_REQUEST_DEPTH:
+                    return True
+                items = child.values() if isinstance(child, dict) else child
+                pending.append((iter(items), depth + 1))
+                break
+        else:
+            pending.pop()
+    return False

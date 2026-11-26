@@ -10,7 +10,7 @@ import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
 
-from fivefold.harness.log import MessageRecord, RunRecord, SharedPgHarnessLog
+from fivefold.harness.log import EVENT_STAMP_LOCK_KEY, MessageRecord, RunRecord, SharedPgHarnessLog
 
 pytestmark = pytest.mark.pg
 
@@ -64,6 +64,17 @@ def test_two_writers_number_one_series_of_events(migrated_database: str) -> None
         ).fetchone()
     assert row == ("delivered", delivered, 11)
     assert delivered > sent
+
+
+def test_two_connections_share_the_stamp_lock(migrated_database: str) -> None:
+    with _harness(migrated_database) as first, _harness(migrated_database) as second:
+        one, two = SharedPgHarnessLog(first), SharedPgHarnessLog(second)
+        with one.ordering(), second.transaction():
+            assert second.execute(
+                "SELECT pg_try_advisory_xact_lock(%s::bigint)", (EVENT_STAMP_LOCK_KEY,)
+            ).fetchone() == (False,)
+        assert one.stamp(lambda: 10)[1] == 10
+        assert two.stamp(lambda: 11)[1] == 11
 
 
 def test_a_split_run_records_its_agent_as_external(migrated_database: str) -> None:

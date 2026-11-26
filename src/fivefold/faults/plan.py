@@ -69,7 +69,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from fivefold.domain.authority import PolicyDecision
 from fivefold.domain.contracts import Capability, Contract
@@ -93,8 +93,8 @@ class Trigger(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     point: str
-    match: dict[str, str | int] = Field(default_factory=dict)
-    occurrence: int = Field(default=1, ge=1)
+    match: dict[str, str | StrictInt] = Field(default_factory=dict)
+    occurrence: int = Field(default=1, ge=1, strict=True)
 
 
 class PlannedFault(BaseModel):
@@ -105,7 +105,7 @@ class PlannedFault(BaseModel):
     fault: FaultId
     variant: str | None = None
     at: Trigger
-    params: dict[str, int | str] = Field(default_factory=dict)
+    params: dict[str, StrictInt | str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _known(self) -> PlannedFault:
@@ -176,13 +176,19 @@ def parse_plan(entries: Sequence[Mapping[str, Any]]) -> tuple[PlannedFault, ...]
     """Validate a scenario's `faults` list (0006, Plans).
 
     Raises `ValueError` for an entry that is not a planned fault, and for two crash
-    faults with the same trigger.
+    faults or two F5 delays with the same trigger.
     """
     plan = tuple(PlannedFault.model_validate(entry) for entry in entries)
     if sum(entry.fault is FaultId.F8 for entry in plan) > 1:
         raise ValueError("a plan can contain only one F8 correction (0023)")
     crashes: dict[_TriggerKey, PlannedFault] = {}
+    delays: set[_TriggerKey] = set()
     for planned in plan:
+        if planned.fault is FaultId.F5:
+            key = _trigger_key(planned)
+            if key in delays:
+                raise ValueError("two F5 entries cannot delay the same write (0006)")
+            delays.add(key)
         if planned.kind.action is not Action.KILL:
             continue
         first = crashes.setdefault(_trigger_key(planned), planned)
@@ -557,7 +563,10 @@ class FaultInjector:
                         continue
                 elif fields.get("api") != Operation.SUBMIT_PURCHASE_ORDER:
                     continue
-            if any(str(fields.get(key)) != str(value) for key, value in planned.at.match.items()):
+            if any(
+                fields.get(key) is None or str(fields[key]) != str(value)
+                for key, value in planned.at.match.items()
+            ):
                 continue
             if (
                 planned.fault is FaultId.F8

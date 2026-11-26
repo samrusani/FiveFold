@@ -15,6 +15,9 @@ import mcp_types.jsonrpc as jsonrpc
 import pytest
 import yaml
 from mcp.server import streamable_http as mcp_streamable_http
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import Message
 
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.scenario import scenario_from_data
@@ -34,12 +37,14 @@ from fivefold.gateway.records import (
 )
 from fivefold.gateway.sim_client import SimClient
 from fivefold.gateway.state_machine import ActionState, CheckKind, GatewaySettings, Reason
-from fivefold.harness.clock import HostClock
+from fivefold.harness.clock import HostClock, VirtualClock
 from fivefold.harness.log import MemoryHarnessLog, holds_nul
 from fivefold.harness.migrations import check_database_name
 from fivefold.harness.scheduler import ComponentFailed, HostScheduler, Scheduler
-from fivefold.harness.split import SERVICE_STOPPED
+from fivefold.harness.split import SERVICE_STOPPED, lifecycle
 from fivefold.harness.split import __main__ as split_main
+from fivefold.harness.split import service as split_service
+from fivefold.harness.split import simulator as simulator_http
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
@@ -185,6 +190,31 @@ def test_default_database_names_are_safe_and_short() -> None:
     assert len(default_database("x" * 200)) == 63
 
 
+def test_split_control_ignores_http_proxy_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _run(tmp_path / "run")
+    _write_run(run, issue())
+
+    class Checked(Exception):
+        pass
+
+    def build_client(**options: object) -> None:
+        assert options.get("trust_env") is False
+        raise Checked
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+    with pytest.raises(Checked):
+        asyncio.run(
+            lifecycle.end_run(
+                run,
+                admin_dsn=UNREACHABLE_DSN,
+                simulator_url="http://simulator",
+                gateway_url="http://gateway",
+            )
+        )
+
+
 def test_a_long_default_database_name_keeps_its_start_and_a_hash_of_the_run_id() -> None:
     """PostgreSQL keeps 63 bytes of a name. Cut short there, the names of seeds 7 and 8 of
     a scenario with a 42-character id were one, and `start` with replace for one dropped
@@ -225,6 +255,74 @@ def test_faults_on_the_network_and_in_the_simulator_run(
 ) -> None:
     check_split(parse_plan([entry]), scenario_from_data(dev_data))
     assert entry["at"]["point"] in SPLIT_POINTS
+
+
+def test_f8_is_refused_even_on_a_supported_point(dev_data: dict[str, object]) -> None:
+    plan = parse_plan([_entry("F8", "net.gw_sim.request", variant="late_relevant")])
+    with pytest.raises(SplitRefused, match="cannot run F8"):
+        check_split(plan, scenario_from_data(dev_data))
+
+
+def test_f5_needs_50_ms_headroom_on_the_host_clock(dev_data: dict[str, object]) -> None:
+    scenario = scenario_from_data(dev_data)
+    deadline = scenario.params.commit_deadline_ms
+    for delay in (deadline - 50, deadline - 49):
+        plan = parse_plan([_entry("F5", "sim.write.received", params={"delay_ms": delay})])
+        if delay == deadline - 50:
+            check_split(plan, scenario)
+        else:
+            with pytest.raises(SplitRefused, match="at least 50 ms below D"):
+                check_split(plan, scenario)
+
+
+def test_a_missing_match_field_never_matches_its_text() -> None:
+    plan = parse_plan(
+        [{"fault": "F12", "at": {"point": "net.gw_sim.request", "match": {"intent_id": "None"}}}]
+    )
+    injector = FaultInjector(plan)
+    assert injector.at("net.gw_sim.request", {}) == []
+    assert injector.at("net.gw_sim.request", {"intent_id": None}) == []
+    assert len(injector.at("net.gw_sim.request", {"intent_id": "None"})) == 1
+
+
+def test_jsonb_preflight_refuses_nonfinite_data() -> None:
+    assert split_service.json_storage_problem({"data": [1.0]}) is None
+    assert "finite" in (split_service.json_storage_problem({"data": [float("nan")]}) or "")
+
+
+def test_simulator_caps_bytes_during_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(simulator_http, "MAX_REQUEST_BYTES", 8)
+    chunks = iter([b'{"field":', b'"never read"}'])
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": next(chunks), "more_body": True}
+
+    response = asyncio.run(simulator_http._json_request(Request({"type": "http"}, receive)))
+    assert isinstance(response, JSONResponse) and response.status_code == 413
+    assert next(chunks) == b'"never read"}'
+
+
+@pytest.mark.parametrize(
+    ("contents", "problem"), [(b"[1]", "not a JSON object"), (b"{}", "not a readable JSON object")]
+)
+def test_invalid_json_stops_at_the_split_boundary(
+    contents: bytes, problem: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if contents == b"{}":
+
+        def decode(*args: object) -> None:
+            raise RecursionError("decoder nesting limit")
+
+        monkeypatch.setattr(
+            simulator_http, "json", type("Decoder", (), {"loads": staticmethod(decode)})
+        )
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": contents, "more_body": False}
+
+    response = asyncio.run(simulator_http._json_request(Request({"type": "http"}, receive)))
+    assert isinstance(response, JSONResponse) and response.status_code == 422
+    assert problem.encode() in response.body
 
 
 @pytest.mark.parametrize(
@@ -423,6 +521,23 @@ def test_a_dropped_message_is_recorded_with_the_fault_that_dropped_it() -> None:
     ] == [("F12", 2, second.seq, "REQ-1")]
     fates = {message.seq: (message.fate, message.drop_reason) for message in log.messages}
     assert fates == {first.seq: ("delivered", None), second.seq: ("dropped", "fault")}
+
+
+def test_delivery_takes_the_clock_read_after_the_sequence() -> None:
+    clock = VirtualClock()
+
+    class SlowSequence(MemoryHarnessLog):
+        def next_seq(self) -> int:
+            number = super().next_seq()
+            clock.advance_to(clock.now + 1)
+            return number
+
+    log = SlowSequence()
+    hops = Hops(Scheduler(clock), log, FaultInjector())
+    message = _request(hops)
+    hops.delivered(message)
+    (delivered,) = log.messages
+    assert (delivered.delivered_seq, delivered.delivered_vt) == (2, 2)
 
 
 def test_a_copy_repeats_the_request_and_names_it() -> None:

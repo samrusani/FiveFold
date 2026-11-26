@@ -26,7 +26,8 @@ traffic they see, and draw event numbers from one database sequence (0009,
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
@@ -221,6 +222,15 @@ class HarnessLog(ABC):
     @abstractmethod
     def next_seq(self) -> int:
         """Reserve the next event number."""
+
+    @contextmanager
+    def ordering(self) -> Iterator[None]:
+        """Keep taking an event's number and time together."""
+        yield
+
+    def stamp(self, now: Callable[[], int]) -> tuple[int, int]:
+        with self.ordering():
+            return self.next_seq(), now()
 
     @abstractmethod
     def message_sent(self, record: MessageRecord) -> None:
@@ -524,6 +534,10 @@ class PgHarnessLog(HarnessLog):
         )
 
 
+EVENT_STAMP_LOCK_KEY = 5_000_008
+"""Transaction advisory lock for ordering shared harness records within a database."""
+
+
 class SharedPgHarnessLog(PgHarnessLog):
     """Harness records that several processes of one run write: the split topology's.
 
@@ -532,6 +546,15 @@ class SharedPgHarnessLog(PgHarnessLog):
     it. A sequence never hands out a number twice. A number that a process took and never
     used leaves a gap, which no reader relies on.
     """
+
+    @contextmanager
+    def ordering(self) -> Iterator[None]:
+        # The sequence and the host clock must be sampled in one order across services.
+        with self._conn.transaction():
+            self._conn.execute(
+                "SELECT pg_catalog.pg_advisory_xact_lock(%s::bigint)", (EVENT_STAMP_LOCK_KEY,)
+            )
+            yield
 
     def next_seq(self) -> int:
         row = self._conn.execute("SELECT nextval('harness.event_seq')").fetchone()

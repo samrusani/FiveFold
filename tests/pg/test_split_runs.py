@@ -58,6 +58,7 @@ from fivefold.harness.migrations import (
 from fivefold.harness.registry import forget
 from fivefold.harness.scheduler import HostScheduler
 from fivefold.harness.split import __main__ as split_main
+from fivefold.harness.split import lifecycle
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.gateway import AdminFactory, GatewayService, admin_api
@@ -65,6 +66,7 @@ from fivefold.harness.split.lifecycle import default_database, end_run, score_ru
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.service import open_run
 from fivefold.harness.split.simulator import SimulatorService
+from fivefold.harness.transport import Envelope, Handler, Reply
 from fivefold.paths import DB_DIR
 
 pytestmark = pytest.mark.pg
@@ -875,7 +877,42 @@ def test_the_simulator_refuses_the_agents_identity_in_g_modes(split: Split) -> N
     assert effects == (0,)
     assert writes == (0,)
     assert reads == [(GATEWAY,)]
-    assert sorted(hops) == [("agent_sim", AGENT), ("gw_sim", GATEWAY)]
+    assert hops == [("gw_sim", GATEWAY)]
+
+
+def test_a_missed_simulator_deadline_returns_a_protocol_error(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = split.start("B0", [])
+
+    async def missed(service: SimulatorService, arrived: Envelope, handler: Handler) -> Reply:
+        return Reply({"answer": "aborted", "received_seq": 1, "deadline_vt": 10}, "aborted")
+
+    monkeypatch.setattr(SimulatorService, "_handled", missed)
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    try:
+        response = httpx.post(
+            f"{simulator.url}/api/{ORDER}",
+            headers={"authorization": f"Bearer {run.secret(AGENT)}"},
+            json={
+                "intent_id": "REQ-1",
+                "approval_id": "APR-0001",
+                "basis": {},
+                "supplier_id": "S-1",
+                "sku": "W-100",
+                "quantity": 1,
+                "unit_price_minor": 540,
+                "currency": "USD",
+                "cost_center": "CC-OPS",
+            },
+        )
+    finally:
+        simulator.stop()
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "unavailable",
+        "detail": "the write missed its commit deadline",
+    }
 
 
 def test_once_the_agents_phase_is_over_the_scripted_agent_is_told_so(split: Split) -> None:
@@ -941,6 +978,27 @@ def test_the_simulator_refuses_a_body_holding_a_nul_before_logging_it(split: Spl
         messages = conn.execute("SELECT count(*) FROM harness.message_log").fetchone()
         reports = conn.execute("SELECT count(*) FROM harness.final_report").fetchone()
     assert (messages, reports) == ((0,), (0,))
+
+
+def test_a_deep_b0_report_is_refused_before_logging(split: Split) -> None:
+    run = split.start("B0", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    headers = {"authorization": f"Bearer {run.secret(AGENT)}"}
+    body: object = "PO-0001"
+    for _ in range(200):
+        body = [body]
+    try:
+        refused = httpx.post(
+            f"{simulator.url}/api/submit_final_report", json={"claims": body}, headers=headers
+        )
+        assert refused.status_code == 422, refused.text
+        assert "200 nested JSON containers" in refused.json()["detail"]
+        with split.connect() as conn:
+            messages = conn.execute("SELECT count(*) FROM harness.message_log").fetchone()
+            reports = conn.execute("SELECT count(*) FROM harness.final_report").fetchone()
+        assert (messages, reports) == ((0,), (0,))
+    finally:
+        simulator.stop()
 
 
 def test_the_gateway_refuses_an_mcp_message_holding_a_nul_before_logging_it(
@@ -1037,6 +1095,22 @@ def test_start_refuses_a_database_of_the_same_name_unless_it_may_replace_it(
     template = Split(split.admin, split.template, split.template, split.root)
     with pytest.raises(RunDirError, match="is the template"):
         _start(template, split.root / "template", replace=True)
+
+
+def test_start_cleans_its_new_database_if_setup_fails(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("setup failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle, "setup_run", fail)
+        with pytest.raises(RuntimeError, match="setup failed"):
+            _start(split, split.root / "initial")
+    assert not (split.root / "initial").exists()
+    assert _database_oid(split) is None
+    assert _registered(split) == []
+    _start(split, split.root / "retry")
 
 
 def test_replace_drops_only_a_database_that_holds_this_run(
@@ -1138,6 +1212,48 @@ def test_the_agents_phase_ends_then_the_run_stops(split: Split) -> None:
     with split.connect() as conn:
         stop = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone()
     assert stop == (stopped.json()["stopped_vt"],)
+
+
+def test_end_retries_cleanup_after_both_services_have_stopped(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = split.start("G2", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    try:
+        gateway = serve(
+            GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url).app()
+        )
+        try:
+            end = partial(
+                end_run,
+                run,
+                admin_dsn=split.admin,
+                simulator_url=simulator.url,
+                gateway_url=gateway.url,
+            )
+            original = lifecycle.drop_unlogged
+
+            def fail_cleanup(run: SplitRun, admin_dsn: str) -> None:
+                raise OSError("cleanup interrupted")
+
+            monkeypatch.setattr(lifecycle, "drop_unlogged", fail_cleanup)
+            with pytest.raises(OSError, match="cleanup interrupted"):
+                asyncio.run(end())
+            assert not run.ended
+            for service in (gateway, simulator):
+                assert httpx.get(f"{service.url}/health").json()["status"] == "stopped"
+            monkeypatch.setattr(lifecycle, "drop_unlogged", original)
+            stopped_at = asyncio.run(end())
+            assert read_run(run.directory).ended
+            with split.connect() as conn:
+                assert conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone() == (
+                    stopped_at,
+                )
+            score_run(run, admin_dsn=split.admin)
+        finally:
+            gateway.stop()
+    finally:
+        simulator.stop()
 
 
 @pytest.mark.parametrize("how", ["ended", "stopped"])

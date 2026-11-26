@@ -24,6 +24,7 @@ log_level=, timeout_graceful_shutdown=)` and `Server(config).run(sockets=)`.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -37,12 +38,23 @@ from starlette.responses import JSONResponse
 from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.faults.plan import PlannedFault, parse_plan
 from fivefold.harness.clock import HostClock
-from fivefold.harness.log import SharedPgHarnessLog
+from fivefold.harness.log import NUL_REFUSED, SharedPgHarnessLog, holds_nul
 from fivefold.harness.scheduler import HostScheduler
 from fivefold.harness.split.rundir import RunDirError, SplitRun
 
 GRACEFUL_SHUTDOWN_S = 5
 """How long a service lets its open requests finish when it shuts down, in seconds."""
+
+
+def json_storage_problem(body: object) -> str | None:
+    """Why a request cannot enter a JSONB log, if it cannot be stored."""
+    if holds_nul(body):
+        return NUL_REFUSED
+    try:
+        json.dumps(body, allow_nan=False, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        return "it cannot be stored as finite UTF-8 JSON"
+    return None
 
 
 @dataclass
@@ -137,6 +149,7 @@ async def until_gone(request: Request, stopping: asyncio.Event) -> None:
     finally:
         for wait in waits:
             wait.cancel()
+        await asyncio.gather(*waits, return_exceptions=True)
 
 
 def unavailable(detail: str) -> JSONResponse:

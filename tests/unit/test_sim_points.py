@@ -148,7 +148,13 @@ def test_f5_beyond_the_deadline_waives_it() -> None:
 def test_two_f5_entries_at_one_write_are_refused() -> None:
     """A write is held once. Without this, the second entry would be recorded with a delay
     the write never had."""
-    rig = Rig([f5(), f5("beyond_deadline", delay_ms=20_000)])
+    rig = Rig(
+        [],
+        planned=[
+            PlannedFault.model_validate(entry)
+            for entry in (f5(), f5("beyond_deadline", delay_ms=20_000))
+        ],
+    )
     with pytest.raises(SimulatorPointError, match=r"2 F5 entries fired at one write"):
         rig.write(vt=10)
     assert rig.log.faults == [], "neither is recorded"
