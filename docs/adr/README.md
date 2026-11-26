@@ -42,6 +42,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | [0023](0023-memory-correction.md) | Memory correction after a proposal and the AliceMemory adapter | Accepted |
 | [0025](0025-order-terms-and-cited-quote.md) | Order terms and the cited quote | Accepted |
 | [0026](0026-readings-from-the-v020-audit.md) | Readings from the v0.2.0 audit | Accepted |
+| [0027](0027-external-evaluation-protocol.md) | Pre-registered external evaluation | Proposed |
 
 ## Suggested reading order
 
