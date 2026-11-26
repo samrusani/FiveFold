@@ -389,11 +389,28 @@ def test_a_c2_retry_escalates_when_the_approval_expires_too_soon() -> None:
     assert run.store.retry(action_id, check, vt) is None
     snapshot = run.store.snapshot()
     assert snapshot.events[-1].reason is Note.ESCALATED
-    # The note keeps what the approvals service said, and the expiry that made it count
-    # as expired, so the record explains the escalation.
-    assert snapshot.events[-1].details["approval"] == ApprovalStatus.APPROVED
+    assert snapshot.events[-1].details["approval"] == ApprovalStatus.EXPIRED
     assert snapshot.events[-1].details["expires_at"] == vt + SETTLE
     assert snapshot.grants["G-0001"].state is GrantState.EXPIRED
+
+
+def test_a_stale_retry_note_has_no_expiry_details() -> None:
+    run = Run(Contract.C2)
+    action_id = run.unknown()
+    ticket = run.store.begin_check(action_id)
+    vt = max(run.at(), ticket.not_before_vt)
+    check = ticket.record(
+        approval=ApprovalStatus.APPROVED,
+        basis=BasisCheck(False, None, stale=(QUOTE_STALE,)),
+        check_vt=vt,
+        expires_at=vt + SETTLE + 1,
+    )
+    assert run.store.retry(action_id, check, vt) is None
+    event = run.store.snapshot().events[-1]
+    assert event.reason is Note.ESCALATED
+    assert event.details["approval"] == ApprovalStatus.APPROVED
+    assert event.details["stale"] == (QUOTE_STALE,)
+    assert "expires_at" not in event.details
 
 
 def test_the_settle_time_counts_from_the_send_not_from_the_check() -> None:
@@ -447,6 +464,15 @@ def test_c0_escalates_at_once_and_only_a_human_settles_it() -> None:
     assert snapshot.events[-1].reason is Reason.HUMAN_ATTESTED
     assert snapshot.escalations["ESC-0001"].resolution is Resolution.NOT_COMMITTED
     assert run.state(action_id) is S.FAILED
+
+
+@pytest.mark.parametrize(("actor", "effect"), [("   ", "PO-1"), ("resolver", "")])
+def test_an_attestation_names_the_actor_and_effect(actor: str, effect: str) -> None:
+    run = Run(Contract.C0)
+    action_id = run.unknown()
+    with pytest.raises(ValueError, match="attestation"):
+        run.store.attest(action_id, Resolution.COMMITTED, effect, actor, run.at())
+    assert run.store.view(action_id).action.state is S.OUTCOME_UNKNOWN
 
 
 def test_a_human_can_attest_a_commit_at_once() -> None:

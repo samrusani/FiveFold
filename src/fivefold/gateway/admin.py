@@ -140,10 +140,12 @@ class GatewayAdmin:
         the action's latest send; and `ValueError` for an effect id that does not fit the
         resolution. The two refusals are `StepRefused`, raised once the store refused.
         """
-        if not actor:
+        if not actor.strip():
             raise ValueError("an attestation names the human who made it")
         check_text(actor, "the actor")
         if effect_id is not None:
+            if not effect_id.strip():
+                raise ValueError("an attestation of a commit names the effect")
             check_text(effect_id, "the effect id")
         escalation = self._store.snapshot().escalations.get(escalation_id)
         if escalation is None:

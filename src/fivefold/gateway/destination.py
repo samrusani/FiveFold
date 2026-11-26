@@ -52,8 +52,8 @@ class Destination(Protocol):
         """File the action's approval request, keyed by its action id, and return the
         policy's immediate answer (0002). Filing again returns the same approval."""
 
-    async def approval(self, approval_id: str) -> ApprovalNow:
-        """The approval's status now."""
+    async def approval(self, action: Action, approval_id: str) -> ApprovalNow:
+        """The filed approval's status now, checked against its action."""
 
     async def send(self, action: Action, attempt: Attempt, approval_id: str) -> Answer:
         """Send one attempt of the write, citing the action's approval, and classify the

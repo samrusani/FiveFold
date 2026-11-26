@@ -14,7 +14,7 @@ How answers map (0003):
   `precondition_failed` when a C3 check failed and `destination_rejected` otherwise;
   `in_progress` is in progress; no answer within T is unknown (`timeout`), and a
   `server_error` answer is unknown (`server_error`), because a proxy can return one
-  after the backend committed.
+  after the backend committed. A failed connection is unknown (`transport_error`).
 - A read, an approval call or a status call that gets no usable answer raises
   `Unreachable`, and the caller learns nothing. A status call that times out is an
   unanswered probe (0005).
@@ -23,6 +23,7 @@ How answers map (0003):
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -58,7 +59,9 @@ from fivefold.domain.rules import FactKind, Operation, fact_kind
 from fivefold.gateway.destination import ApprovalNow, FactNow, Unreachable
 from fivefold.gateway.records import Action, Answer, ApprovalStatus, Attempt, ProbeAnswer
 from fivefold.gateway.state_machine import AnswerClass, Reason
-from fivefold.harness.transport import Calls, TransportTimeout
+from fivefold.harness.transport import Calls, TransportError, TransportTimeout
+
+logger = logging.getLogger(__name__)
 
 ReadRequest = GetQuote | ListSuppliers | GetBudget | GetInventory | GetMemory
 
@@ -107,7 +110,7 @@ class SimClient:
         idempotency_key: str | None = None,
         sent_vt: int | None = None,
     ) -> object:
-        """Send one request; return its answer's body. Raises `TransportTimeout`.
+        """Send one request and return its answer, or raise a transport exception.
 
         `sent_vt` is the send time the gateway recorded for a write's attempt.
         """
@@ -130,7 +133,7 @@ class SimClient:
         """Read one fact. Raises `Unreachable` or `ReadRefused`."""
         try:
             body = await self._call(request, str(request.api))
-        except TransportTimeout as error:
+        except (TransportTimeout, TransportError) as error:
             raise Unreachable(str(error)) from None
         answer = _parse(_READ_ANSWER, body)
         if isinstance(answer, Refusal):
@@ -159,23 +162,35 @@ class SimClient:
             scope=scope_of(operation, action.args),
             client_request_key=action.action_id,
         )
-        return await self._approval(request, str(request.api), action.intent_id)
+        return await self._approval(action, request)
 
-    async def approval(self, approval_id: str) -> ApprovalNow:
-        """The approval's status now."""
+    async def approval(self, action: Action, approval_id: str) -> ApprovalNow:
+        """The filed approval's status now."""
         request = GetApprovalStatus(approval_id=approval_id)
-        return await self._approval(request, str(request.api), None)
+        return await self._approval(action, request)
 
     async def _approval(
-        self, request: RequestApproval | GetApprovalStatus, api: str, intent_id: str | None
+        self, action: Action, request: RequestApproval | GetApprovalStatus
     ) -> ApprovalNow:
+        intent_id = request.intent_id if isinstance(request, RequestApproval) else None
         try:
-            body = await self._call(request, api, intent_id=intent_id)
-        except TransportTimeout as error:
+            body = await self._call(request, str(request.api), intent_id=intent_id)
+        except (TransportTimeout, TransportError) as error:
             raise Unreachable(str(error)) from None
         answer = _parse(_APPROVAL_ANSWER, body)
         if isinstance(answer, Refusal):
-            raise Unreachable(f"{answer.reason}: {answer.detail}")
+            logger.warning("simulator refused the approval check: %s", answer.detail)
+            raise Unreachable(f"simulator: {answer.reason}")
+        operation = Operation(action.operation)
+        if (
+            answer.intent_id != action.intent_id
+            or answer.operation != operation
+            or answer.scope != scope_of(operation, action.args)
+            or (
+                isinstance(request, GetApprovalStatus) and answer.approval_id != request.approval_id
+            )
+        ):
+            raise RuntimeError("the simulator returned a mismatched approval")
         status = ApprovalStatus(str(answer.status))
         expires_at = answer.expires_at if status is ApprovalStatus.APPROVED else None
         return ApprovalNow(answer.approval_id, status, expires_at)
@@ -216,6 +231,8 @@ class SimClient:
             )
         except TransportTimeout:
             return Answer(AnswerClass.UNKNOWN, Reason.TIMEOUT)
+        except TransportError:
+            return Answer(AnswerClass.UNKNOWN, Reason.TRANSPORT_ERROR)
         try:
             answer = _parse(_WRITE_ANSWER, body)
         except Unreachable:
@@ -240,7 +257,7 @@ class SimClient:
         try:
             body = await self._call(request, str(request.api), intent_id=action.intent_id)
             answer = _parse(_STATUS_ANSWER, body)
-        except (TransportTimeout, Unreachable):
+        except (TransportTimeout, TransportError, Unreachable):
             return ProbeAnswer(answered=False)
         if isinstance(answer, Refusal):
             return ProbeAnswer(answered=False)
@@ -295,4 +312,5 @@ def _parse[T](adapter: TypeAdapter[T], body: object) -> T:
     try:
         return adapter.validate_python(body)
     except ValidationError as error:
-        raise Unreachable(f"the simulator's answer did not parse: {error}") from None
+        logger.warning("simulator answer did not parse: %s", error)
+        raise Unreachable("simulator: ValidationError") from None

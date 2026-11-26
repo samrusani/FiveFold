@@ -99,9 +99,9 @@ class FakeSim:
         await self.scheduler.sleep(2 * HOP)
         approval_id = f"APR-{action.action_id[2:]}"
         self.approvals.setdefault(approval_id, ApprovalStatus.APPROVED)
-        return await self.approval(approval_id)
+        return await self.approval(action, approval_id)
 
-    async def approval(self, approval_id: str) -> ApprovalNow:
+    async def approval(self, action: Action, approval_id: str) -> ApprovalNow:
         status = self.approvals[approval_id]
         expires = 10**9 if status is ApprovalStatus.APPROVED else None
         return ApprovalNow(approval_id, status, expires)

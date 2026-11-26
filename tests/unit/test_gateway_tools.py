@@ -12,6 +12,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
+import pytest
 from mcp.client.session import ClientSession
 
 from fivefold.domain.api import FactRead, GetBudget, GetInventory, GetQuote, ListSuppliers
@@ -103,9 +104,9 @@ class FakeSim:
         await self.scheduler.sleep(2 * HOP)
         approval_id = f"APR-{action.action_id[2:]}"
         self.approvals.setdefault(approval_id, self.policy)
-        return await self.approval(approval_id)
+        return await self.approval(action, approval_id)
 
-    async def approval(self, approval_id: str) -> ApprovalNow:
+    async def approval(self, action: Action, approval_id: str) -> ApprovalNow:
         status = self.approvals[approval_id]
         expires = 10**9 if status is ApprovalStatus.APPROVED else None
         return ApprovalNow(approval_id, status, expires)
@@ -412,6 +413,25 @@ def test_a_pending_approval_is_returned_at_once() -> None:
     ((took, result),) = seen
     assert result["state"] == "pending_approval"
     assert took < 2_500, "the call does not wait for the tool's full wait"
+
+
+def test_a_tool_error_keeps_simulator_details_in_the_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    run = Run()
+
+    async def read(request: ReadRequest) -> FactRead:
+        raise Unreachable("internal simulator diagnostic")
+
+    monkeypatch.setattr(run.sim, "read", read)
+
+    async def agent(client: Client) -> None:
+        failed, body = await client.call("get_quote", supplier_id="S-1", sku="W-100")
+        assert failed
+        assert body == {"error": "gateway_timeout", "message": "simulator: Unreachable"}
+
+    run.go(agent)
+    assert "internal simulator diagnostic" in caplog.text
 
 
 def test_unknown_reads_and_actions_are_tool_errors() -> None:

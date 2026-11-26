@@ -101,7 +101,7 @@ class World:
         await self.scheduler.sleep(2 * HOP)
         return ApprovalNow(f"APR-{action.action_id[2:]}", ApprovalStatus.APPROVED, FAR)
 
-    async def approval(self, approval_id: str) -> ApprovalNow:
+    async def approval(self, action: Action, approval_id: str) -> ApprovalNow:
         self.calls += 1
         await self.scheduler.sleep(2 * HOP)
         return ApprovalNow(approval_id, ApprovalStatus.APPROVED, FAR)

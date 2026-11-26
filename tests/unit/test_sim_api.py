@@ -177,6 +177,18 @@ def test_an_approval_answer_lists_its_request_fields() -> None:
         )
 
 
+def test_an_approved_reply_requires_an_expiry() -> None:
+    with pytest.raises(ValidationError, match="approved approval has expires_at"):
+        ApprovalAnswer(
+            approval_id="APR-0001",
+            intent_id="REQ-2",
+            operation=Operation.RESERVE_INVENTORY,
+            scope=ReservationScope(warehouse_id="WH-1", sku="W-100", max_quantity=30),
+            status=ApprovalStatus.APPROVED,
+            requested_vt=0,
+        )
+
+
 def test_failed_checks_come_with_precondition_failed_only() -> None:
     check = FailedCheck(check=CheckName.APPROVAL_REVOKED)
     WriteRejected(reason=WriteRejectReason.PRECONDITION_FAILED, failed_checks=[check])

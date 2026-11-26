@@ -39,6 +39,7 @@ errors, G1's reports and a report that breaks the schema are not logged.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
@@ -187,6 +188,9 @@ MEMORY_TOOL = ToolDefinition(
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class ToolError(Exception):
     """A tool call that failed without a refusal reason; MCP reports it as an error."""
 
@@ -308,7 +312,8 @@ class GatewayTools:
             try:
                 fact = await self._reader.read(request)
             except Unreachable as error:
-                raise ToolError("gateway_timeout", str(error)) from None
+                logger.warning("simulator read failed: %s", error)
+                raise ToolError("gateway_timeout", f"simulator: {type(error).__name__}") from None
             except ReadRefused as error:
                 raise ToolError(error.reason, error.detail) from None
             record = self._store.record_read(fact.key, fact.version, fact.data, self._now)

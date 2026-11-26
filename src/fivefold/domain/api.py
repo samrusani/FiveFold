@@ -274,7 +274,7 @@ class ApprovalAnswer(ApiModel):
     """
 
     answer: Literal["approval"] = "approval"
-    approval_id: str
+    approval_id: Id
     intent_id: str
     operation: Operation
     scope: Scope
@@ -289,6 +289,8 @@ class ApprovalAnswer(ApiModel):
     @model_validator(mode="after")
     def _scope_fits_operation(self) -> ApprovalAnswer:
         _check_scope(self.operation, self.scope)
+        if self.status is ApprovalStatus.APPROVED and self.expires_at is None:
+            raise ValueError("an approved approval has expires_at")
         return self
 
     def request_fields(self) -> dict[str, str | int]:
