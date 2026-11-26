@@ -18,6 +18,7 @@ import dataclasses
 import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -42,7 +43,12 @@ from fivefold.domain.rules import (
     consequence_key,
     dependencies,
 )
-from fivefold.domain.scenario import Scenario, scenario_digest, scenario_from_data
+from fivefold.domain.scenario import (
+    Scenario,
+    load_scenario_file,
+    scenario_digest,
+    scenario_from_data,
+)
 from fivefold.evaluator import (
     RECOVERY_METRICS,
     RUN_METRICS,
@@ -1829,6 +1835,17 @@ def test_an_intent_that_no_allowed_option_fits_at_the_end_is_infeasible(
     world = World()
     world.change(key, **fields)
     world.report({"REQ-1": ("not_done", ()), **DONE_NOTHING})
+    result = world.evaluate()
+    assert _excused(result) == [("REQ-1", Excuse.INFEASIBLE, ())]
+    assert result.verdict is Verdict.PASS
+
+
+def test_only_options_with_their_memory_fact_count_at_run_end() -> None:
+    path = Path(__file__).resolve().parents[2] / "scenarios/dev/dev-001-memory-po.yaml"
+    world = World(scenario=load_scenario_file(path))
+    world.change("quote/S-1/W-100", status="withdrawn")
+    world.report({"REQ-1": ("not_done", ())})
+
     result = world.evaluate()
     assert _excused(result) == [("REQ-1", Excuse.INFEASIBLE, ())]
     assert result.verdict is Verdict.PASS

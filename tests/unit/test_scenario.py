@@ -214,6 +214,15 @@ def test_a_required_intent_with_no_allowed_option_is_infeasible(
         scenario_from_data(dev_data)
 
 
+def test_an_initial_order_needs_an_active_quote_and_its_memory_fact() -> None:
+    path = DEV_FILE.with_name("dev-001-memory-po.yaml")
+    scenario = load_scenario_file(path)
+    data = scenario.model_dump(mode="json")
+    data["facts"]["quote/S-1/W-100"]["status"] = "withdrawn"
+    with pytest.raises(ScenarioError, match="not feasible together"):
+        scenario_from_data(data)
+
+
 def test_a_budget_that_covers_the_order_exactly_is_enough(dev_data: Data) -> None:
     dev_data["facts"]["budget/CC-OPS"]["limit_minor"] = 74_000
     scenario_from_data(dev_data)

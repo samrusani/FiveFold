@@ -47,6 +47,7 @@ from fivefold.domain.rules import (
     budget_key,
     fact_kind,
     inventory_key,
+    memory_key,
     order_amount_minor,
     quote_key,
 )
@@ -351,7 +352,9 @@ class Scenario(ScenarioModel):
         if self.memory_enabled != any(isinstance(fact, MemoryFact) for fact in self.facts.values()):
             raise ValueError("memory facts and memory_dependency must be declared together")
         required = [intent for intent in self.intents if intent.required]
-        if not feasible_together(required, self.authority, self.fact_values()):
+        if not feasible_together(
+            required, self.authority, self.fact_values(), memory_enabled=self.memory_enabled
+        ):
             raise ValueError(
                 "the required intents are not feasible together on the initial facts (0004)"
             )
@@ -391,13 +394,19 @@ class Option:
 
 
 def options(
-    intent: Intent, authority: Authority, facts: Mapping[str, Mapping[str, object]]
+    intent: Intent,
+    authority: Authority,
+    facts: Mapping[str, Mapping[str, object]],
+    *,
+    memory_enabled: bool = False,
 ) -> tuple[Option, ...]:
     """The allowed options for one intent on these facts, alone.
 
     A purchase-order option is an active quote from a supplier in the intent's set whose
     write would be acceptable (0004), whose quantity meets the quote's minimum, and which
-    policy would not deny (0002, rule 6). A reservation's option is the stock it names.
+    policy would not deny (0002, rule 6). In a memory-enabled scenario the option
+    also needs its supplier and SKU's memory fact (0026). A reservation's option
+    is the stock it names.
     The budget or stock must exist; whether it covers the write is decided jointly by
     `feasible_together`.
     """
@@ -417,6 +426,8 @@ def options(
         return ()
     found: list[Option] = []
     for supplier_id in sorted(set(accept.suppliers)):
+        if memory_enabled and memory_key(supplier_id, accept.sku) not in facts:
+            continue
         quote = facts.get(quote_key(supplier_id, accept.sku))
         if quote is None or quote.get("status") != ORDERABLE_STATUS:
             continue
@@ -469,6 +480,8 @@ def feasible_together(
     intents: Collection[Intent],
     authority: Authority,
     facts: Mapping[str, Mapping[str, object]],
+    *,
+    memory_enabled: bool = False,
 ) -> bool:
     """Whether one allowed option per intent fits these facts at the same time (0004).
 
@@ -483,7 +496,7 @@ def feasible_together(
     """
     used: dict[str, int] = {}
     for intent in intents:
-        found = options(intent, authority, facts)
+        found = options(intent, authority, facts, memory_enabled=memory_enabled)
         if not found:
             return False
         if len({option.resource for option in found}) != 1:
