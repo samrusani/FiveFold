@@ -159,6 +159,12 @@ def test_a_number_that_is_not_a_finite_decimal_as_written_is_refused_in_one_line
     assert "\n" not in str(refused.value)
 
 
+@pytest.mark.parametrize("written", ["'1e+1000000'", "'1e-22'", "'0e+1000000'", "1000000001"])
+def test_prices_outside_the_file_bounds_are_refused(written: str) -> None:
+    with pytest.raises(PriceFileError, match="at most 1,000,000,000 USD"):
+        prices(written)
+
+
 def test_a_model_missing_from_the_price_file_is_refused() -> None:
     with pytest.raises(PriceFileError, match="no price for fake:other, so a spend cap"):
         prices().price("fake", "other")

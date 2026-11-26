@@ -545,6 +545,8 @@ def _exactly[Value](compute: Callable[[], Value], what: str) -> Value:
     try:
         with localcontext(EXACT):
             return compute()
+    except Overflow:
+        raise ReportError(f"{what} exceeds the decimal exponent range") from None
     except Inexact:
         raise ReportError(
             f"{what} needs more than {EXACT.prec} significant digits, so it cannot be exact"
@@ -679,14 +681,15 @@ def _csv_values(row: Row) -> list[str]:
         _csv_text(reason_codes(result)),
         *(str(result.metrics[name]) for name in METRICS),
         _blank(_largest(entry.latency_ms for entry in result.recovery)),
-        _blank(_largest(entry.latency_wall_ms for entry in result.recovery)),
+        _blank(_largest(entry.latency_wall_ms for entry in result.recovery if entry.resolved)),
     ]
 
 
 def _csv_text(value: str | None) -> str:
     """Mark text that a spreadsheet could interpret as a formula."""
     text = _blank(value)
-    return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
+    prefix = text.lstrip(" ")
+    return "'" + text if prefix.startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else text
 
 
 def _largest(values: Iterable[int | None]) -> int | None:
@@ -758,9 +761,11 @@ def _what_was_run(rows: Sequence[Row]) -> list[str]:
         "- Scenarios, with the SHA-256 digest each run recorded:" + ("" if scenarios else " none."),
     ]
     for scenario_id, digest in sorted(scenarios, key=lambda key: (_natural(key[0]), key[1])):
-        lines.append(f"  - {scenario_id}, {digest} ({_runs(scenarios[scenario_id, digest])}).")
+        lines.append(
+            f"  - {_prose(scenario_id)}, {digest} ({_runs(scenarios[scenario_id, digest])})."
+        )
     model_list = ", ".join(
-        f"{model} through the {adapter} adapter ({_runs(models[model, adapter])})"
+        f"{_prose(model)} through the {_prose(adapter)} adapter ({_runs(models[model, adapter])})"
         for model, adapter in sorted(models, key=lambda key: (_natural(key[0]), _natural(key[1])))
     )
     seed_list = ", ".join(f"{seed} ({_runs(seeds[seed])})" for seed in sorted(seeds))
@@ -1098,5 +1103,10 @@ def _table_rule(columns: int) -> str:
 
 
 def _cell(text: str) -> str:
-    """Text that cannot break a table row: pipes escaped, line breaks as spaces."""
-    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+    """Escape table punctuation and keep the row on one line."""
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+
+def _prose(text: str) -> str:
+    """Render a run label as literal text on the report's list line."""
+    return re.sub(r"([<>\[\]*_`~&])", r"\\\1", _cell(text))
