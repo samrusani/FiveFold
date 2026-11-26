@@ -40,6 +40,7 @@ The original M0 list had seven records. Records 0008 and 0009 were added because
 | [0021](0021-tla-gateway-model.md) | A TLA+ model of the gateway | Accepted |
 | [0022](0022-run-shrinking.md) | Shrink a failing scripted run | Accepted |
 | [0023](0023-memory-correction.md) | Memory correction after a proposal and the AliceMemory adapter | Accepted |
+| [0025](0025-order-terms-and-cited-quote.md) | Order terms and the cited quote | Accepted |
 
 ## Suggested reading order
 
