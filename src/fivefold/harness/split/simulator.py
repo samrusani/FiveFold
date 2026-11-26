@@ -3,20 +3,22 @@
 Each call of the simulator's API (`fivefold.domain.api`) is a POST to `/api/{call}` with
 the request model as a JSON body, and the caller's secret as a bearer token
 (`credentials`). The answer is the answer model as JSON. Every answer the API defines,
-refusals and rejections included, comes with status 200, except a caller refused for
-holding no credential of the run, which gets 403. Requests that never reach the API get
-other statuses, and are not logged:
+refusals and rejections included, comes with status 200. The service refuses
+invalid requests before logging them and returns these other statuses:
 
 | Status | When |
 | --- | --- |
-| 401 | no token, or not a secret of this run; the body is the call's forbidden answer |
+| 401 | no token, an invalid token, or the harness token on the tool route |
+| 403 | a known caller without simulator access, or a report to the simulator in G1 or G2 |
 | 404 | no such call |
-| 422 | a body that is not the call's request model or holds a NUL; a wait over `max_wait_ms` |
-| 503 | the run has stopped, or, for anyone but the gateway, its agents' phase is over |
+| 413 | the body exceeds 4 MiB |
+| 422 | invalid JSON, excessive nesting, invalid request fields or message reference |
+| 503 | service stopped, agents' phase over for this caller, or F5 deadline missed |
 
 A baseline's agent submits its final report the same way, to `/api/submit_final_report`:
 the harness's report sink takes it, as in the inproc topology (0008). In G1 and G2 reports
-go through the gateway, so this call is refused (403) to everyone.
+go through the gateway, so this call is refused (403) to everyone. An internal
+F5 deadline miss is recorded even though the caller receives 503.
 
 The caller's identity comes from its token, never from what it sends. The simulator then
 applies its own rule, which the run set up: in G1 and G2 only the gateway holds a

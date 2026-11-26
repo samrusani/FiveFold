@@ -63,6 +63,11 @@ from fivefold.harness.transport import Calls, TransportError, TransportTimeout
 
 logger = logging.getLogger(__name__)
 
+
+class MismatchedApproval(RuntimeError):
+    """The simulator returned an approval for a different action or scope."""
+
+
 ReadRequest = GetQuote | ListSuppliers | GetBudget | GetInventory | GetMemory
 
 SERVER_ERROR = "server_error"
@@ -190,7 +195,7 @@ class SimClient:
                 isinstance(request, GetApprovalStatus) and answer.approval_id != request.approval_id
             )
         ):
-            raise RuntimeError("the simulator returned a mismatched approval")
+            raise MismatchedApproval("the simulator returned a mismatched approval")
         status = ApprovalStatus(str(answer.status))
         expires_at = answer.expires_at if status is ApprovalStatus.APPROVED else None
         return ApprovalNow(answer.approval_id, status, expires_at)

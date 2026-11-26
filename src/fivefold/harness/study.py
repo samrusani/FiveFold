@@ -64,12 +64,12 @@ Its outputs, in DIR:
 A live study is refused before it touches any database unless the environment sets
 `FIVEFOLD_LIVE=1`, the spend cap is above 0 USD, and the price file prices the model. One
 spend meter serves every episode, so the cap holds across the study. Once the spend
-reaches the cap, the next model call is refused, and its worker ends as `budget`
+reaches the cap or a paid call leaves the spend unknown, the next model call is
+refused, and its worker ends as `budget`
 (`fivefold.agents.live`). An episode with a refused call is cut short, and its verdict
 tells more about the cap than about the stack: its result goes to `spend-cap/`, which a
 report over DIR leaves out, and its cassette goes to `cassettes/` as usual. The study
-stops once the spend reaches the cap, since every later episode's first call would be
-refused.
+stops when the cap closes, since every later episode's first call would be refused.
 
 The command prints a line for each episode: its verdict, the expected verdict when the
 matrix covers the scenario, how each agent worker ended, and in a live study the
@@ -667,7 +667,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 def end_line(study: Study, ran: int, out: Path) -> str:
     """How many episodes ran, where their results are, and how to report them."""
     total = len(study.episodes)
-    if ran < total:
+    meter = study.model.spend if isinstance(study.model, Live) else None
+    if ran < total and meter is not None and meter.unknown is not None:
+        text = f"The study stopped after {ran} of {total} episodes because spend became unknown."
+    elif ran < total:
         text = f"The spend cap stopped the study after {ran} of {total} episodes."
     else:
         text = f"Ran all {total} episodes."

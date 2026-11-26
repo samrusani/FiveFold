@@ -22,7 +22,9 @@ CHECKSUMS = {
     "linux_amd64": "4c1500e2ce2d4de136e5fe8852d9b7f82eb62f19b6b383b3e0c040519a9d20b1",
     "linux_arm64": "2f748e9411b37c9cabb57f1f08e37765388c12b5534432c7aea28b593df9145d",
 }
-# Hash of the regular `temporal` member in each archive verified above.
+# Verified the four pinned release archives, then hashed the regular `temporal`
+# member from each with SHA-256. The macOS and ARM64 binaries were read as bytes
+# on the same host as the Linux amd64 binary. They were not run to obtain these hashes.
 EXECUTABLE_CHECKSUMS = {
     "darwin_amd64": "cd364ad328a745a0afc562b8cae64cb3ea99117825950ae87d5db7440a96362f",
     "darwin_arm64": "3aa75ebc866fc7a995a560b748546902ac294ae071121ef091ccff48d5bcd8be",

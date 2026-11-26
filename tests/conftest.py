@@ -439,18 +439,20 @@ def run_database(admin_dsn: str, sim_template: str) -> Iterator[Callable[[str], 
 
 @pytest.fixture
 def baseline_repeats() -> Callable[[str, str, str], list[str] | None]:
-    """If requested, run exactly this many episodes, including the two host pauses."""
+    """Use a larger repeat set only when it covers every default pause treatment."""
 
     def treatments(name: str, first_pause: str, second_pause: str) -> list[str] | None:
         raw = os.environ.get(name)
         if raw is None:
             return None
+        minimum = 3  # One unpaused repeat and both default pause treatments.
+        error = f"{name} must be an integer of at least {minimum}"
         try:
             count = int(raw)
         except ValueError:
-            raise pytest.UsageError(f"{name} must be a positive integer") from None
-        if count <= 0:
-            raise pytest.UsageError(f"{name} must be a positive integer")
+            raise pytest.UsageError(error) from None
+        if count < minimum:
+            raise pytest.UsageError(error)
         cycle = ["normal", first_pause, second_pause, "normal"]
         blocks, remaining = divmod(count, len(cycle))
         return cycle * blocks + cycle[:remaining]

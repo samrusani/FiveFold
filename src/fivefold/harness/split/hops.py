@@ -16,20 +16,17 @@ these readings of when a message is sent and delivered:
   each one as delivered when its handler returns, even if the agent has gone. In G1 and
   G2 the evaluator reads no answer on the agent's hop as evidence (0004), so this changes
   no verdict there.
-- On the `gw_sim` hop the gateway logs each request as it sends it, and each answer as it
-  arrives; the simulator logs each request as it arrives, and each answer as it sends it.
-  A request carries the seq the gateway logged it under, and an answer the seq the
-  simulator logged it under, in the header `fivefold-seq`.
+- On the `gw_sim` hop the gateway logs the request as it sends it and the simulator
+  logs the answer as it sends it. The receiver records delivery against that same row.
+  The header `fivefold-seq` names the row.
 - A write request is sent at the time its attempt records, `gw.attempt.sent_vt` (0003),
   the time the gateway's settle bounds start from (0005). The gateway records the
   attempt in a transaction, then logs the request, and on the host's clock milliseconds
   pass in between; the log takes the attempt's time, so the evaluator's bounds start from
   the same number (0004). A message the simulator logs meanwhile can then have a lower
-  seq and a later `sent_vt`. Nothing reads the log as if virtual time grew with seq: the
-  evaluator compares times within one request's evidence, recovery latency compares a
-  fault's time with its evidence's deliveries and attestations, the viewer orders events
-  by time, and the log's own checks ask only that a message is delivered no earlier than
-  it is sent, and that a copy repeats its request's time.
+  seq and a later `sent_vt`. Recovery uses deliveries and attestations, which
+  reserve their sequence and sample the host clock under one transaction lock.
+  The viewer orders by virtual time. Each copy keeps its original request's send time.
 - A message whose fate nobody logged, because its receiver never took it, is dropped when
   the run ends (`fivefold.harness.split.lifecycle`).
 - A message from the agent that holds a NUL character is refused before it is logged
@@ -42,8 +39,8 @@ What a fault does where it fires (0006):
   received holds the connection open until the caller gives up, so the caller sees no
   answer, as when a request is lost. The gateway, dropping an answer, waits until its
   call's timeout ends, as when an answer is lost.
-- DUPLICATE (F4): the service handles the request a second time, `copy_delay_ms` after
-  the first delivery, as a copy that names the request in `copy_of`. The copy's answer is
+- DUPLICATE (F4): the service handles a copy after `copy_delay_ms`, including when
+  F12 dropped the original. The copy names the request in `copy_of`. Its answer is
   dropped with reason `answer_to_copy`.
 - REVOKE and CHANGE_QUOTE (F6, F7): applied through the simulator's control interface
   before the message goes on, by the simulator's service, which owns that interface.
@@ -265,13 +262,15 @@ def _record(envelope: Envelope) -> MessageRecord:
     )
 
 
-def logged_message(conn: psycopg.Connection[TupleRow], seq: int) -> tuple[Envelope, bool] | None:
-    """The message logged under `seq`, as an envelope, and whether it has a fate yet; None
-    if there is none. Reads the harness log as `ff_harness`."""
+def logged_message(
+    conn: psycopg.Connection[TupleRow], seq: int, *, body_text: str | None = None
+) -> tuple[Envelope, bool] | None:
+    """Read the envelope and its fate as `ff_harness`, optionally matching its wire JSON."""
     row = conn.execute(
         "SELECT hop, kind, sender, receiver, api, correlation, intent_id, idempotency_key,"
-        " answer_class, body, sent_vt, copy_of, fate FROM harness.message_log WHERE seq = %s",
-        (seq,),
+        " answer_class, body, sent_vt, copy_of, fate FROM harness.message_log WHERE seq = %s"
+        " AND (%s::jsonb IS NULL OR body = %s::jsonb)",
+        (seq, body_text, body_text),
     ).fetchone()
     if row is None:
         return None

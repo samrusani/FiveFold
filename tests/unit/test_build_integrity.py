@@ -18,14 +18,16 @@ def test_three_repeats_use_both_pause_treatments(
     assert baseline_repeats("FIVEFOLD_B1_REPEATS", "short", "long") == ["normal", "short", "long"]
 
 
-@pytest.mark.parametrize("value", ["0", "abc", ""])
+@pytest.mark.parametrize("value", ["0", "1", "2", "abc", ""])
 def test_invalid_baseline_repeat_counts_are_refused(
     baseline_repeats: Callable[[str, str, str], list[str] | None],
     monkeypatch: pytest.MonkeyPatch,
     value: str,
 ) -> None:
     monkeypatch.setenv("FIVEFOLD_B1_REPEATS", value)
-    with pytest.raises(pytest.UsageError, match="FIVEFOLD_B1_REPEATS must be a positive integer"):
+    with pytest.raises(
+        pytest.UsageError, match="FIVEFOLD_B1_REPEATS must be an integer of at least 3"
+    ):
         baseline_repeats("FIVEFOLD_B1_REPEATS", "short", "long")
 
 

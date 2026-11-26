@@ -7,6 +7,17 @@ Live runs are manual and never run in CI. A live run is refused unless the envir
 - `openai:MODEL`, OpenAI's API: your key in `OPENAI_API_KEY`.
 - `google_genai:MODEL`, Google's Gemini API: your key in `GOOGLE_API_KEY` or `GEMINI_API_KEY`. The run refuses `GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPRISE`, which can switch to Vertex AI with Google's default credentials. It refuses `GOOGLE_GENAI_CLIENT_MODE`, which can switch on the SDK's recording and replay modes.
 
+These SDK environment variables supply credentials, headers or HTTP proxy settings. They keep the backend selected by `--live`.
+
+| Variable | Purpose |
+| --- | --- |
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic bearer authentication |
+| `ANTHROPIC_CUSTOM_HEADERS` | Extra Anthropic SDK headers |
+| `OPENAI_CUSTOM_HEADERS` | Extra OpenAI SDK headers |
+| `OPENAI_ADMIN_KEY` | OpenAI SDK administrative credential |
+| `OLLAMA_API_KEY` | Ollama bearer authentication for servers that require it |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and their lowercase forms | SDK HTTP proxy routing and exclusions |
+
 A live run with an API provider needs its key variable set. `--param` takes generation parameters only, so a key, a base URL or a header can never reach a cassette or the run's records through those parameters. A live run refuses `LANGSMITH_GATEWAY` and enabled LangSmith tracing.
 
 The price file must price the model under its provider, in USD per million input tokens and per million output tokens. Use prices you have checked on the provider's price list, and set `price_date` to the day you read them: the spend cap and the report's cost are only as right as those prices. `prices/example.yaml` prices local Ollama models at 0 USD and no API model.
@@ -28,7 +39,7 @@ Use `--database NAME` for an unused destination when recording or playing back a
 
 The record command prints the verdict, the cassette's digest and what the run spent. Each model call takes the scenario's `think_ms` of virtual time, however long the model really takes, and `harness.model_call` logs its tokens. `--param NAME=VALUE`, such as `--param temperature=0`, sets a model parameter; the cassette records it. Before each call, the spend so far is checked against the cap, and a refused call ends that agent worker as `budget`. A call the provider has not answered after `--call-limit-s` wall-clock seconds (default 600) fails, and its worker ends with an error, so a stalled server cannot hold the run.
 
-A live study takes the same options and is refused without them, before it touches any database. It also saves each episode's cassette in `cassettes/`; `python -m fivefold.recorder play` compares a replay with the original run's database, so give `--keep-databases` to play one back. One spend cap holds across the study, and the study stops once the spend reaches it, since every later model call would be refused. An episode the cap cut short keeps its cassette, and its result goes to `spend-cap/`, which a report over the directory leaves out.
+A live study takes the same options and is refused without them, before it touches any database. It also saves each episode's cassette in `cassettes/`; `python -m fivefold.recorder play` compares a replay with the original run's database, so give `--keep-databases` to play one back. One spend cap holds across the study. SDK retries stay off. A transient provider failure ends the episode and stops the study. A failed, timed-out or cancelled paid call or a paid reply without token usage leaves the spend unknown and closes the cap, so later calls are refused. An episode the cap cut short keeps its cassette, and its result goes to `spend-cap/`, which a report over the directory leaves out.
 
 The [local Ollama pilot](report/pilot-ollama.md) and [API pilot](report/pilot-api.md) each describe 18 episodes per model. Their raw data contains the commands, results and cassettes: [local](../results/pilot-ollama/README.md) and [API](../results/pilot-api/README.md). The [full study](report.md) covers 741 episodes per model, with its [raw data and commands](../results/study/README.md). The example below uses placeholders for a new study.
 

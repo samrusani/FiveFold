@@ -30,11 +30,12 @@ agents' phase is over (G2 then closes the run, 0003), waits the drain window in 
 time, `2 x (D + max_hop_latency) + L` (0009), and stops the gateway, then the simulator,
 which records the stop time. Last, it drops every message whose fate no service logged:
 nothing delivered it. A request is dropped as `receiver_down`, an answer as
-`caller_timed_out`: its caller stopped waiting before it arrived.
+`caller_timed_out`: its caller stopped waiting before it arrived. A stopped service
+answers a repeated drain with HTTP 200, so a retry can finish interrupted cleanup.
 
 `score_run` scores the stopped run with the evaluator, which works on any run's database.
 
-Checked in httpx 0.28.1: `AsyncClient(timeout=)` and `post(url, headers=)`, and
+Checked in httpx 0.28.1: `AsyncClient(timeout=, trust_env=False)` and `post(url, headers=)`, and
 `Response.raise_for_status()`, which raises `HTTPStatusError` for a 4xx or 5xx status.
 """
 

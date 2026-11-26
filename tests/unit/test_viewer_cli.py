@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import Mock
 
+import psycopg
 import pytest
 import uvicorn
 from starlette.applications import Starlette
@@ -100,3 +104,38 @@ def test_allows_each_named_host_but_rejects_wildcards(
     )
     with pytest.raises(SystemExit):
         cli.main(["--allow-host", "*"])
+
+
+@pytest.mark.parametrize("value", ["viewer.local:8300", "::1", "*"])
+def test_the_cli_refuses_an_invalid_allow_host(
+    value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["--allow-host", value])
+    assert "without ports or wildcards" in capsys.readouterr().err
+
+
+def test_a_wildcard_listener_prints_a_usable_local_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def run(app: Starlette, *, host: str, port: int) -> None:
+        assert (host, port) == ("0.0.0.0", 8300)
+
+    monkeypatch.setattr(uvicorn, "run", run)
+    assert cli.main(["--host", "0.0.0.0"]) == 0
+    assert "http://127.0.0.1:8300/" in capsys.readouterr().out
+
+
+def test_a_query_timeout_maps_to_a_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    @contextmanager
+    def read(self: RunSource, database: str) -> Iterator[Mock]:
+        yield Mock(execute=Mock(side_effect=psycopg.errors.QueryCanceled("statement timeout")))
+
+    monkeypatch.setattr(RunSource, "_read", read)
+    with TestClient(create_app(RunSource(""), static=None), base_url="http://localhost") as client:
+        response = client.get("/api/runs")
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "query_timeout",
+        "detail": "the registry query exceeded 5 s",
+    }

@@ -264,3 +264,27 @@ def test_a_different_reason_or_intent_does_not_reproduce(
     with pytest.raises(ValueError, match="did not reproduce the source failure signature"):
         runner.shrink(bad, SCENARIO, out, admin_dsn=admin_dsn)
     assert not out.exists() and _databases(admin_dsn, out) == []
+
+
+def test_a_taken_final_shrink_destination_stops_before_the_first_trial(
+    original: tuple[str, RunResult], admin_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, result = original
+    output = tmp_path / "occupied_final"
+    sentinel = create_database(admin_dsn, _prefix(output) + "_final")
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        pytest.fail("the final destination must be checked before bootstrap or a trial")
+
+    try:
+        monkeypatch.setattr(runner, "bootstrap_server", unexpected)
+        monkeypatch.setattr(runner, "_trial", unexpected)
+        with pytest.raises(DatabaseExists, match="already exists"):
+            runner.shrink(result, SCENARIO, output, admin_dsn=admin_dsn)
+        assert not output.exists()
+        with psycopg.connect(sentinel.dsn) as conn:
+            assert conn.execute(
+                "SELECT oid FROM pg_database WHERE datname = current_database()"
+            ).fetchone() == (sentinel.oid,)
+    finally:
+        drop_own_database(admin_dsn, sentinel)

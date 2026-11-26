@@ -24,7 +24,8 @@ such as `"7"`: in the run list, and in a run's registry row and `run`.
 An error answers JSON too, `{"error": CODE, "detail": TEXT}`: 404 `unknown_run` (the
 registry lists no such database), 404 `run_unavailable` (it cannot be read, for example
 because it was dropped), 404 `not_a_run` (it holds no run), and 503
-`registry_unavailable`.
+`registry_unavailable` or `query_timeout`. An invalid or unlisted Host header gets a
+plain-text 400 response.
 
 Every other path serves the frontend's built files (`viewer/dist`, from `npm run build`)
 when they exist. The frontend routes in the URL's fragment, so `/` is its only page.
@@ -33,7 +34,9 @@ Checked in starlette 1.10.0: `Starlette(routes=..., exception_handlers=..., life
 (`applications.py`); `Route(path, endpoint, methods=...)`, which runs a plain function
 in a thread pool, and `Mount(path, app=..., name=...)` (`routing.py`);
 `StaticFiles(directory=..., html=True)` (`staticfiles.py`); `JSONResponse` and
-`HTMLResponse` (`responses.py`); `Request.path_params` and `Request.state` (`requests.py`).
+`HTMLResponse` (`responses.py`); `Request.path_params` and `Request.state` (`requests.py`);
+`Middleware` (`middleware/__init__.py`); `TrustedHostMiddleware`
+(`middleware/trustedhost.py`); and `parse_host_header` (`_utils.py`).
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Final
 
+from starlette._utils import parse_host_header
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -77,8 +81,13 @@ def create_app(
     source: RunSource, static: Path | None = DEFAULT_STATIC, *, extra_hosts: Sequence[str] = ()
 ) -> Starlette:
     """The viewer: its API over `source`, and the frontend from `static` if it exists."""
-    if any(not host or "*" in host for host in extra_hosts):
-        raise ValueError("viewer hosts must be nonempty names or addresses without wildcards")
+    for host in extra_hosts:
+        parsed = parse_host_header(host)
+        if parsed is None or parsed.port is not None or "*" in host:
+            raise ValueError(
+                "viewer hosts must be names or addresses without ports or wildcards"
+                " (use brackets around IPv6 addresses)"
+            )
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[dict[str, ThreadPoolExecutor]]:

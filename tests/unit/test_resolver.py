@@ -367,6 +367,8 @@ def test_an_unknown_or_resolved_escalation_and_a_bad_attestation_are_refused() -
         admin.resolve("ESC-0009", Resolution.COMMITTED, "PO-0001", actor="resolver")
     with pytest.raises(ValueError, match="names the effect"):
         admin.resolve("ESC-0001", Resolution.COMMITTED, actor="resolver")
+    with pytest.raises(ValueError, match="when supplied, must be nonempty"):
+        admin.resolve("ESC-0001", Resolution.NOT_COMMITTED, " ", actor="resolver")
     with pytest.raises(ValueError, match="human who made it"):
         admin.resolve("ESC-0001", Resolution.COMMITTED, "PO-0001", actor="")
     assert gateway.store.view(action_id).action.state is S.OUTCOME_UNKNOWN

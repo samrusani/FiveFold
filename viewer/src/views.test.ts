@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { pairKey } from "./runData";
 import { b0Ledger, b0Timeline, g2Timeline, listedRun } from "./test/fixtures";
 import {
   agentView,
@@ -158,4 +159,29 @@ describe("an experimental branch (record 0009)", () => {
     expect(pairs(runs).map((p) => p.g2.database)).toEqual(["study_0002"]);
     expect(pairs([listedRun("study_0001", "B0"), branch])).toEqual([]);
   });
+});
+
+
+it("uses a lossless, ordered key for a pair", () => {
+  const entries = ['left,"variant"', "right:variant"];
+  expect(JSON.parse(pairKey(entries[0]!, entries[1]!))).toEqual(entries);
+  expect(pairKey("a,b", "c")).not.toBe(pairKey("a", "b,c"));
+  expect(pairKey("a", "b")).not.toBe(pairKey("b", "a"));
+});
+
+it("keeps the input order when ledger effects tie on time and sequence", () => {
+  const source = b0Ledger.effects[0]!;
+  const entries = ledgerEntries({
+    ...b0Ledger,
+    facts: [],
+    effects: [
+      { ...source, effect_id: "PO-0004", committed_vt: 3, commit_seq: 1 },
+      { ...source, effect_id: "PO-0002", committed_vt: 2, commit_seq: 8 },
+      { ...source, effect_id: "PO-0001", committed_vt: 2, commit_seq: 5 },
+      { ...source, effect_id: "PO-0003", committed_vt: 2, commit_seq: 8 },
+    ],
+  });
+  expect(entries.map((entry) => entry.kind === "effect" ? entry.effect.effect_id : null)).toEqual(
+    ["PO-0001", "PO-0002", "PO-0003", "PO-0004"],
+  );
 });

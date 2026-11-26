@@ -71,6 +71,7 @@ worker has the scenario's step and token budgets (0009, `fivefold.agents.worker`
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -343,13 +344,11 @@ class InprocRun:
         with host_context as host:
             self._temporal_workers = TemporalWorkers(self, host)
             try:
-                return await self._run_and_score()
+                return await self._run_baseline(self._temporal_workers.stop)
             except ComponentFailed as error:
                 if isinstance(error.__cause__, TemporalInfrastructureError):
                     raise error.__cause__ from None
                 raise
-            finally:
-                await self._temporal_workers.stop()
 
     async def _execute_dbos(self) -> RunResult:
         import sys
@@ -369,13 +368,20 @@ class InprocRun:
         with state_database(admin, _worker_names(self._agent_workers)) as state:
             self._dbos_workers = DBOSWorkers(self, state)
             try:
-                return await self._run_and_score()
+                return await self._run_baseline(self._dbos_workers.stop)
             except ComponentFailed as error:
                 if isinstance(error.__cause__, DBOSInfrastructureError):
                     raise error.__cause__ from None
                 raise
-            finally:
-                await self._dbos_workers.stop()
+
+    async def _run_baseline(self, stop: Callable[[], Awaitable[None]]) -> RunResult:
+        try:
+            return await self._run_and_score()
+        finally:
+            try:
+                await stop()
+            except Exception as error:
+                logging.getLogger(__name__).warning("baseline cleanup failed: %s", error)
 
     async def _run_and_score(self) -> RunResult:
         try:

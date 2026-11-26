@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import mcp_types as types
+import pytest
 from mcp.client.session import ClientSession
 from mcp.server.lowlevel.server import Server
 from mcp.shared.exceptions import MCPError
@@ -454,3 +455,25 @@ def test_f4_the_agent_gets_its_own_answer_when_the_copy_is_answered_first() -> N
         (copy.seq, "dropped", "answer_to_copy"),
         (request.seq, "delivered", None),
     ], "the copy's answer went first, and only the agent's own answer reached it"
+
+
+@pytest.mark.parametrize("value", ["before\u0000after", object()], ids=["nul", "unknown_type"])
+def test_the_outbox_refuses_unencodable_agent_requests_without_sending(value: object) -> None:
+    rig = Rig()
+    link = Link(rig.scheduler, rig.transport, agent="agent-1", gateway="gateway")
+
+    async def send() -> None:
+        request = types.JSONRPCRequest(
+            jsonrpc="2.0",
+            id=1,
+            method="tools/call",
+            params={"name": "propose", "arguments": {"value": value}},
+        )
+        await link.client_write.send(SessionMessage(request))
+        item = await link.client_read.receive()
+        assert isinstance(item, SessionMessage)
+        assert isinstance(item.message, types.JSONRPCError)
+        assert item.message.id == 1 and item.message.error.code == types.INVALID_PARAMS
+
+    asyncio.run(asyncio.wait_for(send(), timeout=2))
+    assert not rig.log.messages
