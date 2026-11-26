@@ -176,11 +176,12 @@ The search covers the modeled bounds. It does not prove safety for longer runs, 
 `Dispatch` and `Retry` combine the gateway check and the transaction that records the attempt in one step. `Escalate` is a separate step and journals only the failed-check note when that case applies. The model checks the disposition of an attach offer without an Attach step. It stops modeling gateway crashes once the run closes, although F1 and F3 can fire during the drain window. The modeled F4 copies a request only after its commit.
 
 Both profiles finished with the intent-wide report check on 26 Nov 2026.
-These local macOS measurements use Temurin 17.0.19. Times are TLC elapsed time and exclude setup.
+The bounded row uses [this PR's CI run](https://github.com/samrusani/FiveFold/actions/runs/45818648006/job/139904844128).
+The nightly row is from a local run. Times are TLC elapsed time and exclude setup.
 
 | Profile | Workers | Generated states | Distinct states | Search depth | Elapsed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Bounded CI | 1 | 2,170,421 | 677,392 | 24 | 32 s |
+| Bounded CI | 1 | 2,170,421 | 677,392 | 24 | 28 s |
 | Larger nightly | 2 | 18,697,100 | 5,162,646 | 28 | 189 s |
 
 ## Known limits
