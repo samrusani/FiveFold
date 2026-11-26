@@ -21,9 +21,10 @@ url="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.1
 python3 - "$url" /tmp/java.tar.gz <<'PY'
 import shutil
 import sys
-from http.client import IncompleteRead
+from http.client import HTTPException
+from ssl import SSLError
 from time import sleep
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 url, archive_path = sys.argv[1:]
@@ -31,8 +32,9 @@ for attempt in range(1, 4):
     try:
         with urlopen(url, timeout=60) as response, open(archive_path, "wb") as archive:
             shutil.copyfileobj(response, archive)
-    except (ConnectionError, TimeoutError, IncompleteRead, URLError) as error:
-        if attempt == 3:
+    except (ConnectionError, TimeoutError, HTTPException, SSLError, URLError) as error:
+        permanent = isinstance(error, HTTPError) and 400 <= error.code < 500 and error.code != 429
+        if attempt == 3 or permanent:
             raise
         print(f"Temurin download attempt {attempt} failed: {error}. Retrying.", file=sys.stderr)
         sleep(attempt)

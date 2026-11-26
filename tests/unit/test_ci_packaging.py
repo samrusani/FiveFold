@@ -1,9 +1,12 @@
 """The wheel smoke check and image build use the expected inputs."""
 
 import runpy
+import ssl
 import sys
+from http.client import HTTPException, HTTPMessage
 from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 import yaml
@@ -26,9 +29,24 @@ def test_ci_builds_and_runs_the_wheel_on_postgres() -> None:
     assert '"$smoke/venv/bin/python" -m fivefold.harness.demo 1' in commands
 
 
-@pytest.mark.parametrize("recovers", [True, False])
-def test_temurin_download_retries_a_read_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recovers: bool
+@pytest.mark.parametrize(
+    ("read_error", "status", "recovers", "expected_attempts"),
+    [
+        (TimeoutError, None, True, 2),
+        (TimeoutError, None, False, 3),
+        (ssl.SSLError, None, True, 2),
+        (HTTPException, None, True, 2),
+        (None, 429, True, 2),
+        (None, 404, False, 1),
+    ],
+)
+def test_temurin_download_retries_transient_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    read_error: type[Exception] | None,
+    status: int | None,
+    recovers: bool,
+    expected_attempts: int,
 ) -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     script = tmp_path / "download.py"
@@ -41,7 +59,8 @@ def test_temurin_download_retries_a_read_timeout(
     class InterruptedRead(BytesIO):
         def read(self, size: int | None = -1, /) -> bytes:
             if self.tell():
-                raise TimeoutError("the read operation timed out")
+                assert read_error is not None
+                raise read_error("the test interrupted the read")
             return super().read(size)
 
     def download(requested: str, *, timeout: int) -> BytesIO:
@@ -49,6 +68,8 @@ def test_temurin_download_retries_a_read_timeout(
         attempts.append(requested)
         if recovers and len(attempts) == 2:
             return BytesIO(b"complete")
+        if status is not None:
+            raise HTTPError(url, status, "fixture response", HTTPMessage(), None)
         return InterruptedRead(b"partial download with trailing data")
 
     monkeypatch.setattr(sys, "argv", [str(script), url, str(archive)])
@@ -57,10 +78,8 @@ def test_temurin_download_retries_a_read_timeout(
     if recovers:
         runpy.run_path(str(script))
         assert archive.read_bytes() == b"complete"
-        assert len(attempts) == 2
-        assert delays == [1]
     else:
-        with pytest.raises(TimeoutError, match="the read operation timed out"):
+        with pytest.raises(read_error or HTTPError):
             runpy.run_path(str(script))
-        assert len(attempts) == 3
-        assert delays == [1, 2]
+    assert len(attempts) == expected_attempts
+    assert delays == list(range(1, expected_attempts))
