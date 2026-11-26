@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
-from psycopg.conninfo import make_conninfo
-
+from fivefold.db_connection import role_dsn
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario_file
 from fivefold.harness.split.credentials import Callers
@@ -83,7 +82,7 @@ class SplitRun:
 
     def conninfo(self, base_dsn: str, role: str) -> str:
         """A connection to the run's database as `role`, on the server `base_dsn` names."""
-        return make_conninfo(base_dsn, dbname=self.database, user=role)
+        return role_dsn(base_dsn, role, dbname=self.database)
 
     def mark_ended(self, stopped_vt: int) -> None:
         """Note that the run stopped at `stopped_vt`."""

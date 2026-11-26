@@ -37,6 +37,13 @@ Every run database is a copy of one migrated template database, `fivefold_templa
 
 ## Pull requests
 
+For local database setup, use `make db-reset` to recreate `fivefold_dev`.
+The `migrate` and `reset` commands can adopt an unmarked database named
+with `--database` as a development database. The administrator must own it.
+Its history must match a nonempty prefix of FiveFold's migration names and
+SHA-256 checksums. The template and registry use their own migrations.
+`reset` recreates the selected development database.
+
 - Run `make check` before asking for review. The Development section above explains the setup.
 - One change per pull request, kept small.
 - Name the spec section or decision record it implements.

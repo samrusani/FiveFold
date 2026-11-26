@@ -45,9 +45,9 @@ from dataclasses import dataclass, replace
 from typing import Any, Final, LiteralString
 
 import psycopg
-from psycopg.conninfo import make_conninfo
 from pydantic import ValidationError
 
+from fivefold.db_connection import role_dsn
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import WALL_CLOCK_SUFFIXES as EVALUATOR_WALL_CLOCK_SUFFIXES
@@ -258,7 +258,7 @@ def _comparable(name: str, row: object) -> str:
 
 def _viewer(dsn: str) -> psycopg.Connection[Any]:
     """A read-only connection to the database `dsn`, as `ff_viewer`."""
-    conn = psycopg.connect(make_conninfo(dsn, user=VIEWER))
+    conn = psycopg.connect(role_dsn(dsn, VIEWER))
     conn.read_only = True
     return conn
 

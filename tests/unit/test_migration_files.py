@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
-from fivefold.harness.migrations import MigrationError, check_database_name, discover, drop_database
+from fivefold.harness import migrations as commands
+from fivefold.harness.migrations import (
+    Connection,
+    MigrationError,
+    check_database_name,
+    discover,
+    drop_database,
+    migrate,
+)
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "db" / "migrations"
 
@@ -25,6 +37,15 @@ def test_repository_migrations_are_well_formed() -> None:
 def test_the_run_registry_s_migrations_are_well_formed() -> None:
     migrations = discover(MIGRATIONS.parent / "registry")
     assert [migration.name for migration in migrations][:1] == ["0001_registry.sql"]
+
+
+def test_migrations_refuse_postgres_15_before_any_query() -> None:
+    connection = cast(
+        Connection,
+        SimpleNamespace(autocommit=True, info=SimpleNamespace(server_version=150012)),
+    )
+    with pytest.raises(MigrationError, match="PostgreSQL 16 or newer"):
+        migrate(connection, MIGRATIONS)
 
 
 @pytest.mark.parametrize(
@@ -94,3 +115,42 @@ def test_database_names_the_runner_refuses(name: str) -> None:
 def test_an_overlong_name_is_refused_before_any_connection() -> None:
     with pytest.raises(MigrationError, match="at most 63 bytes"):
         drop_database("postgresql://nobody@invalid.invalid/postgres", "a" * 64)
+
+
+@pytest.fixture
+def protect_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected(*args: object, **kwargs: object) -> None:
+        pytest.fail("the reserved name must be refused before querying or mutating a database")
+
+    @contextmanager
+    def lock(admin_dsn: str) -> Iterator[Connection]:
+        yield cast(Connection, SimpleNamespace(execute=unexpected))
+
+    monkeypatch.setattr(commands, "database_lock", lock)
+    monkeypatch.setattr(commands, "recreate_database", unexpected)
+    monkeypatch.setattr(commands, "_reset_database", unexpected, raising=False)
+
+
+@pytest.mark.parametrize("name", ["fivefold_dev", "fivefold_registry"])
+@pytest.mark.parametrize("preflight", [False, True])
+def test_run_provisioning_refuses_reserved_names(
+    name: str, preflight: bool, protect_database: None
+) -> None:
+    with pytest.raises(MigrationError, match="reserved"):
+        if preflight:
+            commands.check_run_destinations("", [name], MIGRATIONS, replace=True)
+        else:
+            commands.create_run_database("", name, MIGRATIONS, replace=True)
+
+
+@pytest.mark.parametrize("name", ["fivefold_template", "fivefold_registry"])
+def test_reset_refuses_template_and_registry(
+    name: str, protect_database: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert commands.main(["reset", "--database", name]) == 1
+    assert "reserved" in capsys.readouterr().err
+
+
+def test_template_preparation_refuses_a_registry_name(protect_database: None) -> None:
+    with pytest.raises(MigrationError, match="reserved for a different FiveFold database kind"):
+        commands.prepare_template("", MIGRATIONS, name="fivefold_registry")

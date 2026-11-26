@@ -13,8 +13,8 @@ It reads two kinds of database on one server:
   `harness` and `eval`, the ones `ff_viewer` may select from (0008).
 
 The server comes from a connection string, such as FIVEFOLD_ADMIN_DSN. The viewer keeps
-its host, port and other settings, and replaces its user, password and database: it
-always connects as `ff_viewer`.
+the server coordinates and TLS server verification settings. It connects as
+`ff_viewer` to the selected database.
 
 Checked in psycopg 3.3.9: `conninfo_to_dict` and `make_conninfo` (`conninfo.py`),
 `Connection.read_only` and `Connection.isolation_level` (`_connection_base.py`), and
@@ -34,8 +34,9 @@ from datetime import datetime
 from typing import Any, Final, LiteralString
 
 import psycopg
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import DictRow, dict_row
+
+from fivefold.db_connection import role_dsn
 
 VIEWER_ROLE: Final = "ff_viewer"
 """The only role the viewer connects as (0008)."""
@@ -101,14 +102,9 @@ class RunSource:
     registry: str = DEFAULT_REGISTRY
 
     def _conninfo(self, database: str) -> str:
-        params = {
-            key: value
-            for key, value in conninfo_to_dict(self.server).items()
-            if key not in ("user", "password", "dbname")
-        }
-        # A connect_timeout in the server string wins; it must not be passed twice.
-        params.setdefault("connect_timeout", CONNECT_TIMEOUT_S)
-        return make_conninfo("", **params, user=VIEWER_ROLE, dbname=database)
+        return role_dsn(
+            self.server, VIEWER_ROLE, dbname=database, default_timeout=CONNECT_TIMEOUT_S
+        )
 
     @contextmanager
     def _read(self, database: str) -> Iterator[Connection]:

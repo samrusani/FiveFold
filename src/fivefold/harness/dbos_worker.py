@@ -15,9 +15,9 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 from langchain_core.messages import HumanMessage
 from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict
 from sqlalchemy.engine import URL
 
+from fivefold.db_connection import server_parameters
 from fivefold.harness.baseline_worker import (
     BaselineInfrastructureError,
     BaselineWorkers,
@@ -105,18 +105,14 @@ def state_database(admin_dsn: str, workers: tuple[str, ...]) -> Iterator[Created
 def _state_url(state: CreatedDatabase) -> str:
     # Copy only routing and server verification options. The admin password and
     # role settings do not belong in the DBOS process.
-    allowed = {"host", "hostaddr", "port", "sslmode", "sslrootcert", "connect_timeout"}
-    connection = conninfo_to_dict(state.dsn)
+    connection = server_parameters(state.dsn)
+    connection.pop("dbname", None)
     url = URL.create(
         "postgresql+psycopg",
         username=ROLE,
         password=os.environ.get("FIVEFOLD_DBOS_PASSWORD"),
         database=state.name,
-        query={
-            key: str(value)
-            for key, value in connection.items()
-            if key in allowed and value is not None
-        },
+        query=connection,
     )
     return url.render_as_string(hide_password=False)
 

@@ -22,9 +22,10 @@ from dataclasses import dataclass
 from typing import Final
 
 import psycopg
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import TupleRow
 
+from fivefold.db_connection import role_dsn
 from fivefold.harness.migrations import check_database_name, registry_database
 
 REGISTRY_ROLE: Final = "ff_registry"
@@ -95,9 +96,7 @@ def forget(dsn: str, database: str, *, registry: str | None = None) -> None:
 
 def _connect(dsn: str, registry: str) -> psycopg.Connection[TupleRow]:
     try:
-        return psycopg.connect(
-            make_conninfo(dsn, dbname=registry, user=REGISTRY_ROLE), autocommit=True
-        )
+        return psycopg.connect(role_dsn(dsn, REGISTRY_ROLE, dbname=registry), autocommit=True)
     except psycopg.OperationalError as error:
         raise RegistryError(
             f"the run registry {registry} cannot be reached ({error}); create it with"

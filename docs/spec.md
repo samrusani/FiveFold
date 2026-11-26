@@ -95,6 +95,8 @@ In B2 the administrator creates a fresh database for DBOS on the existing Postgr
 
 The run registry (0009, 0012) is a database of its own, `fivefold_registry`, outside every run database. The harness writes its rows as `ff_registry`, which has no privilege in any run database; `ff_viewer` can only select from it, and no other role has any privilege there.
 
+FiveFold marks the template, run registry and development databases with separate ownership markers before migrating them. It adopts an unmarked database only if the administrator owns it and its applied migration names and checksums form a nonempty prefix of that kind's shipped migrations. It prints the last applied migration when adopting, then applies pending migrations. This upgrade path remains available through at least 0.3. `make db-reset` checks ownership before resetting `fivefold_dev`.
+
 ## Stack
 
 Detail: 0007.
