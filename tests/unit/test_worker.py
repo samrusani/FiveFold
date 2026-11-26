@@ -187,3 +187,4 @@ def test_only_a_final_message_with_a_budget_text_ends_a_worker_as_budget() -> No
     assert budget_end(AIMessage([{"type": "text", "text": BUDGET_TEXT}])) is None
     assert budget_end(HumanMessage(BUDGET_TEXT)) is None
     assert budget_end(AIMessage("Done.")) is None
+    assert budget_end(AIMessage(SPEND_CAP_TEXT)) is None

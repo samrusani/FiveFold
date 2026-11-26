@@ -5,9 +5,9 @@ Live runs are manual and never run in CI. A live run is refused unless the envir
 - `ollama:MODEL`, a model on an Ollama server: no key. The server is your own at `http://127.0.0.1:11434` unless `OLLAMA_HOST` names another.
 - `anthropic:MODEL`, Anthropic's API: your key in `ANTHROPIC_API_KEY`.
 - `openai:MODEL`, OpenAI's API: your key in `OPENAI_API_KEY`.
-- `google_genai:MODEL`, Google's Gemini API: your key in `GOOGLE_API_KEY` or `GEMINI_API_KEY`. A run is refused while `GOOGLE_GENAI_USE_VERTEXAI` or `GOOGLE_GENAI_USE_ENTERPRISE` is set, since either sends the requests to Vertex AI with Google's default credentials.
+- `google_genai:MODEL`, Google's Gemini API: your key in `GOOGLE_API_KEY` or `GEMINI_API_KEY`. The run refuses `GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPRISE`, which can switch to Vertex AI with Google's default credentials. It refuses `GOOGLE_GENAI_CLIENT_MODE`, which can switch on the SDK's recording and replay modes.
 
-A live run with an API provider is refused unless its key variable is set. The key stays in that variable: `--param` takes generation parameters only, so a key, a base URL or a header can never reach a cassette or the run's records.
+A live run with an API provider needs its key variable set. `--param` takes generation parameters only, so a key, a base URL or a header can never reach a cassette or the run's records through those parameters. A live run refuses `LANGSMITH_GATEWAY` and enabled LangSmith tracing.
 
 The price file must price the model under its provider, in USD per million input tokens and per million output tokens. Use prices you have checked on the provider's price list, and set `price_date` to the day you read them: the spend cap and the report's cost are only as right as those prices. `prices/example.yaml` prices local Ollama models at 0 USD and no API model.
 
