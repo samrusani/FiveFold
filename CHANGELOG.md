@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.1 (27 Nov 2026)
+
+A patch release with fixes from the v0.2.0 audit. Runs require Python 3.12 and PostgreSQL 16.
+
+### Security
+
+- The gateway verifies that approval responses match the request. Split simulator replies must match the logged response and its correlation before the gateway uses them. Component errors expose their class to the agent and keep details in Python logs. [#157](https://github.com/samrusani/FiveFold/pull/157) · [#169](https://github.com/samrusani/FiveFold/pull/169)
+- The split services refuse unsupported message bodies before recording them, enforce their caller boundary and ignore proxy settings from the environment. [#161](https://github.com/samrusani/FiveFold/pull/161)
+- Database setup checks ownership and each database's migration history before adopting an unmarked database. It pins SQL function search paths and preserves explicit connection verification settings for component roles. [#160](https://github.com/samrusani/FiveFold/pull/160)
+- Live runs reject ambient LangSmith routing and tracing. A paid attempt with unknown spend closes the cap. Provider SDK retries are disabled. [#167](https://github.com/samrusani/FiveFold/pull/167)
+- The viewer accepts loopback Host headers and explicitly allowed names. Its database reads have a statement timeout. [#166](https://github.com/samrusani/FiveFold/pull/166) · [#169](https://github.com/samrusani/FiveFold/pull/169)
+- The app and viewer images use pinned base images and run without root. CI actions are pinned, and publishing checks the release flag, tag, version and distribution links. [#163](https://github.com/samrusani/FiveFold/pull/163)
+- Template and registry names cannot collide with each other or with another reserved FiveFold database name. [#172](https://github.com/samrusani/FiveFold/pull/172)
+- B1 verifies the pinned Temporal CLI executable's SHA-256 before running it. [#172](https://github.com/samrusani/FiveFold/pull/172)
+
+### Fixed
+
+- The Docker build retries transient failures while downloading the checksum-pinned Temurin JRE, including TLS and HTTP protocol errors. It stops on HTTP 4xx errors other than 429. [#169](https://github.com/samrusani/FiveFold/pull/169) · [#172](https://github.com/samrusani/FiveFold/pull/172)
+- Retrying split `end` can finish after both services have stopped. Split deliveries and attestations share a lock when reserving evidence timestamps. Split F5 requires 50 ms of scheduling headroom, and F4 copies still run after the original is dropped. [#161](https://github.com/samrusani/FiveFold/pull/161) · [#169](https://github.com/samrusani/FiveFold/pull/169)
+- Tool calls that the MCP client cannot encode return the matching invalid-argument shape. F8 with no memory fact writes no fault row and leaves its occurrence available. Baseline cleanup preserves the scored result or the original error. [#162](https://github.com/samrusani/FiveFold/pull/162) · [#169](https://github.com/samrusani/FiveFold/pull/169)
+- The MCP conformance runner keeps its 10 s connection setup limit and lets replies arrive within the configured evidence interval. [#162](https://github.com/samrusani/FiveFold/pull/162) · [#172](https://github.com/samrusani/FiveFold/pull/172)
+- The shrinker checks its final database name before the first trial. [#162](https://github.com/samrusani/FiveFold/pull/162)
+- Saved results validate strict integers and branch field pairs. CSV and Markdown exports escape fields that spreadsheets or Markdown could interpret, and invalid prices report one-line errors. [#164](https://github.com/samrusani/FiveFold/pull/164)
+- The recorder checks that each cassette call can be encoded and read back before appending it. [#172](https://github.com/samrusani/FiveFold/pull/172)
+- The API rejects integers in `Version` and `VirtualMs` that exceed the JSON encoder's limit. [#172](https://github.com/samrusani/FiveFold/pull/172)
+- Reports escape free text in every table column. Saved scenario digests must be 64 lowercase hexadecimal characters. [#172](https://github.com/samrusani/FiveFold/pull/172)
+- The gateway model checks reports against every action for an intent. The Python replay covers the second dispatched action from the TLC trace. [#158](https://github.com/samrusani/FiveFold/pull/158)
+
+### Docs
+
+- Records 0025 and 0026 are accepted. Their scoring, contract and database changes follow in later releases. [#159](https://github.com/samrusani/FiveFold/pull/159) · [#165](https://github.com/samrusani/FiveFold/pull/165)
+- Documented split request limits, the live spend cap, the current quote-terms limit and the hosted Nightly model measurements. [#169](https://github.com/samrusani/FiveFold/pull/169)
+
 ## 0.2.0 (25 Nov 2026)
 
 The first full release in the 0.2 series brings together the four pre-releases and the fixes below. Runs require Python 3.12 and PostgreSQL 16.

@@ -17,7 +17,7 @@ Do not open a public issue, pull request or discussion about a vulnerability bef
 | Version | Gets security fixes |
 | --- | --- |
 | `main` | Yes |
-| The latest full release (`0.2.0`) | Yes |
+| The latest full release (`0.2.1`) | Yes |
 | Older releases and pre-releases | No |
 
 ## Scope

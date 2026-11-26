@@ -45,6 +45,8 @@ It depends on:
 - at C2, no change to the budget between a first attempt that never landed and its retry: a retry does not re-check the budget, so it can overdraw it (0005);
 - at C3, the destination's atomic check of the basis at commit (0005).
 
+Property 3 checks the cited quote's relevant fields for changes before commit, with checks for matching price and currency, meeting the quote's minimum quantity, and requiring an active quote deferred to [record 0025](adr/0025-order-terms-and-cited-quote.md).
+
 ### 4. Actually committed
 
 Authorized actions form an outbox. After a gateway crash, startup recovery returns them to it, and moves open attempts to OutcomeUnknown to resume their contract's recovery (0003). At weak contracts, G2 gives up liveness rather than safety (0004).
@@ -175,14 +177,14 @@ The search covers the modeled bounds. It does not prove safety for longer runs, 
 
 `Dispatch` and `Retry` combine the gateway check and the transaction that records the attempt in one step. `Escalate` is a separate step and journals only the failed-check note when that case applies. The model checks the disposition of an attach offer without an Attach step. It stops modeling gateway crashes once the run closes, although F1 and F3 can fire during the drain window. The modeled F4 copies a request only after its commit.
 
-Both profiles finished with the intent-wide report check on 26 Nov 2026.
-The bounded row uses [this PR's CI run](https://github.com/samrusani/FiveFold/actions/runs/45818648006/job/139904844128).
-The nightly row is from a local run. Times are TLC elapsed time and exclude setup.
+Both profiles finished with the intent-wide report check.
+The bounded row uses [CI for #158](https://github.com/samrusani/FiveFold/actions/runs/45818648006/job/139904844128).
+The larger row uses [Nightly #18 on `bc0629e`](https://github.com/samrusani/FiveFold/actions/runs/45954792114/job/140358662055). Times are TLC elapsed time and exclude setup.
 
 | Profile | Workers | Generated states | Distinct states | Search depth | Elapsed |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Bounded CI | 1 | 2,170,421 | 677,392 | 24 | 28 s |
-| Larger nightly | 2 | 18,697,100 | 5,162,646 | 28 | 189 s |
+| Larger nightly | 2 | 18,697,100 | 5,162,646 | 28 | 188 s |
 
 ## Known limits
 
