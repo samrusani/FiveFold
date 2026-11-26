@@ -220,6 +220,16 @@ If a later check finds a gateway invariant violation or a stuck state,
 save the trace, map its steps to Python and propose a separate
 decision record for any design change.
 
+**26 Nov 2026.** The implemented model now checks all slots of the
+intent when it accepts a report. I5 reads the journal entry each slot
+had reached before the report closed the run. A separate invariant
+rejects `not_done` if any slot still has an unsettled attempt.
+At the implemented bounds, bounded CI still generates 2,170,421
+states with 677,392 distinct. Nightly now generates 18,697,100 states
+with 5,162,646 distinct, up from 15,006,806 and 4,036,946 respectively.
+Both profiles finished. The current bounds and timings are in the
+[limitations](../limitations.md#the-bounded-gateway-model).
+
 ## Spec changes on acceptance
 
 - Define the checked scope and the journal projection under Action

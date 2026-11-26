@@ -15,7 +15,7 @@ Clean == [state |-> "none", args |-> "none", grant |-> "none", auth |-> "valid",
           attempts |-> <<>>, journal |-> <<>>, effect |-> 0, known |-> {}, ledger |-> 0,
           escalated |-> FALSE, probes |-> 0, settled |-> FALSE,
           wire |-> "idle", pending |-> FALSE, copied |-> FALSE, seen |-> [event |-> 0, state |-> "none"],
-          report |-> [claim |-> "none", event |-> 0, known |-> {}]]
+          report |-> [claim |-> "none", events |-> [i \in Ids |-> 0], known |-> {}]]
 Init ==
   /\ c \in {"C0", "C1", "C2", "C3"}
   /\ up = TRUE /\ crashes = 0 /\ closed = FALSE
@@ -206,16 +206,23 @@ Close ==
 Read(i,r) ==
   /\ up /\ r.state # "none" /\ r.seen.event = 0
   /\ Replace(i,[r EXCEPT !.seen = [event |-> Len(r.journal), state |-> r.state]])
+\* All slots represent actions of the same intent. An unused slot has no action.
+NotDoneStates == Undispatched \cup {"none","rejected","failed"}
+UnsettledStates == {"dispatched",Unknown}
+
 Report(i,r) ==
-  /\ up /\ ~closed /\ r.report.event = 0 /\ r.state # "none"
-  /\ \E claim \in {"done", "not_done", "unknown"}:
-     /\ \/ claim = "done" /\ r.state = "confirmed" /\ r.known # {}
-        \/ claim = "not_done" /\ r.state \in Undispatched \cup {"rejected","failed"}
-        \/ claim = "unknown" /\ r.state \in {"dispatched",Unknown}
-     /\ LET audited == [r EXCEPT !.report = [claim |-> claim, event |-> Len(r.journal),
-                    known |-> IF claim = "done" THEN r.known ELSE {}]]
-         IN actions' = [j \in Ids |-> Closure(IF i = j THEN audited ELSE actions[j])]
-     /\ closed' = TRUE /\ UNCHANGED <<c,up,crashes>>
+  /\ up /\ ~closed /\ r.report.claim = "none" /\ r.state # "none"
+  /\ LET states == {actions[j].state : j \in Ids}
+         known == UNION {actions[j].known : j \in Ids}
+         events == [j \in Ids |-> Len(actions[j].journal)]
+     IN \E claim \in {"done", "not_done", "unknown"}:
+        /\ \/ claim = "done" /\ "confirmed" \in states /\ known # {}
+           \/ claim = "not_done" /\ states \subseteq NotDoneStates
+           \/ claim = "unknown" /\ states \cap UnsettledStates # {}
+        /\ LET audited == [r EXCEPT !.report = [claim |-> claim, events |-> events,
+                       known |-> IF claim = "done" THEN known ELSE {}]]
+            IN actions' = [j \in Ids |-> Closure(IF i = j THEN audited ELSE actions[j])]
+  /\ closed' = TRUE /\ UNCHANGED <<c,up,crashes>>
 
 Halted == /\ closed /\ up
           /\ \A i \in Ids : LET r == actions[i] IN
@@ -252,12 +259,22 @@ I4 == \A i \in Ids : LET r == actions[i] IN
   /\ (c \in {"C0","C1"} => Len(r.attempts) <= 1)
   /\ \A k \in 1..Len(r.attempts):
      r.attempts[k].key = (IF c \in {"C2","C3"} THEN i ELSE 0)
+\* Read each slot at the journal position observed before closing the run.
+StateAt(r, event) == IF event = 0 THEN "none" ELSE r.journal[event].edge[3]
+KnownAt(r, event) == IF event = 0 THEN {} ELSE r.journal[event].known
 I5 == \A i \in Ids : LET r == actions[i] IN
-  /\ IF r.seen.event = 0 THEN TRUE ELSE r.seen.state = r.journal[r.seen.event].edge[3]
-  /\ IF r.report.event = 0 THEN TRUE ELSE LET e == r.journal[r.report.event] IN
-     CASE r.report.claim = "done" -> e.edge[3] = "confirmed" /\ r.report.known = e.known
-       [] r.report.claim = "not_done" -> e.edge[3] \in Undispatched \cup {"rejected","failed"}
-       [] OTHER -> e.edge[3] \in {"dispatched",Unknown}
+  /\ IF r.seen.event = 0 THEN TRUE ELSE r.seen.state = StateAt(r, r.seen.event)
+  /\ IF r.report.claim = "none" THEN TRUE ELSE
+       LET states == {StateAt(actions[j], r.report.events[j]) : j \in Ids}
+           known == UNION {KnownAt(actions[j], r.report.events[j]) : j \in Ids}
+       IN CASE r.report.claim = "done" -> "confirmed" \in states /\ r.report.known = known
+            [] r.report.claim = "not_done" -> states \subseteq NotDoneStates
+            [] OTHER -> states \cap UnsettledStates # {}
+
+\* Regression: the earlier denied slot cannot justify not_done during a later send.
+NotDoneHasNoUnsettled ==
+  (\E i \in Ids : actions[i].report.claim = "not_done")
+  => \A j \in Ids : actions[j].state \notin {"dispatched",Unknown}
 I6 == \A i \in Ids : LET r == actions[i] IN
   /\ r.state = (IF Len(r.journal) = 0 THEN "none" ELSE r.journal[Len(r.journal)].edge[3])
   /\ \A k \in 1..Len(r.journal): LET edge == r.journal[k].edge IN

@@ -173,15 +173,15 @@ An action can record only one effect ID. The modeled destination can commit two 
 
 The search covers the modeled bounds. It does not prove safety for longer runs, liveness, the evaluator's five properties or any real service. It abstracts the final approval poll, virtual deadlines, faults and destination behaviour. The in-process and PostgreSQL tests exercise exact fault points and timings, row locking and transactions. G1, the baselines, agent strategy and transport implementation are outside the model.
 
-On GitHub Actions, both profiles finished on `0b47120` on Linux amd64.
-Times are TLC elapsed time and exclude setup.
+`Dispatch` and `Retry` combine the gateway check and the transaction that records the attempt in one step. `Escalate` is a separate step and journals only the failed-check note when that case applies. The model checks the disposition of an attach offer without an Attach step. It stops modeling gateway crashes once the run closes, although F1 and F3 can fire during the drain window. The modeled F4 copies a request only after its commit.
+
+Both profiles finished with the intent-wide report check on 26 Nov 2026.
+These local macOS measurements use Temurin 17.0.19. Times are TLC elapsed time and exclude setup.
 
 | Profile | Workers | Generated states | Distinct states | Search depth | Elapsed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Bounded CI | 1 | 2,170,421 | 677,392 | 24 | 26 s |
-| Larger nightly | 2 | 15,006,806 | 4,036,946 | 28 | 143 s |
-
-[Bounded CI run](https://github.com/samrusani/FiveFold/actions/runs/45598158102) · [Nightly run](https://github.com/samrusani/FiveFold/actions/runs/45620892045)
+| Bounded CI | 1 | 2,170,421 | 677,392 | 24 | 32 s |
+| Larger nightly | 2 | 18,697,100 | 5,162,646 | 28 | 189 s |
 
 ## Known limits
 
