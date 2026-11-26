@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import mcp_types as types
+from langchain_core.messages import ToolCall, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
@@ -223,6 +225,30 @@ def baseline_tools(
     return [_baseline_tool(transport, scheduler, timeouts, spec, worker) for spec in tools]
 
 
+class _BaselineTool(StructuredTool):
+    async def ainvoke(
+        self,
+        input: str | dict[str, Any] | ToolCall,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        if isinstance(input, dict) and input.get("type") == "tool_call":
+            # LangChain renders tool arguments for its start callback before validation.
+            try:
+                str(input["args"])
+            except ValueError:
+                return ToolMessage(
+                    name=self.name,
+                    tool_call_id=input["id"],
+                    status="error",
+                    content=(
+                        f"Error invoking tool '{self.name}' with invalid arguments. "
+                        "An integer is too large for the run's JSON records."
+                    ),
+                )
+        return await super().ainvoke(input, config, **kwargs)
+
+
 def _baseline_tool(
     transport: Calls, scheduler: Scheduler, timeouts: Timeouts, spec: _ApiTool, worker: str
 ) -> BaseTool:
@@ -243,7 +269,7 @@ def _baseline_tool(
         )
         return json.dumps(reply.body, sort_keys=True)
 
-    return StructuredTool.from_function(
+    return _BaselineTool.from_function(
         coroutine=call, name=spec.name, description=spec.description, args_schema=spec.model
     )
 
