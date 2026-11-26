@@ -714,6 +714,24 @@ def test_tla_replay_offer_and_dispatch_after_denial(quantity: int) -> None:
     ]
 
 
+def test_tla_replay_not_done_while_the_second_action_is_dispatched() -> None:
+    run = Run(Contract.C2)
+    first = run.pending()
+    run.store.poll_approval(first, ApprovalStatus.DENIED, None, run.at(1), seen_seq=run.seq(first))
+    second = run.sent(key="k2")
+    before = run.store.snapshot()
+    assert before.actions[first].state is S.REJECTED
+    assert before.actions[second].state is S.DISPATCHED
+
+    claims = [Claim("REQ-1", ClaimStatus.NOT_DONE), Claim("REQ-2", ClaimStatus.NOT_DONE)]
+    refused = run.store.submit_report(claims, run.at(1), worker="W1")
+    assert isinstance(refused, Refusal) and refused.reason is RefusalReason.REPORT_INCONSISTENT
+    after = run.store.snapshot()
+    assert after.actions == before.actions and after.events == before.events
+    assert not after.run_closed
+    assert after.tool_calls[-1].result == refused
+
+
 def test_tla_replay_status_confirms_one_effect_and_rejects_a_conflicting_report() -> None:
     contract = Contract.C1
     run = Run(contract)
