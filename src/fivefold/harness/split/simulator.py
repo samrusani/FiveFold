@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -88,6 +88,9 @@ from fivefold.sim.endpoint import endpoint
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 """Match the MCP SDK's 4 MiB JSON request limit."""
+
+MAX_REQUEST_DEPTH = 200
+"""Maximum number of nested JSON containers in a simulator request."""
 
 SIMULATOR = "simulator"
 REPORT_SINK = "report_sink"
@@ -221,7 +224,7 @@ class SimulatorService:
         action = request.path_params["action"]
         if action == "drain":
             if self.serving.has_stopped():
-                return unavailable("the run has stopped")
+                return JSONResponse({"status": "stopped"})
             self.serving.draining = True
             return JSONResponse({"status": "draining"})
         if action == "stop":
@@ -459,6 +462,24 @@ async def _json_request(request: Request) -> dict[str, Any] | JSONResponse:
         return _invalid("the body is not a readable JSON object")
     if not isinstance(body, dict):
         return _invalid("the body is not a JSON object")
+    if _too_deep(body):
+        return _invalid(f"the body exceeds {MAX_REQUEST_DEPTH} nested JSON containers")
     if problem := json_storage_problem(body):
         return _invalid(f"the body is refused: {problem}")
     return body
+
+
+def _too_deep(body: dict[str, Any]) -> bool:
+    pending: list[tuple[Iterator[Any], int]] = [(iter(body.values()), 1)]
+    while pending:
+        children, depth = pending[-1]
+        for child in children:
+            if isinstance(child, dict | list):
+                if depth == MAX_REQUEST_DEPTH:
+                    return True
+                items = child.values() if isinstance(child, dict) else child
+                pending.append((iter(items), depth + 1))
+                break
+        else:
+            pending.pop()
+    return False

@@ -10,7 +10,7 @@ import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
 
-from fivefold.harness.log import MessageRecord, RunRecord, SharedPgHarnessLog
+from fivefold.harness.log import EVENT_STAMP_LOCK_KEY, MessageRecord, RunRecord, SharedPgHarnessLog
 
 pytestmark = pytest.mark.pg
 
@@ -71,7 +71,7 @@ def test_two_connections_share_the_stamp_lock(migrated_database: str) -> None:
         one, two = SharedPgHarnessLog(first), SharedPgHarnessLog(second)
         with one.ordering(), second.transaction():
             assert second.execute(
-                "SELECT pg_try_advisory_xact_lock(hashtext('fivefold.harness.event_stamp'))"
+                "SELECT pg_try_advisory_xact_lock(%s::bigint)", (EVENT_STAMP_LOCK_KEY,)
             ).fetchone() == (False,)
         assert one.stamp(lambda: 10)[1] == 10
         assert two.stamp(lambda: 11)[1] == 11

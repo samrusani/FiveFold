@@ -534,6 +534,10 @@ class PgHarnessLog(HarnessLog):
         )
 
 
+EVENT_STAMP_LOCK_KEY = 5_000_008
+"""Transaction advisory lock for ordering shared harness records within a database."""
+
+
 class SharedPgHarnessLog(PgHarnessLog):
     """Harness records that several processes of one run write: the split topology's.
 
@@ -548,8 +552,7 @@ class SharedPgHarnessLog(PgHarnessLog):
         # The sequence and the host clock must be sampled in one order across services.
         with self._conn.transaction():
             self._conn.execute(
-                "SELECT pg_catalog.pg_advisory_xact_lock("
-                "pg_catalog.hashtext('fivefold.harness.event_stamp'))"
+                "SELECT pg_catalog.pg_advisory_xact_lock(%s::bigint)", (EVENT_STAMP_LOCK_KEY,)
             )
             yield
 

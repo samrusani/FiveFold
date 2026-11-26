@@ -768,7 +768,7 @@ class GatewayService:
         action = request.path_params["action"]
         if action == "drain":
             if self.serving.stopped:
-                return unavailable("the run has stopped")
+                return JSONResponse({"status": "stopped"})
             self.drain()
             return JSONResponse({"status": "draining"})
         if action == "stop":

@@ -980,6 +980,27 @@ def test_the_simulator_refuses_a_body_holding_a_nul_before_logging_it(split: Spl
     assert (messages, reports) == ((0,), (0,))
 
 
+def test_a_deep_b0_report_is_refused_before_logging(split: Split) -> None:
+    run = split.start("B0", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    headers = {"authorization": f"Bearer {run.secret(AGENT)}"}
+    body: object = "PO-0001"
+    for _ in range(200):
+        body = [body]
+    try:
+        refused = httpx.post(
+            f"{simulator.url}/api/submit_final_report", json={"claims": body}, headers=headers
+        )
+        assert refused.status_code == 422, refused.text
+        assert "200 nested JSON containers" in refused.json()["detail"]
+        with split.connect() as conn:
+            messages = conn.execute("SELECT count(*) FROM harness.message_log").fetchone()
+            reports = conn.execute("SELECT count(*) FROM harness.final_report").fetchone()
+        assert (messages, reports) == ((0,), (0,))
+    finally:
+        simulator.stop()
+
+
 def test_the_gateway_refuses_an_mcp_message_holding_a_nul_before_logging_it(
     split: Split,
 ) -> None:
@@ -1191,6 +1212,48 @@ def test_the_agents_phase_ends_then_the_run_stops(split: Split) -> None:
     with split.connect() as conn:
         stop = conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone()
     assert stop == (stopped.json()["stopped_vt"],)
+
+
+def test_end_retries_cleanup_after_both_services_have_stopped(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = split.start("G2", [])
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    try:
+        gateway = serve(
+            GatewayService(run, base_dsn=split.admin, simulator_url=simulator.url).app()
+        )
+        try:
+            end = partial(
+                end_run,
+                run,
+                admin_dsn=split.admin,
+                simulator_url=simulator.url,
+                gateway_url=gateway.url,
+            )
+            original = lifecycle.drop_unlogged
+
+            def fail_cleanup(run: SplitRun, admin_dsn: str) -> None:
+                raise OSError("cleanup interrupted")
+
+            monkeypatch.setattr(lifecycle, "drop_unlogged", fail_cleanup)
+            with pytest.raises(OSError, match="cleanup interrupted"):
+                asyncio.run(end())
+            assert not run.ended
+            for service in (gateway, simulator):
+                assert httpx.get(f"{service.url}/health").json()["status"] == "stopped"
+            monkeypatch.setattr(lifecycle, "drop_unlogged", original)
+            stopped_at = asyncio.run(end())
+            assert read_run(run.directory).ended
+            with split.connect() as conn:
+                assert conn.execute("SELECT stopped_vt FROM harness.run_stop").fetchone() == (
+                    stopped_at,
+                )
+            score_run(run, admin_dsn=split.admin)
+        finally:
+            gateway.stop()
+    finally:
+        simulator.stop()
 
 
 @pytest.mark.parametrize("how", ["ended", "stopped"])
