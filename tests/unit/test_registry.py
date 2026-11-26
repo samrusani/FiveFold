@@ -3,6 +3,8 @@ no database."""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+
 import pytest
 
 from fivefold.harness.migrations import (
@@ -49,3 +51,22 @@ def test_a_run_database_is_named_by_its_connection_string() -> None:
 def test_a_connection_string_without_a_database_is_refused() -> None:
     with pytest.raises(RegistryError, match="names no database"):
         database_of("postgresql://postgres@127.0.0.1:5432")
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        {TEMPLATE_ENV: REGISTRY_DATABASE},
+        {TEMPLATE_ENV: "fivefold_dev"},
+        {REGISTRY_ENV: TEMPLATE_DATABASE},
+        {REGISTRY_ENV: "fivefold_dev"},
+        {TEMPLATE_ENV: "shared_database", REGISTRY_ENV: "shared_database"},
+    ],
+)
+@pytest.mark.parametrize("read_name", [template_database, registry_database])
+def test_reserved_database_names_cannot_collide(
+    read_name: Callable[[Mapping[str, str]], str], names: dict[str, str]
+) -> None:
+    with pytest.raises(MigrationError, match=r"reserved|distinct") as error:
+        read_name(names)
+    assert "drop" not in str(error.value).lower()
