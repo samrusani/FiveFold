@@ -104,22 +104,24 @@ class SimulatorFaults:
         if not isinstance(supplier_id, str) or not isinstance(sku, str):
             raise FaultEffectError("F8 fired without a supplier and sku")
         key = memory_key(supplier_id, sku)
+        current = self._control.current_fact(key)
+        if current is None:
+            # A trigger can fire on a supplier that has no memory to correct.
+            return
         if str(fired.planned.variant).endswith("_relevant"):
             changes = {"order_channel": "portal"}
         else:
-            current = self._control.current_fact(key)
-            if current is None:
-                raise FaultEffectError(f"F8: there is no memory {key}")
             changes = {"notes": f"{current.data['notes']} (corrected)"}
         self._control.correct_memory(key, changes, actor=FAULT_ACTOR, vt=self._scheduler.now)
 
     def _ceiling(self, context: Mapping[str, object], price: int) -> int:
         """The intent's highest acceptable unit price, so the change stays acceptable."""
         intent_id = context.get("intent_id")
-        if isinstance(intent_id, str):
-            accept = self._scenario.intent(intent_id).accept
-            if isinstance(accept, PurchaseOrderAccept):
-                return max(price, accept.max_unit_price_minor)
+        accept = next(
+            (intent.accept for intent in self._scenario.intents if intent.id == intent_id), None
+        )
+        if isinstance(accept, PurchaseOrderAccept):
+            return max(price, accept.max_unit_price_minor)
         return price * 2
 
 

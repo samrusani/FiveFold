@@ -12,6 +12,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
+import pytest
 from mcp.client.session import ClientSession
 
 from fivefold.domain.api import FactRead, GetBudget, GetInventory, GetQuote, ListSuppliers
@@ -346,6 +347,27 @@ def test_a_write_that_breaks_the_schema_is_refused_and_recorded() -> None:
     assert "quantity" in refused["details"]["message"]
     (record,) = run.store.snapshot().proposals
     assert (record.admission, record.reason) == (Admission.REFUSED, RefusalReason.INVALID_ARGS)
+
+
+def test_an_unencodable_argument_is_refused_before_proposing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fivefold.gateway import tools as gateway_tools_module
+
+    def encode(*args: object) -> None:
+        raise RecursionError("the store cannot encode this argument")
+
+    monkeypatch.setattr(gateway_tools_module, "storable", encode, raising=False)
+    run = Run()
+    seen: list[dict[str, Any]] = []
+
+    async def agent(client: Client) -> None:
+        seen.append(await client.ok("submit_purchase_order", **ORDER))
+
+    run.go(agent)
+    (refused,) = seen
+    assert (refused["result"], refused["reason"]) == ("refused", "invalid_args")
+    assert not run.store.snapshot().actions
 
 
 def test_a_write_without_citations_is_refused_for_its_missing_basis() -> None:

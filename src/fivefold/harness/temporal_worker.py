@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import Future
 from datetime import timedelta
 from pathlib import Path
@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage
 from temporalio import activity
 from temporalio.api.enums.v1 import EventType
 from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -98,6 +99,7 @@ class TemporalHost:
         )
         self.episode = 0
         self.receivers: dict[str, Receiver] = {}
+        self.workflows: dict[str, tuple[asyncio.Task[bool], asyncio.Event]] = {}
 
     def __enter__(self) -> TemporalHost:
         self.thread.start()
@@ -132,7 +134,7 @@ class TemporalHost:
                     self.ready.set_exception(error)
                 else:
                     logging.exception("Temporal poller stopped")
-                    for receive in self.receivers.values():
+                    for receive in tuple(self.receivers.values()):
                         receive(Broken(error))
 
     async def _poll(self) -> None:
@@ -149,19 +151,29 @@ class TemporalHost:
                 max_cached_workflows=0,
             ):
                 self.ready.set_result(None)
-                await self.stop.wait()
+                try:
+                    await self.stop.wait()
+                finally:
+                    await self._finish_workflows(tuple(self.workflows))
 
     def next_episode(self) -> str:
         self.episode += 1
         return f"{self.task_queue}-{self.episode}"
 
     def start(self, execution: str, spec: dict[str, Any], receive: Receiver) -> None:
-        async def workflow_result() -> None:
+        async def workflow_result(started: asyncio.Event) -> bool:
             self.receivers[execution] = receive
             try:
-                handle = await self.client.start_workflow(
-                    ScriptedWorkflow.run, spec, id=execution, task_queue=self.task_queue
-                )
+                try:
+                    handle = await self.client.start_workflow(
+                        ScriptedWorkflow.run,
+                        spec,
+                        id=execution,
+                        task_queue=self.task_queue,
+                        rpc_timeout=timedelta(seconds=HOST_WAIT_S),
+                    )
+                finally:
+                    started.set()
                 result = await handle.result()
                 history = await handle.fetch_history()
                 if any(event.event_type in TIMEOUT_EVENTS for event in history.events):
@@ -169,12 +181,62 @@ class TemporalHost:
                         "Temporal history contains an infrastructure timeout"
                     )
                 receive(Done(result))
+                return True
             except Exception as error:
                 receive(Broken(error))
+                return False
             finally:
                 self.receivers.pop(execution, None)
 
-        self.loop.call_soon_threadsafe(lambda: asyncio.create_task(workflow_result()))
+        def schedule() -> None:
+            started = asyncio.Event()
+            self.workflows[execution] = (asyncio.create_task(workflow_result(started)), started)
+
+        if self.loop.is_closed():
+            raise TemporalInfrastructureError("Temporal poller is closed")
+        try:
+            self.loop.call_soon_threadsafe(schedule)
+        except RuntimeError as error:
+            raise TemporalInfrastructureError(
+                "Temporal poller could not start the workflow"
+            ) from error
+
+    async def finish(self, executions: tuple[str, ...]) -> None:
+        if executions and not self.loop.is_closed():
+            await self._submit(self._finish_workflows(executions))
+
+    async def _finish_workflows(self, executions: tuple[str, ...]) -> None:
+        async def finish(execution: str) -> None:
+            tracked = self.workflows.get(execution)
+            if tracked is None:
+                return
+            task, started = tracked
+            try:
+                await started.wait()
+                if not task.done() or not task.result():
+                    await self.client.get_workflow_handle(execution).terminate(
+                        reason="FiveFold episode ended",
+                        rpc_timeout=timedelta(seconds=HOST_WAIT_S),
+                    )
+            except RPCError as error:
+                if error.status != RPCStatusCode.NOT_FOUND:
+                    raise
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                self.workflows.pop(execution, None)
+
+        await asyncio.gather(*(finish(execution) for execution in executions))
+
+    async def _submit(self, operation: Coroutine[Any, Any, None]) -> None:
+        try:
+            if self.loop.is_closed():
+                raise RuntimeError("Temporal poller is closed")
+            future = asyncio.run_coroutine_threadsafe(operation, self.loop)
+        except RuntimeError as error:
+            operation.close()
+            raise TemporalInfrastructureError("Temporal poller is unavailable") from error
+        await asyncio.wrap_future(future)
 
     async def answer(self, request: Request, result: Any, error: str | None) -> None:
         async def reply() -> None:
@@ -184,7 +246,7 @@ class TemporalHost:
             else:
                 await handle.fail(ApplicationError(error))
 
-        await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(reply(), self.loop))
+        await self._submit(reply())
 
     async def _detach(self, kind: str, payload: dict[str, Any]) -> None:
         info = activity.info()
@@ -220,6 +282,11 @@ class TemporalWorkers(BaselineWorkers):
         self.host = host
         self.episode = host.next_episode()
         self.queues: dict[str, asyncio.Queue[Delivery]] = {}
+        self.executions: set[str] = set()
+
+    async def stop(self) -> None:
+        """End this episode's workflows before releasing the host or reusing it."""
+        await self.host.finish(tuple(sorted(self.executions)))
 
     async def work(self, worker: str, *, resume: bool) -> None:
         if not resume:
@@ -253,10 +320,18 @@ class TemporalWorkers(BaselineWorkers):
             loop = asyncio.get_running_loop()
 
             def deliver(command: Delivery) -> None:
-                loop.call_soon_threadsafe(queue.put_nowait, command)
+                if loop.is_closed():
+                    return
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, command)
+                except RuntimeError:
+                    if not loop.is_closed():
+                        raise
 
+            execution = f"{self.episode}-{worker}"
+            self.executions.add(execution)
             self.host.start(
-                f"{self.episode}-{worker}",
+                execution,
                 {
                     "initial": _encode(HumanMessage(self.run.spec.scenario.task)),
                     "max_steps": self.run.spec.scenario.budget.max_agent_steps,

@@ -17,7 +17,12 @@ from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator.result import RunResult, Verdict, comparable_json, result_json
 from fivefold.faults.plan import parse_plan
 from fivefold.harness.clock import wall_ms
-from fivefold.harness.migrations import bootstrap_server, create_run_database, registry_database
+from fivefold.harness.migrations import (
+    bootstrap_server,
+    check_run_destinations,
+    create_run_database,
+    registry_database,
+)
 from fivefold.harness.run import InprocRun, RunSpec, run_plan
 from fivefold.harness.study import as_config, drop_own_database
 from fivefold.paths import DB_DIR
@@ -153,6 +158,7 @@ def shrink(
     started = wall_ms()
     spec, original = source_spec(source, scenario)
     prefix = "fivefold_shrink_" + sha256(str(out.resolve()))[:16]
+    final_database = f"{prefix}_final"
     written: list[Path] = []
 
     def write(name: str, content: str) -> None:
@@ -163,6 +169,7 @@ def shrink(
 
     out.mkdir()
     try:
+        check_run_destinations(admin_dsn, [final_database], DB_DIR / "migrations", replace=False)
         bootstrap_server(admin_dsn, DB_DIR)
         with _trial(admin_dsn, f"{prefix}_original", spec, original) as baseline:
             observed = baseline.observation()
@@ -185,7 +192,6 @@ def shrink(
         found = minimize(
             spec, original, observed, trial, max_candidates=max_candidates, expired=expired
         )
-        final_database = f"{prefix}_final"
         with _trial(admin_dsn, final_database, spec, found.plan, keep=keep_database) as final:
             observation = final.observation()
             if observation != found.observation:

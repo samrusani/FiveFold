@@ -347,6 +347,8 @@ class InprocRun:
                 if isinstance(error.__cause__, TemporalInfrastructureError):
                     raise error.__cause__ from None
                 raise
+            finally:
+                await self._temporal_workers.stop()
 
     async def _execute_dbos(self) -> RunResult:
         import sys

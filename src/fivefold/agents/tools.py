@@ -53,6 +53,7 @@ from fivefold.domain.api import (
     SubmitPurchaseOrder,
     WaitLimit,
 )
+from fivefold.domain.json_storage import encodable_json
 from fivefold.domain.report import FinalReport
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Calls
@@ -105,11 +106,20 @@ def _gateway_tool(connection: ToolCaller, tool: types.Tool, timeouts: Timeouts) 
     name = tool.name
 
     async def call(**arguments: Any) -> str:
+        if not encodable_json(arguments):
+            return json.dumps(
+                {
+                    "result": "refused",
+                    "reason": "invalid_args",
+                    "details": {"message": "the arguments cannot be stored as JSON"},
+                }
+            )
         if name in GATEWAY_WRITES:
             timeout = timeouts.tool_wait_ms + timeouts.t_ms
         else:
-            wait_ms = int(arguments.get("wait_ms", 0) or 0)
-            timeout = min(wait_ms, timeouts.max_wait_ms) + timeouts.t_ms
+            wait_ms = arguments.get("wait_ms", 0)
+            wait = max(0, min(wait_ms, timeouts.max_wait_ms)) if type(wait_ms) is int else 0
+            timeout = wait + timeouts.t_ms
         result = await connection.call_tool(name, arguments, timeout)
         text = "".join(c.text for c in result.content if isinstance(c, types.TextContent))
         if result.is_error and _error_code(text) == "gateway_timeout":

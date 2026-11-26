@@ -39,6 +39,7 @@ from pydantic import (
 )
 
 from fivefold.domain.authority import ApprovalStatus
+from fivefold.domain.json_storage import json_integer, purchase_amount
 from fivefold.domain.rules import (
     BUSINESS_ARGS,
     CURRENCY_PATTERN,
@@ -59,8 +60,8 @@ Currency = Annotated[str, StringConstraints(pattern=CURRENCY_PATTERN)]
 Ref = Annotated[str, StringConstraints(pattern=r"^[^\x00-\x1f\x7f]{1,200}$")]
 """A caller's own reference: 1 to 200 characters, no control characters."""
 
-Quantity = Annotated[StrictInt, Field(ge=1)]
-Minor = Annotated[StrictInt, Field(ge=0)]
+Quantity = Annotated[StrictInt, Field(ge=1), AfterValidator(json_integer)]
+Minor = Annotated[StrictInt, Field(ge=0), AfterValidator(json_integer)]
 """An amount of money in minor units, such as cents."""
 
 Version = Annotated[StrictInt, Field(ge=1)]
@@ -337,6 +338,11 @@ class SubmitPurchaseOrder(WriteRequest):
     unit_price_minor: Minor
     currency: Currency
     cost_center: Id
+
+    @model_validator(mode="after")
+    def _encodable_amount(self) -> SubmitPurchaseOrder:
+        purchase_amount(self.quantity, self.unit_price_minor)
+        return self
 
 
 class ReserveInventory(WriteRequest):
