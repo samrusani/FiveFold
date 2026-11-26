@@ -113,6 +113,8 @@ def endpoint(
     queued approval requests (0002, rule 7). `points`, if given, decides the faults at
     the simulator's fault points. `max_wait_ms` is the run's longest status wait (0005).
     """
+    if poll_ms <= 0:
+        raise ValueError("approval status poll_ms must be positive")
     limit = WaitLimit(max_wait_ms)
 
     async def handle(request: Envelope) -> Reply:

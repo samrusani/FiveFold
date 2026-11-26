@@ -65,11 +65,13 @@ class SimulatorFaults:
         approval_id = context.get("approval_id")
         if not isinstance(approval_id, str):
             raise FaultEffectError(f"{fired.fault} fired where no approval is cited")
-        now = self._scheduler.now
-        answer = self._control.revoke(approval_id, actor=APPROVER, vt=now)
+        with self._log.ordering():
+            now = self._scheduler.now
+            answer = self._control.revoke(approval_id, actor=APPROVER, vt=now)
+            seq = self._log.next_seq()
         self._log.actor_acted(
             ActorRecord(
-                seq=self._log.next_seq(),
+                seq=seq,
                 actor="approver",
                 action="revoke",
                 subject=approval_id,

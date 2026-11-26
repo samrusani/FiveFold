@@ -138,11 +138,11 @@ class Hops:
         """Log a message as sent, with no fate yet; return it as its receiver gets it.
 
         It is sent now, unless `sent_vt` gives the earlier time at which its sender
-        recorded the send: the gateway's write attempt (`SimulatorLink`).
+        recorded the send: the gateway's write attempt (`SimulatorLink`). That earlier
+        time defines the settle bound. Recovery latency uses the delivery's own stamp.
         """
         kept = json.loads(json.dumps(body, sort_keys=True))
-        seq = self._log.next_seq()
-        now = self._scheduler.now
+        seq, now = self._log.stamp(lambda: self._scheduler.now)
         if sent_vt is None:
             sent_vt = now
         elif sent_vt > now:
@@ -166,9 +166,8 @@ class Hops:
 
     def delivered(self, envelope: Envelope) -> None:
         """Log that `envelope` reached its receiver now."""
-        self._log.message_fate(
-            envelope.seq, "delivered", vt=self._scheduler.now, delivered_seq=self._log.next_seq()
-        )
+        seq, vt = self._log.stamp(lambda: self._scheduler.now)
+        self._log.message_fate(envelope.seq, "delivered", vt=vt, delivered_seq=seq)
 
     def dropped(self, envelope: Envelope, reason: DropReason) -> None:
         """Log that `envelope` never reached its receiver, and why."""
@@ -209,8 +208,10 @@ class Hops:
         The copy repeats the request field for field, with its own seq and `copy_of`
         naming the request. It is due `copy_delay_ms` after the request's delivery.
         """
-        fault_seq = self._log.next_seq()
-        copy = replace(original, seq=self._log.next_seq(), copy_of=original.seq)
+        with self._log.ordering():
+            fault_seq = self._log.next_seq()
+            vt = self._scheduler.now
+            copy = replace(original, seq=self._log.next_seq(), copy_of=original.seq)
         self._log.fault_fired(
             FaultRecord(
                 seq=fault_seq,
@@ -219,7 +220,7 @@ class Hops:
                 point=point,
                 occurrence=fired.occurrence,
                 action=str(Action.DUPLICATE),
-                vt=self._scheduler.now,
+                vt=vt,
                 target_seq=original.seq,
                 params={**fired.planned.params, "copy_seq": copy.seq},
                 intent_id=original.intent_id,
@@ -229,15 +230,16 @@ class Hops:
         return copy
 
     def _record(self, fired: Fired, point: str, envelope: Envelope) -> None:
+        seq, vt = self._log.stamp(lambda: self._scheduler.now)
         self._log.fault_fired(
             FaultRecord(
-                seq=self._log.next_seq(),
+                seq=seq,
                 fault=str(fired.fault),
                 variant=fired.planned.variant,
                 point=point,
                 occurrence=fired.occurrence,
                 action=str(fired.planned.kind.action),
-                vt=self._scheduler.now,
+                vt=vt,
                 target_seq=envelope.seq,
                 params=dict(fired.planned.params),
                 intent_id=envelope.intent_id,

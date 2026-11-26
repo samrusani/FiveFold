@@ -53,15 +53,16 @@ class ReportSink:
             errors = tuple(invalid.errors)
         if not storable(kept):
             kept = {TEXT_KEY: text}
+        seq, vt = self._log.stamp(lambda: self._scheduler.now)
         self._log.report_submitted(
             ReportRecord(
-                seq=self._log.next_seq(),
+                seq=seq,
                 worker=worker,
                 report=kept,
                 valid=not errors,
                 errors=errors,
                 accepted_by=accepted_by,
-                vt=self._scheduler.now,
+                vt=vt,
                 message_seq=message_seq,
             )
         )

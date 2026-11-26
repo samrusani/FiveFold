@@ -37,6 +37,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from fivefold.domain.scenario import Scenario
+from fivefold.faults.catalog import F5_BEYOND_DEADLINE, FaultId
 from fivefold.faults.plan import PlannedFault
 
 SPLIT_POINTS = (
@@ -49,6 +50,9 @@ SPLIT_POINTS = (
     "sim.status.answer",
 )
 """The points where the split topology fires faults (see the module's table)."""
+
+COMMIT_MARGIN_MS = 50
+"""Headroom below D for a late commit on the host scheduler."""
 
 
 class SplitRefused(ValueError):
@@ -68,6 +72,18 @@ def check_split(plan: Sequence[PlannedFault], scenario: Scenario) -> None:
             f"the split topology cannot run {', '.join(wrong)}: it fires faults on the"
             " network and in the simulator, never inside the gateway or your agent (0009)"
         )
+    if any(planned.fault is FaultId.F8 for planned in plan):
+        raise SplitRefused("the split topology cannot run F8 (0023)")
+    deadline = scenario.params.commit_deadline_ms
+    for planned in plan:
+        if (
+            planned.fault is FaultId.F5
+            and planned.variant != F5_BEYOND_DEADLINE
+            and planned.param("delay_ms") > deadline - COMMIT_MARGIN_MS
+        ):
+            raise SplitRefused(
+                f"split F5 needs delay_ms at least {COMMIT_MARGIN_MS} ms below D ({deadline} ms)"
+            )
     if scenario.authority.resolver != "none":
         raise SplitRefused(
             "the split topology has no scripted resolver: set the scenario's resolver to"

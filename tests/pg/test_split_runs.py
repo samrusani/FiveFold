@@ -58,6 +58,7 @@ from fivefold.harness.migrations import (
 from fivefold.harness.registry import forget
 from fivefold.harness.scheduler import HostScheduler
 from fivefold.harness.split import __main__ as split_main
+from fivefold.harness.split import lifecycle
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.gateway import AdminFactory, GatewayService, admin_api
@@ -65,6 +66,7 @@ from fivefold.harness.split.lifecycle import default_database, end_run, score_ru
 from fivefold.harness.split.rundir import Config, RunDirError, SplitRun, read_run
 from fivefold.harness.split.service import open_run
 from fivefold.harness.split.simulator import SimulatorService
+from fivefold.harness.transport import Envelope, Handler, Reply
 from fivefold.paths import DB_DIR
 
 pytestmark = pytest.mark.pg
@@ -875,7 +877,42 @@ def test_the_simulator_refuses_the_agents_identity_in_g_modes(split: Split) -> N
     assert effects == (0,)
     assert writes == (0,)
     assert reads == [(GATEWAY,)]
-    assert sorted(hops) == [("agent_sim", AGENT), ("gw_sim", GATEWAY)]
+    assert hops == [("gw_sim", GATEWAY)]
+
+
+def test_a_missed_simulator_deadline_returns_a_protocol_error(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = split.start("B0", [])
+
+    async def missed(service: SimulatorService, arrived: Envelope, handler: Handler) -> Reply:
+        return Reply({"answer": "aborted", "received_seq": 1, "deadline_vt": 10}, "aborted")
+
+    monkeypatch.setattr(SimulatorService, "_handled", missed)
+    simulator = serve(SimulatorService(run, base_dsn=split.admin).app())
+    try:
+        response = httpx.post(
+            f"{simulator.url}/api/{ORDER}",
+            headers={"authorization": f"Bearer {run.secret(AGENT)}"},
+            json={
+                "intent_id": "REQ-1",
+                "approval_id": "APR-0001",
+                "basis": {},
+                "supplier_id": "S-1",
+                "sku": "W-100",
+                "quantity": 1,
+                "unit_price_minor": 540,
+                "currency": "USD",
+                "cost_center": "CC-OPS",
+            },
+        )
+    finally:
+        simulator.stop()
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "unavailable",
+        "detail": "the write missed its commit deadline",
+    }
 
 
 def test_once_the_agents_phase_is_over_the_scripted_agent_is_told_so(split: Split) -> None:
@@ -1037,6 +1074,22 @@ def test_start_refuses_a_database_of_the_same_name_unless_it_may_replace_it(
     template = Split(split.admin, split.template, split.template, split.root)
     with pytest.raises(RunDirError, match="is the template"):
         _start(template, split.root / "template", replace=True)
+
+
+def test_start_cleans_its_new_database_if_setup_fails(
+    split: Split, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("setup failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle, "setup_run", fail)
+        with pytest.raises(RuntimeError, match="setup failed"):
+            _start(split, split.root / "initial")
+    assert not (split.root / "initial").exists()
+    assert _database_oid(split) is None
+    assert _registered(split) == []
+    _start(split, split.root / "retry")
 
 
 def test_replace_drops_only_a_database_that_holds_this_run(

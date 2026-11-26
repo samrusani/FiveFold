@@ -80,11 +80,13 @@ class ScriptedApprover:
         )
 
     def _decide(self, approval_id: str, decision: Decision) -> None:
-        now = self._scheduler.now
-        answer = self._control.decide(approval_id, decision, actor=APPROVER, vt=now)
+        with self._log.ordering():
+            now = self._scheduler.now
+            answer = self._control.decide(approval_id, decision, actor=APPROVER, vt=now)
+            seq = self._log.next_seq()
         self._log.actor_acted(
             ActorRecord(
-                seq=self._log.next_seq(),
+                seq=seq,
                 actor="approver",
                 action=str(decision),
                 subject=approval_id,

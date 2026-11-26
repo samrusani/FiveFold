@@ -100,7 +100,7 @@ from fivefold.gateway.store import ActionStore
 from fivefold.gateway.tools import GatewayTools, ToolTiming
 from fivefold.harness.actors import ATTEST
 from fivefold.harness.clock import HostClock
-from fivefold.harness.log import NUL_REFUSED, ActorRecord, HarnessLog, JsonValue, holds_nul
+from fivefold.harness.log import ActorRecord, HarnessLog, JsonValue
 from fivefold.harness.mcp_link import Delivery, answer_label
 from fivefold.harness.reports import ReportSink
 from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
@@ -108,7 +108,7 @@ from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
 from fivefold.harness.split.hops import SEQ_HEADER, Hops, logged_message
 from fivefold.harness.split.rundir import SplitRun
-from fivefold.harness.split.service import OpenRun, open_run, unavailable
+from fivefold.harness.split.service import OpenRun, json_storage_problem, open_run, unavailable
 from fivefold.harness.transport import Envelope, Hop, Reply, TransportError, TransportTimeout
 
 DEFAULT_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*", "gateway:*")
@@ -278,8 +278,8 @@ class AgentHop:
         serving = self._service.serving
         hops = serving.hops
         body = _message_body(ctx)
-        if holds_nul(body):
-            raise MCPError(code=INVALID_PARAMS, message=f"the message is refused: {NUL_REFUSED}")
+        if problem := json_storage_problem(body):
+            raise MCPError(code=INVALID_PARAMS, message=f"the message is refused: {problem}")
         message = hops.sent(
             hop="agent_gw",
             kind="notification" if ctx.request_id is None else "request",
@@ -292,11 +292,13 @@ class AgentHop:
         outcome = hops.fire("net.agent_gw.request", message)
         if outcome.dropped:
             hops.dropped(message, "fault")
-            await serving.stopping.wait()
-            raise MCPError(code=SERVICE_STOPPED, message="the run has stopped")
-        hops.delivered(message)
+        else:
+            hops.delivered(message)
         for fired in outcome.copies:
             self._deliver_copy_later(fired, message, ctx, call_next)
+        if outcome.dropped:
+            await serving.stopping.wait()
+            raise MCPError(code=SERVICE_STOPPED, message="the run has stopped")
         if message.kind == "notification":
             return await call_next(replace(ctx, request=Delivery(message.seq)))
         try:
@@ -538,7 +540,7 @@ class RecordedAdmin(GatewayAdmin):
         *,
         actor: str,
     ) -> ActionResult:
-        with self._attestations.attesting():
+        with self._attestations.attesting(), self._log.ordering():
             result = super().resolve(escalation_id, resolution, effect_id, actor=actor)
             self._log_attestation(escalation_id, resolution, effect_id)
         return result
@@ -678,7 +680,7 @@ class GatewayService:
             settings=settings,
             identity=self.run.config == "G2",
         )
-        client = httpx.AsyncClient(base_url=self._simulator_url, timeout=None)
+        client = httpx.AsyncClient(base_url=self._simulator_url, timeout=None, trust_env=False)
         hops = Hops(scheduler, opened.log, FaultInjector(opened.plan))
         link = SimulatorLink(
             scheduler,
@@ -765,6 +767,8 @@ class GatewayService:
             return JSONResponse({"error": "forbidden"}, status_code=401)
         action = request.path_params["action"]
         if action == "drain":
+            if self.serving.stopped:
+                return unavailable("the run has stopped")
             self.drain()
             return JSONResponse({"status": "draining"})
         if action == "stop":

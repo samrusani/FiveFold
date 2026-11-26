@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+import httpx2
 import mcp_types as types
 from langgraph.checkpoint.memory import InMemorySaver
 from mcp.client.session import ClientSession
@@ -104,6 +105,7 @@ class HttpGatewayConnection:
         self._timeout_ms = timeout_ms
         self._current: _Session | None = None
         self._opening = asyncio.Lock()
+        self._holders: set[asyncio.Task[None]] = set()
 
     async def list_tools(self) -> types.ListToolsResult:
         """The gateway's tools, from `tools/list`."""
@@ -145,6 +147,11 @@ class HttpGatewayConnection:
         if current is not None:
             current.done.set()
 
+    async def aclose(self) -> None:
+        """Close the current session and wait for all old sessions to unwind."""
+        self.close()
+        await asyncio.gather(*self._holders, return_exceptions=True)
+
     async def _session(self) -> ClientSession:
         async with self._opening:
             current = self._current
@@ -155,7 +162,14 @@ class HttpGatewayConnection:
             opened: asyncio.Future[ClientSession] = loop.create_future()
             done, ended = asyncio.Event(), asyncio.Event()
             holder = loop.create_task(self._hold(opened, done, ended), name="gateway session")
-            session = await opened
+            self._holders.add(holder)
+            holder.add_done_callback(self._holders.discard)
+            try:
+                session = await opened
+            except BaseException:
+                holder.cancel()
+                await asyncio.gather(holder, return_exceptions=True)
+                raise
             fresh = _Session(session, done, ended, holder)
             self._current = fresh
             try:
@@ -174,7 +188,8 @@ class HttpGatewayConnection:
         """Keep one session open until it is no longer needed, or its connection fails."""
         try:
             async with (
-                streamable_http_client(self._url) as (read, write),
+                httpx2.AsyncClient(timeout=httpx2.Timeout(30, read=300), trust_env=False) as client,
+                streamable_http_client(self._url, http_client=client) as (read, write),
                 ClientSession(read, write) as session,
             ):
                 opened.set_result(session)
@@ -293,10 +308,12 @@ async def run_remote_agent(agent: RemoteAgent) -> tuple[WorkerEnd, str]:
             )
             return await run_worker(graph, spec, resume=False)
         finally:
-            connection.close()
+            await connection.aclose()
     if agent.simulator_url is None or agent.secret is None:
         raise ValueError("B0 reaches the simulator: give its address and the agent's credential")
-    async with httpx.AsyncClient(base_url=agent.simulator_url, timeout=None) as client:
+    async with httpx.AsyncClient(
+        base_url=agent.simulator_url, timeout=None, trust_env=False
+    ) as client:
         api = HttpApi(scheduler, client, secret=agent.secret)
         tools = baseline_tools(
             api, scheduler, timeouts, worker=WORKER, status=agent.contract.has(Capability.STATUS)

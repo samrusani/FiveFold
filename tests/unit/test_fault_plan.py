@@ -428,10 +428,20 @@ def test_f5_holds_a_write_for_5000_ms_unless_the_plan_says_otherwise() -> None:
     default, chosen = parse_plan(
         [
             {"fault": "F5", "at": {"point": "sim.write.received"}},
-            {"fault": "F5", "at": {"point": "sim.write.received"}, "params": {"delay_ms": 7_000}},
+            {
+                "fault": "F5",
+                "at": {"point": "sim.write.received", "occurrence": 2},
+                "params": {"delay_ms": 7_000},
+            },
         ]
     )
     assert (default.param("delay_ms"), chosen.param("delay_ms")) == (5_000, 7_000)
+
+
+def test_a_plan_cannot_delay_one_write_twice() -> None:
+    entry = {"fault": "F5", "at": {"point": "sim.write.received"}}
+    with pytest.raises(ValueError, match="two F5 entries cannot delay the same write"):
+        parse_plan([entry, entry])
 
 
 @pytest.mark.parametrize(

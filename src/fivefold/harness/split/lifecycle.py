@@ -42,7 +42,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,7 @@ from fivefold.harness.migrations import (
     bootstrap_server,
     check_database_name,
     create_run_database,
+    drop_database,
     template_database,
 )
 from fivefold.harness.registry import RegistryEntry, register
@@ -159,9 +161,11 @@ def start_run(
     check_database_name(template)
     if name == template:
         raise RunDirError(f"database {name} is the template run databases are made from")
-    with new_run_directory(run_dir) as reserved:
+    with (
+        new_run_directory(run_dir) as reserved,
+        _run_database(admin_dsn, name, template, run_id=run_id, replace=replace) as dsn,
+    ):
         run = SplitRun(run_dir, run_id, name, config, contract, seed)
-        dsn = _run_database(admin_dsn, name, template, run_id=run_id, replace=replace)
         with psycopg.connect(role_dsn(dsn, "ff_harness"), autocommit=True) as conn:
             SharedPgHarnessLog(conn).run_recorded(
                 RunRecord(
@@ -182,17 +186,6 @@ def start_run(
                     topology="split",
                 )
             )
-        register(
-            dsn,
-            RegistryEntry(
-                database=name,
-                run_id=run_id,
-                scenario_id=scenario.id,
-                config=config,
-                contract=str(contract),
-                seed=seed,
-            ),
-        )
         credentials = (GATEWAY,) if config != "B0" else (AGENT,)
         simulator = SimConfig.preset(
             contract, credentials=credentials, params=scenario.params.contract_params()
@@ -205,6 +198,17 @@ def start_run(
             scenario_text=scenario_text,
             secrets=secrets,
             callers=Callers.of(secrets),
+        )
+        register(
+            dsn,
+            RegistryEntry(
+                database=name,
+                run_id=run_id,
+                scenario_id=scenario.id,
+                config=config,
+                contract=str(contract),
+                seed=seed,
+            ),
         )
     return run
 
@@ -219,7 +223,10 @@ def _plan_of(scenario: Scenario) -> list[Mapping[str, Any]]:
     return list(scenario.faults)
 
 
-def _run_database(admin_dsn: str, name: str, template: str, *, run_id: str, replace: bool) -> str:
+@contextmanager
+def _run_database(
+    admin_dsn: str, name: str, template: str, *, run_id: str, replace: bool
+) -> Iterator[str]:
     """Make the run's database from the migrated template; return its admin DSN. The
     component roles and the run registry are made first, if they are missing.
 
@@ -248,7 +255,11 @@ def _run_database(admin_dsn: str, name: str, template: str, *, run_id: str, repl
         raise RunDirError(f"database {name} already exists: replace it, or name another") from None
     except MigrationError as error:
         raise RunDirError(str(error)) from error
-    return created.dsn
+    try:
+        yield created.dsn
+    except BaseException:
+        drop_database(admin_dsn, created.name, oid=created.oid)
+        raise
 
 
 def _check_this_runs(conn: Connection, admin_dsn: str, name: str, run_id: str) -> None:
@@ -286,7 +297,7 @@ async def end_run(
     if run.has_gateway and gateway_url is None:
         raise ValueError(f"run {run.run_id} is {run.config}: give the gateway's address")
     secret = run.secret(HARNESS)
-    async with httpx.AsyncClient(timeout=CONTROL_TIMEOUT_S) as client:
+    async with httpx.AsyncClient(timeout=CONTROL_TIMEOUT_S, trust_env=False) as client:
         if gateway_url is not None and run.has_gateway:
             await _control(client, gateway_url, "drain", secret)
         await _control(client, simulator_url, "drain", secret)

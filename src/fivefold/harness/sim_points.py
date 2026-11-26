@@ -179,15 +179,16 @@ class SimulatorPoints:
     def _record(
         self, fired: Fired, point: str, message: Envelope, used: Mapping[str, object]
     ) -> None:
+        seq, vt = self._log.stamp(lambda: self._scheduler.now)
         self._log.fault_fired(
             FaultRecord(
-                seq=self._log.next_seq(),
+                seq=seq,
                 fault=str(fired.fault),
                 variant=fired.planned.variant,
                 point=point,
                 occurrence=fired.occurrence,
                 action=str(fired.planned.kind.action),
-                vt=self._scheduler.now,
+                vt=vt,
                 target_seq=message.seq,
                 component=SIMULATOR,
                 params={**fired.planned.params, **used},
