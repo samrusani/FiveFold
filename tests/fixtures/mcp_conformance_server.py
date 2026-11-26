@@ -19,6 +19,7 @@ def fixture(
     *,
     bad_probe: bool = False,
     unsettled: bool = False,
+    reply_delay_ms: int = 0,
 ) -> MCPServer[None]:
     server = MCPServer[None]("synthetic-ledger", version="1", log_level="ERROR")
     ledger: dict[str, list[str]] = {}
@@ -45,6 +46,8 @@ def fixture(
         if not deduplicate or identity not in seen:
             ledger.setdefault(namespace, []).append(value)
             seen.add(identity)
+        if reply_delay_ms:
+            await asyncio.sleep(reply_delay_ms / 1000)
         # A tool reply alone cannot establish the number of committed effects.
         return {"count": 99}
 
@@ -101,6 +104,7 @@ def main() -> None:
     parser.add_argument("--audit", type=Path)
     parser.add_argument("--bad-probe", action="store_true")
     parser.add_argument("--unsettled", action="store_true")
+    parser.add_argument("--reply-delay-ms", type=int, default=0)
     args = parser.parse_args()
     server = fixture(
         args.fixture == "deduplicating",
@@ -108,6 +112,7 @@ def main() -> None:
         args.audit,
         bad_probe=args.bad_probe,
         unsettled=args.unsettled,
+        reply_delay_ms=args.reply_delay_ms,
     )
     if args.http:
         asyncio.run(http(server))

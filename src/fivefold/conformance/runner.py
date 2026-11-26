@@ -130,7 +130,7 @@ async def run_case(fixture: Fixture, case: Case, values: dict[str, JsonValue]) -
     try:
         async with (
             asyncio.timeout(CONNECTION_TIMEOUT_S) as timeout,
-            connect(fixture, CONNECTION_TIMEOUT_S) as client,
+            connect(fixture, max(CONNECTION_TIMEOUT_S, seconds)) as client,
         ):
             timeout.reschedule(None)
             protocol = client.protocol_version
