@@ -10,6 +10,11 @@ An agent sends a purchase order and crashes. The order goes through, but the rep
 
 FiveFold is an open-source test suite for that gap. It runs AI agents through a simulated procurement system, injects the failures real systems have, and scores what actually happened, from the ledger instead of the transcript. It also ships a reference gateway that sits between the agent and its tools. Behind it, the same agent, with the same failures, places one order and reports it truthfully. In 1,482 live runs with Claude Sonnet 5.5 and GPT-6.1 Sol, the gateway passed 88% of the fault episodes that all three configurations ran, for both models, against 33% to 52% without it.
 
+[Get a scored run with your own agent](docs/your-own-agent.md#quick-start).
+The Docker walkthrough took **3 min 54 s** in a clean-client run, from
+checkout to a score in the viewer. It includes a small MCP client and
+uses no model key.
+
 Watch the 3.5-minute overview, narrated and captioned:
 
 https://github.com/user-attachments/assets/884fa722-5bbd-4593-9e2d-34b59ac3d014
