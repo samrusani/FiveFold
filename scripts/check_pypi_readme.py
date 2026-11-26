@@ -10,8 +10,6 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from readme_renderer.markdown import render
-
 
 class DescriptionLinks(HTMLParser):
     def __init__(self) -> None:
@@ -51,6 +49,8 @@ def main(paths: list[str]) -> int:
     if not paths:
         print("Provide a wheel or source distribution to check.", file=sys.stderr)
         return 1
+    from readme_renderer.markdown import render
+
     failed = False
     for name in paths:
         path = Path(name)
