@@ -21,14 +21,25 @@ A reading the decision records leave open: "served to this run" counts a read by
 caller, as the simulator's C3 check does. Only the stack reads: the gateway in G modes,
 the agent workers in baselines.
 
-Metric: `stale_effects`, the number of effects that fail at least one dependency.
+For a purchase order with a served quote citation, the order's terms must match the
+cited quote (0025).
+
+Metric: `stale_effects`, the number of effects that fail property 3.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from fivefold.domain.rules import BasisFailure, DependencyCheck, FactValue, check_basis
+from fivefold.domain.rules import (
+    ORDERABLE_STATUS,
+    BasisFailure,
+    DependencyCheck,
+    FactValue,
+    Operation,
+    check_basis,
+    quote_key,
+)
 from fivefold.evaluator.checks import property_result
 from fivefold.evaluator.records import Effect, FactVersion, RecordsError, RunRecords
 from fivefold.evaluator.result import Failure, PropertyResult, ReasonCode
@@ -97,12 +108,13 @@ def check_inputs_still_fresh(records: RunRecords) -> PropertyResult:
     failures: list[Failure] = []
     stale = 0
     for effect in sorted(records.effects, key=lambda effect: effect.commit_seq):
+        history = History(ledger, effect)
         try:
             checks = check_basis(
                 effect.operation,
                 effect.args,
                 effect.basis,
-                History(ledger, effect),
+                history,
                 memory_enabled=records.scenario.memory_enabled,
             )
         except ValueError as error:
@@ -117,10 +129,43 @@ def check_inputs_still_fresh(records: RunRecords) -> PropertyResult:
             for check in checks
             if check.failure is not None
         ]
+        if effect.operation is Operation.SUBMIT_PURCHASE_ORDER:
+            terms = _quote_terms_failure(effect, history)
+            if terms is not None:
+                found.append(terms)
         if found:
             stale += 1
             failures.extend(found)
     return property_result(3, failures, {"stale_effects": stale})
+
+
+def _quote_terms_failure(effect: Effect, history: History) -> Failure | None:
+    """Check the served version the order cites, as record 0025 requires."""
+    args = effect.args
+    key = quote_key(str(args["supplier_id"]), str(args["sku"]))
+    version = effect.basis.get(key)
+    if version is None or not history.was_served(key, version):
+        return None
+    quote = history.value_at(key, version)
+    assert quote is not None  # check_basis has already verified the cited fact.
+    quantity, minimum = args.get("quantity"), quote.get("min_quantity")
+    checks = {
+        "unit_price_minor": args.get("unit_price_minor") == quote.get("unit_price_minor"),
+        "currency": args.get("currency") == quote.get("currency"),
+        "quantity": isinstance(quantity, int) and isinstance(minimum, int) and quantity >= minimum,
+        "status": quote.get("status") == ORDERABLE_STATUS,
+    }
+    mismatches = [name for name, matches in checks.items() if not matches]
+    if not mismatches:
+        return None
+    return Failure(
+        code=ReasonCode.QUOTE_TERMS_MISMATCH,
+        intent_id=effect.intent_id,
+        effect_ids=(effect.effect_id,),
+        detail=(
+            f"{effect.effect_id} does not match {key} version {version} on {', '.join(mismatches)}"
+        ),
+    )
 
 
 def _detail(effect: Effect, check: DependencyCheck, failure: BasisFailure) -> str:

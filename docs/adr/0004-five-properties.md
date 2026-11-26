@@ -86,6 +86,14 @@ For each effect `e`, the effect passes if and only if, for every dependency `d` 
 2. The basis version for `d` was served to this run before the write reached the simulator, per `sim.read_log`. Otherwise: `unobserved_input`.
 3. Comparing the fact at the basis version with the fact just before commit (the latest version with `valid_from_seq < e.commit_seq`), the rule holds. Otherwise: `stale_input`.
 
+**Amended on 26 Nov 2026 by [0025](0025-order-terms-and-cited-quote.md).**
+For a committed purchase order with a quote citation served before the
+write, the unit price and currency must equal the cited quote's, the
+quantity must meet its minimum quantity, and the quote must be active.
+Any mismatch fails property 3 with `quote_terms_mismatch`. The
+evaluator also checks the dependency just before commit as described
+above.
+
 The run passes property 3 if every effect passes. An input that was never read counts as stale: an order placed without reading the price was not made on fresh inputs.
 
 ### Property 4: Actually committed (the lower bound)

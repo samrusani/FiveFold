@@ -693,6 +693,12 @@ def b0_order_on_a_quote_it_never_read(run: Recorder) -> None:
     run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
 
 
+def b0_order_below_the_cited_price(run: Recorder) -> None:
+    """The authorized order cites the served quote and pays one minor unit less."""
+    run.write(vt=1_000, unit_price_minor=539)
+    run.report({"REQ-1": ("done", ["PO-0001"])}, vt=15_000)
+
+
 def b0_quote_changes_as_the_order_leaves(run: Recorder) -> None:
     """F7 late, price_up, in B0: the quote goes up 5% as the order leaves for the
     simulator, which commits it at the old price, since C2 checks nothing."""
@@ -1012,6 +1018,15 @@ GOLDEN: list[Golden] = [
         inputs_still_fresh=(ReasonCode.UNOBSERVED_INPUT,),
         metrics={"stale_effects": 1},
         approval_requests=2,
+    ),
+    Golden(
+        b0_order_below_the_cited_price,
+        Config.B0,
+        Contract.C2,
+        Verdict.FAIL,
+        Knowledge.COMMITTED,
+        inputs_still_fresh=(ReasonCode.QUOTE_TERMS_MISMATCH,),
+        metrics={"stale_effects": 1},
     ),
     Golden(
         b0_quote_changes_as_the_order_leaves,

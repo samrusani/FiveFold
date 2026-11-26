@@ -45,8 +45,6 @@ It depends on:
 - at C2, no change to the budget between a first attempt that never landed and its retry: a retry does not re-check the budget, so it can overdraw it (0005);
 - at C3, the destination's atomic check of the basis at commit (0005).
 
-Property 3 checks the cited quote's relevant fields for changes before commit, with checks for matching price and currency, meeting the quote's minimum quantity, and requiring an active quote deferred to [record 0025](adr/0025-order-terms-and-cited-quote.md).
-
 ### 4. Actually committed
 
 Authorized actions form an outbox. After a gateway crash, startup recovery returns them to it, and moves open attempts to OutcomeUnknown to resume their contract's recovery (0003). At weak contracts, G2 gives up liveness rather than safety (0004).

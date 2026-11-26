@@ -1515,6 +1515,25 @@ def test_an_effect_on_declared_observed_and_fresh_inputs_passes_property_3() -> 
     assert result.metrics["stale_effects"] == 0
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"unit_price_minor": 539},
+        {"currency": "EUR"},
+        {"min_quantity": 101},
+        {"status": "withdrawn"},
+    ],
+)
+def test_a_served_quote_must_match_the_committed_order_terms(changes: dict[str, Any]) -> None:
+    world = World(Config.B0)
+    world.change("quote/S-1/W-100", **changes)
+    world.read("quote/S-1/W-100")
+    _order(world)
+    result = world.evaluate()
+    assert _codes(result, 3) == ("quote_terms_mismatch",)
+    assert result.metrics["stale_effects"] == 1
+
+
 def test_just_before_the_commit_leaves_out_the_effects_own_consequence() -> None:
     # The order leaves 26,000 of the budget, less than its own 54,000. Only the version
     # from before the commit counts.
