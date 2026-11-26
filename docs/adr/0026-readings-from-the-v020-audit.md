@@ -1,6 +1,6 @@
 # 0026: Readings from the v0.2.0 audit
 
-Status: Proposed
+Status: Accepted on 26 Nov 2026 by the maintainer
 Date: 2026-11-26
 Spec sections affected on acceptance: Authority, Trust boundaries, Simulator, Evaluator, Testing
 
@@ -117,6 +117,18 @@ facts, or support bigger values end to end with a common encoding.
 largest useful inputs before proposing maxima. Specify what a refused
 write means for an already-sent attempt before adding any rule at commit.
 No existing expected cell requires a new limit.
+
+## Decision
+
+The maintainer accepts the recommendation of each of the five items.
+
+1. **Memory and feasibility.** Record 0023 is amended so that `options` and `feasible_together` include the memory fact a purchase order needs in a memory-enabled scenario, in both the initial scenario check and the run-end infeasible check.
+2. **FORBIDDEN as settlement evidence.** `FORBIDDEN` no longer counts as a same-key settlement. The lookup rule uses the capabilities the destination recorded in `sim.run.capabilities`.
+3. **A reused key with other arguments.** In a later contract revision, both kinds of key are bound to their original request: the caller, operation, intent and canonical business arguments, and for approval requests the normalized scope. Mismatch cases are added for both kinds.
+4. **Gateway tables.** A later migration removes `DELETE` for `ff_gw` on these tables and makes an attempt's answer and an escalation's resolution write-once. The same pull request adds a dated note to record 0008's grant table.
+5. **Limits on otherwise valid arguments.** 0.2.1 keeps the existing schemas. Maxima are proposed only after measuring the largest useful inputs.
+
+Each item ships in its own later pull request, with the tests, the replay of expected cells and, where the item names it, the saved playback. None is part of 0.2.1.
 
 ## Spec changes on acceptance
 
