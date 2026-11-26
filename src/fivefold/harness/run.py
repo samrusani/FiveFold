@@ -88,6 +88,7 @@ from fivefold.agents.policy import Mode, scripted_policy
 from fivefold.agents.scripted import ScriptedModel
 from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
 from fivefold.agents.worker import CallLog, WorkerEnd, WorkerSpec, build_graph, run_worker
+from fivefold.db_connection import role_dsn
 from fivefold.domain.contracts import Capability, Contract
 from fivefold.domain.scenario import Scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
@@ -318,7 +319,7 @@ class InprocRun:
         self._model_calls = 0
 
     def _conninfo(self, role: str) -> str:
-        return make_conninfo(self._dsn, user=role)
+        return role_dsn(self._dsn, role)
 
     async def execute(self) -> RunResult:
         """Run to the end of the drain window; return how each worker ended."""

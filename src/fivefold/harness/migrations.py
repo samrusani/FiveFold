@@ -43,6 +43,7 @@ import contextlib
 import hashlib
 import os
 import re
+import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,6 +92,19 @@ run never migrates, copies or drops the template a person's runs are made from."
 
 RUN_DATABASE_COMMENT = "FiveFold run database"
 """Shared catalog marker set on each database this module creates for a run."""
+
+DEVELOPMENT_DATABASE = "fivefold_dev"
+DEVELOPMENT_DATABASE_COMMENT = "FiveFold development database"
+TEMPLATE_DATABASE_COMMENT = "FiveFold template database"
+REGISTRY_DATABASE_COMMENT = "FiveFold registry database"
+MANAGED_COMMENTS = frozenset(
+    {
+        DEVELOPMENT_DATABASE_COMMENT,
+        TEMPLATE_DATABASE_COMMENT,
+        REGISTRY_DATABASE_COMMENT,
+        RUN_DATABASE_COMMENT,
+    }
+)
 
 UNMARKED_RELEASE_LAST_MIGRATION = "0014_tool_call_args.sql"
 """The last migration in 0.1.0, the final release before run databases had a marker."""
@@ -162,6 +176,7 @@ def discover(directory: Path) -> list[Migration]:
 def bootstrap(conn: Connection, script: Path) -> None:
     """Run the cluster-level bootstrap script in one transaction."""
     _require_autocommit(conn)
+    _require_supported_database(conn)
     with conn.transaction():
         conn.execute(script.read_bytes())
 
@@ -172,6 +187,7 @@ def migrate(conn: Connection, directory: Path) -> list[str]:
     The database must use UTF-8; otherwise text comes back as raw bytes.
     """
     _require_autocommit(conn)
+    _require_supported_database(conn)
     row = conn.execute("SHOW server_encoding").fetchone()
     encoding = row[0] if row is not None else None
     if isinstance(encoding, bytes):
@@ -224,6 +240,7 @@ def database_lock(admin_dsn: str) -> Iterator[Connection]:
     that creates or drops databases another way is not held back.
     """
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        _require_supported_database(conn)
         conn.execute("SELECT pg_advisory_lock(%s)", (DATABASE_LOCK_KEY,))
         try:
             yield conn
@@ -231,16 +248,16 @@ def database_lock(admin_dsn: str) -> Iterator[Connection]:
             conn.execute("SELECT pg_advisory_unlock(%s)", (DATABASE_LOCK_KEY,))
 
 
-def recreate_database(admin_dsn: str, name: str) -> str:
-    """Drop the database `name` if it exists, create it empty, and return its DSN.
+def recreate_database(admin_dsn: str, name: str, migrations: Path = DB_DIR / "migrations") -> str:
+    """Reset an owned FiveFold development database and return its DSN.
 
     Both happen under the database lock (`database_lock`). The database always uses
     UTF-8 with C collation, as `create_database` makes it.
     """
     check_database_name(name)
     with database_lock(admin_dsn) as conn:
-        drop_database_locked(conn, name)
-        _create_database(conn, name)
+        oid = _development_database(conn, admin_dsn, name, migrations)
+        _reset_database(conn, name, oid)
     return make_conninfo(admin_dsn, dbname=name)
 
 
@@ -276,6 +293,50 @@ def _create_database(conn: Connection, name: str) -> None:
             "CREATE DATABASE {} ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
         ).format(sql.Identifier(name))
     )
+
+
+def _mark_database(conn: Connection, name: str, marker: str) -> None:
+    conn.execute(
+        sql.SQL("COMMENT ON DATABASE {} IS {}").format(sql.Identifier(name), sql.Literal(marker))
+    )
+
+
+def _database_identity(conn: Connection, name: str) -> tuple[int, str | None, bool] | None:
+    row = conn.execute(
+        "SELECT oid, pg_catalog.shobj_description(oid, 'pg_database'),"
+        " pg_catalog.pg_get_userbyid(datdba) = current_user"
+        " FROM pg_catalog.pg_database WHERE datname = %s",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row[0]), row[1], bool(row[2])
+
+
+def _special_kind(name: str) -> str | None:
+    if name in (TEMPLATE_DATABASE, template_database()):
+        return TEMPLATE_DATABASE_COMMENT
+    if name in (REGISTRY_DATABASE, registry_database()):
+        return REGISTRY_DATABASE_COMMENT
+    if name == DEVELOPMENT_DATABASE:
+        return DEVELOPMENT_DATABASE_COMMENT
+    return None
+
+
+def _development_database(
+    conn: Connection, admin_dsn: str, name: str, migrations: Path
+) -> int | None:
+    marker = _special_kind(name)
+    if marker not in (None, DEVELOPMENT_DATABASE_COMMENT):
+        raise MigrationError(f"the database {name} is reserved. Name a development database")
+    return _managed_oid(conn, admin_dsn, name, migrations, DEVELOPMENT_DATABASE_COMMENT)
+
+
+def _reset_database(conn: Connection, name: str, oid: int | None) -> None:
+    if oid is not None and not drop_database_locked(conn, name, oid=oid):
+        raise MigrationError(f"the database {name} changed during reset. Try again")
+    _create_database(conn, name)
+    _mark_database(conn, name, DEVELOPMENT_DATABASE_COMMENT)
 
 
 def template_database(environ: Mapping[str, str] | None = None) -> str:
@@ -346,6 +407,8 @@ def create_run_database(
     check_database_name(template)
     if name == template:
         raise MigrationError(f"the database {name} is the template run databases are copied from")
+    if _special_kind(name) is not None:
+        raise MigrationError(f"the database {name} is reserved. Use an unused run database name")
     with database_lock(admin_dsn) as conn:
         existing = _replacement_oid(conn, admin_dsn, name, migrations, replace=replace)
         if before_copy is not None:
@@ -368,11 +431,7 @@ def create_run_database(
                 f"the template database {template} is in use by another session, so it cannot"
                 " be copied; close that session and try again"
             ) from None
-        conn.execute(
-            sql.SQL("COMMENT ON DATABASE {} IS {}").format(
-                sql.Identifier(name), sql.Literal(RUN_DATABASE_COMMENT)
-            )
-        )
+        _mark_database(conn, name, RUN_DATABASE_COMMENT)
         row = conn.execute("SELECT oid FROM pg_database WHERE datname = %s", (name,)).fetchone()
     if row is None:
         raise MigrationError(f"the database {name} was dropped as soon as it was created")
@@ -392,6 +451,10 @@ def check_run_destinations(
             check_database_name(name)
             if name == template:
                 raise MigrationError(f"the database {name} is the template run databases copy")
+            if _special_kind(name) is not None:
+                raise MigrationError(
+                    f"the database {name} is reserved. Use an unused run database name"
+                )
             _replacement_oid(conn, admin_dsn, name, migrations, replace=replace)
 
 
@@ -399,44 +462,50 @@ def _replacement_oid(
     conn: Connection, admin_dsn: str, name: str, migrations: Path, *, replace: bool
 ) -> int | None:
     """Check an existing destination on the connection that holds the database lock."""
-    row = conn.execute(
-        "SELECT oid, pg_catalog.shobj_description(oid, 'pg_database'),"
-        " pg_catalog.pg_get_userbyid(datdba) = current_user"
-        " FROM pg_catalog.pg_database WHERE datname = %s",
-        (name,),
-    ).fetchone()
-    if row is None:
+    identity = _database_identity(conn, name)
+    if identity is None:
         return None
     if not replace:
         raise DatabaseExists(
             f"the database {name} already exists. Use an unused name or pass --replace"
         )
-    if not row[2] or (
-        row[1] != RUN_DATABASE_COMMENT and not _has_migration_history(admin_dsn, name, migrations)
+    oid, marker, owned = identity
+    if not owned or (
+        marker != RUN_DATABASE_COMMENT
+        and (marker is not None or not _has_migration_history(admin_dsn, name, migrations))
     ):
         raise MigrationError(
             f"the database {name} is not a run database with FiveFold's marker or matching"
             " migration history and the current database administrator as its owner."
             " Use an unused database name"
         )
-    return int(row[0])
+    return oid
 
 
 def _has_migration_history(admin_dsn: str, name: str, migrations: Path) -> bool:
     """Recognize the complete current or 0.1.0 history using on-disk checksums."""
-    files = discover(migrations)
-    if not files:
+    expected = _expected_history(migrations)
+    history = _read_history(admin_dsn, name, len(expected))
+    if not history:
         return False
-    expected = [(migration.name, migration.sha256) for migration in files]
-    known = {frozenset(expected)}
+    if history == expected:
+        return True
     for end, (filename, _) in enumerate(expected, start=1):
         if filename == UNMARKED_RELEASE_LAST_MIGRATION:
-            known.add(frozenset(expected[:end]))
-            break
+            return history == expected[:end]
+    return False
+
+
+def _expected_history(directory: Path) -> list[tuple[str, str]]:
+    return [(migration.name, migration.sha256) for migration in discover(directory)]
+
+
+def _read_history(admin_dsn: str, name: str, maximum: int) -> list[tuple[str, str]]:
     try:
         with psycopg.connect(make_conninfo(admin_dsn, dbname=name)) as target:
             target.read_only = True
             target.execute("SET LOCAL search_path = pg_catalog")
+            target.execute("LOCK TABLE ONLY public.schema_migration IN ACCESS SHARE MODE")
             # Read ordinary heap data only. In particular, a same-named view or
             # foreign table must never run a query as the provisioning administrator.
             table = target.execute(
@@ -450,26 +519,97 @@ def _has_migration_history(admin_dsn: str, name: str, migrations: Path) -> bool:
                 " AND a.atttypid = 'pg_catalog.text'::pg_catalog.regtype) = 2"
             ).fetchone()
             if table is None:
-                return False
+                return []
             rows = target.execute(
-                "SELECT filename, sha256 FROM ONLY public.schema_migration LIMIT %s",
-                (len(expected) + 1,),
+                "SELECT filename, sha256 FROM ONLY public.schema_migration"
+                ' ORDER BY filename COLLATE pg_catalog."C" LIMIT %s',
+                (maximum + 1,),
             ).fetchall()
     except psycopg.Error:
-        return False
-    applied = frozenset(rows)
-    return len(rows) == len(applied) and applied in known
+        return []
+    return [(str(filename), str(checksum)) for filename, checksum in rows]
+
+
+def _managed_oid(
+    conn: Connection, admin_dsn: str, name: str, migrations: Path, expected_marker: str
+) -> int | None:
+    """Recognize or adopt a database under the server-wide provisioning lock."""
+    identity = _database_identity(conn, name)
+    if identity is None:
+        return None
+    oid, marker, owned = identity
+    if owned and marker == expected_marker:
+        return oid
+    # Retain prefix recognition through at least 0.3 for upgrades from unmarked releases.
+    if owned and marker is None and expected_marker != RUN_DATABASE_COMMENT:
+        expected = _expected_history(migrations)
+        history = _read_history(admin_dsn, name, len(expected))
+        if (
+            history
+            and history == expected[: len(history)]
+            and _database_identity(conn, name) == identity
+        ):
+            _mark_database(conn, name, expected_marker)
+            print(f"Adopted database {name} through {history[-1][0]}.")
+            return oid
+    remedy = (
+        "Fix its owner or rename the database"
+        if expected_marker == REGISTRY_DATABASE_COMMENT
+        else "Drop it and FiveFold will create it again"
+    )
+    raise MigrationError(f"the database {name} is not an owned {expected_marker}. {remedy}")
+
+
+def _migrate_managed(
+    conn: Connection,
+    admin_dsn: str,
+    name: str,
+    migrations: Path,
+    marker: str,
+    *,
+    create: bool = False,
+) -> list[str]:
+    discover(migrations)
+    if _special_kind(name) not in (None, marker):
+        raise MigrationError(
+            f"the database {name} is reserved for a different FiveFold database kind"
+        )
+    if _managed_oid(conn, admin_dsn, name, migrations, marker) is None:
+        if not create:
+            raise MigrationError(f"the database {name} does not exist. Create it through FiveFold")
+        _create_database(conn, name)
+        _mark_database(conn, name, marker)
+    with psycopg.connect(make_conninfo(admin_dsn, dbname=name), autocommit=True) as database:
+        return migrate(database, migrations)
+
+
+def _migrate_from_cli(admin_dsn: str, db_dir: Path, name: str, *, reset: bool) -> list[str]:
+    check_database_name(name)
+    with database_lock(admin_dsn) as conn:
+        if reset:
+            migrations = db_dir / "migrations"
+            discover(migrations)
+            oid = _development_database(conn, admin_dsn, name, migrations)
+            bootstrap_server_locked(conn, admin_dsn, db_dir)
+            _reset_database(conn, name, oid)
+            marker = DEVELOPMENT_DATABASE_COMMENT
+        else:
+            identity = _database_identity(conn, name)
+            found = None if identity is None else identity[1]
+            selected = _special_kind(name) or (found if found in MANAGED_COMMENTS else None)
+            marker = selected or DEVELOPMENT_DATABASE_COMMENT
+            migrations = db_dir / (
+                "registry" if marker == REGISTRY_DATABASE_COMMENT else "migrations"
+            )
+        return _migrate_managed(conn, admin_dsn, name, migrations, marker)
 
 
 def _prepare_template(conn: Connection, admin_dsn: str, template: str, migrations: Path) -> None:
     """`prepare_template` on `conn`, an admin connection that holds the database lock."""
-    discover(migrations)  # check the files first, so their errors are not the template's
-    found = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (template,)).fetchone()
-    if found is None:
-        _create_database(conn, template)
     try:
-        with psycopg.connect(make_conninfo(admin_dsn, dbname=template), autocommit=True) as tpl:
-            migrate(tpl, migrations)
+        _migrate_managed(
+            conn, admin_dsn, template, migrations, TEMPLATE_DATABASE_COMMENT, create=True
+        )
     except MigrationError as error:
         raise MigrationError(
             f"the template database {template} cannot be used: {error}; drop it, and the"
@@ -498,18 +638,9 @@ def prepare_registry(admin_dsn: str, directory: Path, name: str | None = None) -
     """
     name = registry_database() if name is None else name
     check_database_name(name)
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        found = conn.execute(
-            "SELECT 1 FROM pg_catalog.pg_database WHERE datname = %s", (name,)
-        ).fetchone()
-        if found is None:
-            # Another process may create it first; then it exists, which is the point.
-            with contextlib.suppress(psycopg.errors.DuplicateDatabase):
-                _create_database(conn, name)
-    dsn = make_conninfo(admin_dsn, dbname=name)
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        migrate(conn, directory)
-    return dsn
+    with database_lock(admin_dsn) as conn:
+        _migrate_managed(conn, admin_dsn, name, directory, REGISTRY_DATABASE_COMMENT, create=True)
+    return make_conninfo(admin_dsn, dbname=name)
 
 
 def bootstrap_server(admin_dsn: str, db_dir: Path) -> str:
@@ -518,10 +649,17 @@ def bootstrap_server(admin_dsn: str, db_dir: Path) -> str:
 
     Runs as a superuser, and is safe to run again: what exists stays.
     """
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        bootstrap(conn, db_dir / "bootstrap.sql")
+    with database_lock(admin_dsn) as conn:
+        return bootstrap_server_locked(conn, admin_dsn, db_dir)
+
+
+def bootstrap_server_locked(conn: Connection, admin_dsn: str, db_dir: Path) -> str:
+    """Bootstrap on a connection that already holds the provisioning lock."""
+    bootstrap(conn, db_dir / "bootstrap.sql")
     name = registry_database()
-    prepare_registry(admin_dsn, db_dir / "registry", name)
+    _migrate_managed(
+        conn, admin_dsn, name, db_dir / "registry", REGISTRY_DATABASE_COMMENT, create=True
+    )
     return name
 
 
@@ -566,6 +704,11 @@ def _require_autocommit(conn: Connection) -> None:
         raise MigrationError("use an autocommit connection; the runner manages its transactions")
 
 
+def _require_supported_database(conn: Connection) -> None:
+    if conn.info.server_version < 160000:
+        raise MigrationError("migrations require PostgreSQL 16 or newer")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point. Returns the process exit status."""
     parser = argparse.ArgumentParser(
@@ -583,7 +726,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=os.environ.get("FIVEFOLD_ADMIN_DSN", DEFAULT_ADMIN_DSN),
         help="admin connection string (default: FIVEFOLD_ADMIN_DSN, or the local Compose database)",
     )
-    parser.add_argument("--database", default="fivefold_dev", help="database to migrate or reset")
+    parser.add_argument(
+        "--database", default=DEVELOPMENT_DATABASE, help="database to migrate or reset"
+    )
     parser.add_argument(
         "--db-dir",
         type=Path,
@@ -595,18 +740,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     database: str = args.database
     db_dir: Path = args.db_dir
 
-    if args.command == "bootstrap":
-        registry = bootstrap_server(admin_dsn, db_dir)
-        print(f"bootstrap: roles and the run registry {registry} are in place")
-        return 0
-
-    if args.command == "reset":
-        target = recreate_database(admin_dsn, database)
-        bootstrap_server(admin_dsn, db_dir)
-    else:
-        target = make_conninfo(admin_dsn, dbname=database)
-    with psycopg.connect(target, autocommit=True) as conn:
-        applied = migrate(conn, db_dir / "migrations")
+    try:
+        if args.command == "bootstrap":
+            registry = bootstrap_server(admin_dsn, db_dir)
+            print(f"bootstrap: roles and the run registry {registry} are in place")
+            return 0
+        applied = _migrate_from_cli(admin_dsn, db_dir, database, reset=args.command == "reset")
+    except MigrationError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     print(f"{args.command}: applied {len(applied)} migration(s) to {database}: {applied}")
     return 0
 

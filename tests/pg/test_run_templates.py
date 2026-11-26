@@ -27,6 +27,7 @@ from fivefold.harness.migrations import (
     TEMPLATE_ENV,
     CreatedDatabase,
     MigrationError,
+    create_database,
     create_run_database,
     database_lock,
     discover,
@@ -209,7 +210,7 @@ def test_demo_replaces_legacy_and_marked_databases_on_rerun(
             if migration.number <= 14:
                 shutil.copyfile(migration.path, tmp_path / migration.name)
         migrations = tmp_path
-    with psycopg.connect(recreate_database(admin_dsn, names["B0"]), autocommit=True) as conn:
+    with psycopg.connect(create_database(admin_dsn, names["B0"]).dsn, autocommit=True) as conn:
         migrate(conn, migrations)
 
     def databases() -> dict[str, tuple[int, str | None]]:
@@ -246,7 +247,7 @@ def test_replacement_requires_complete_legacy_history_in_a_table(
 ) -> None:
     name = f"{db_prefix}_legacy_{change}"
     drop_after.append(name)
-    with psycopg.connect(recreate_database(admin_dsn, name), autocommit=True) as conn:
+    with psycopg.connect(create_database(admin_dsn, name).dsn, autocommit=True) as conn:
         migrate(conn, MIGRATIONS)
         first = discover(MIGRATIONS)[0].name
         if change == "checksum":
@@ -369,7 +370,7 @@ def test_a_template_behind_the_files_is_migrated_forward_before_it_is_copied(
     behind.mkdir()
     for migration in every[:-1]:
         shutil.copy(migration.path, behind / migration.name)
-    with psycopg.connect(recreate_database(admin_dsn, template), autocommit=True) as conn:
+    with psycopg.connect(create_database(admin_dsn, template).dsn, autocommit=True) as conn:
         migrate(conn, behind)
     created = create_run_database(admin_dsn, run, MIGRATIONS, template=template)
     template_dsn = make_conninfo(admin_dsn, dbname=template)

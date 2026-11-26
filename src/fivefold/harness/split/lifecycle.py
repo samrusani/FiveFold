@@ -50,6 +50,7 @@ import httpx
 import psycopg
 from psycopg.conninfo import make_conninfo
 
+from fivefold.db_connection import role_dsn
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import Scenario, load_scenario, scenario_digest
 from fivefold.evaluator import RunResult as Evaluation
@@ -161,7 +162,7 @@ def start_run(
     with new_run_directory(run_dir) as reserved:
         run = SplitRun(run_dir, run_id, name, config, contract, seed)
         dsn = _run_database(admin_dsn, name, template, run_id=run_id, replace=replace)
-        with psycopg.connect(make_conninfo(dsn, user="ff_harness"), autocommit=True) as conn:
+        with psycopg.connect(role_dsn(dsn, "ff_harness"), autocommit=True) as conn:
             SharedPgHarnessLog(conn).run_recorded(
                 RunRecord(
                     run_id=run_id,
@@ -196,7 +197,7 @@ def start_run(
         simulator = SimConfig.preset(
             contract, credentials=credentials, params=scenario.params.contract_params()
         )
-        setup_run(make_conninfo(dsn, user="ff_sim"), scenario, simulator, vt=0)
+        setup_run(role_dsn(dsn, "ff_sim"), scenario, simulator, vt=0)
         secrets = issue()
         write_run(
             run,

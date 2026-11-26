@@ -28,6 +28,7 @@ EXPECTED: dict[str, dict[str, frozenset[str]]] = {
     "ff_eval": {"sim": READS, "gw": READS, "harness": READS, "agent": NONE, "eval": WRITES},
     "ff_viewer": {"sim": READS, "gw": READS, "harness": READS, "agent": NONE, "eval": READS},
     "ff_registry": {"sim": NONE, "gw": NONE, "harness": NONE, "agent": NONE, "eval": NONE},
+    "ff_dbos": {"sim": NONE, "gw": NONE, "harness": NONE, "agent": NONE, "eval": NONE},
 }
 """The privilege table in 0008, by role and schema, and `ff_registry`, which writes the run
 registry and has no privilege in a run database (0012)."""
@@ -81,3 +82,20 @@ def test_agent_role_searches_its_own_schema(empty_database: str) -> None:
         ).fetchone()
     assert row is not None
     assert "search_path=agent" in (row[0] or [])
+
+
+def test_harness_gateway_and_simulator_functions_fix_their_search_path(
+    migrated_database: str,
+) -> None:
+    with psycopg.connect(migrated_database) as conn:
+        functions = conn.execute(
+            "SELECT n.nspname, p.proname, p.proconfig FROM pg_catalog.pg_proc p"
+            " JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace"
+            " WHERE n.nspname IN ('sim', 'gw', 'harness') ORDER BY n.nspname, p.proname"
+        ).fetchall()
+    assert len(functions) == 26
+    assert [
+        (schema, name)
+        for schema, name, config in functions
+        if "search_path=pg_catalog, pg_temp" not in (config or [])
+    ] == []

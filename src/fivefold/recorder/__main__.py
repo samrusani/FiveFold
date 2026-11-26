@@ -67,6 +67,7 @@ from psycopg.conninfo import make_conninfo
 
 from fivefold.agents.replay import ReplayError
 from fivefold.agents.worker import WorkerEnd
+from fivefold.db_connection import role_dsn
 from fivefold.domain.contracts import Contract
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.evaluator import result_json
@@ -76,7 +77,7 @@ from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
     Connection,
     MigrationError,
-    bootstrap_server,
+    bootstrap_server_locked,
     create_run_database,
 )
 from fivefold.harness.models import SCRIPTED, Live
@@ -107,7 +108,7 @@ def _fresh_database(
     def prepare(conn: Connection) -> None:
         if before_copy is not None:
             before_copy(conn)
-        bootstrap_server(args.dsn, DB_DIR)
+        bootstrap_server_locked(conn, args.dsn, DB_DIR)
 
     return create_run_database(
         args.dsn, args.database, DB_DIR / "migrations", replace=args.replace, before_copy=prepare
@@ -164,7 +165,7 @@ def _branch_spec(args: argparse.Namespace, live: Live | None) -> tuple[Cassette,
 def _holds_run(admin_dsn: str, name: str, run_id: str) -> bool:
     """Whether the existing destination holds `run_id`, read as `ff_viewer`."""
     try:
-        with psycopg.connect(make_conninfo(admin_dsn, dbname=name, user=VIEWER)) as conn:
+        with psycopg.connect(role_dsn(admin_dsn, VIEWER, dbname=name)) as conn:
             conn.read_only = True
             found = conn.execute(
                 "SELECT 1 FROM harness.run WHERE run_id = %s", (run_id,)

@@ -52,7 +52,7 @@ from fivefold.harness.migrations import (
     DEFAULT_ADMIN_DSN,
     Connection,
     MigrationError,
-    bootstrap_server,
+    bootstrap_server_locked,
     check_run_destinations,
     create_run_database,
 )
@@ -316,8 +316,8 @@ def run_demo(
     summarize it. With `out`, also save the run's result JSON there."""
     name = _demo_database(demo, config)
 
-    def prepare(_conn: Connection) -> None:
-        bootstrap_server(admin_dsn, DB_DIR)
+    def prepare(conn: Connection) -> None:
+        bootstrap_server_locked(conn, admin_dsn, DB_DIR)
 
     dsn = create_run_database(
         admin_dsn,

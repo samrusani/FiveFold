@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
-from fivefold.harness.migrations import MigrationError, check_database_name, discover, drop_database
+from fivefold.harness.migrations import (
+    Connection,
+    MigrationError,
+    check_database_name,
+    discover,
+    drop_database,
+    migrate,
+)
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "db" / "migrations"
 
@@ -25,6 +34,15 @@ def test_repository_migrations_are_well_formed() -> None:
 def test_the_run_registry_s_migrations_are_well_formed() -> None:
     migrations = discover(MIGRATIONS.parent / "registry")
     assert [migration.name for migration in migrations][:1] == ["0001_registry.sql"]
+
+
+def test_migrations_refuse_postgres_15_before_any_query() -> None:
+    connection = cast(
+        Connection,
+        SimpleNamespace(autocommit=True, info=SimpleNamespace(server_version=150012)),
+    )
+    with pytest.raises(MigrationError, match="PostgreSQL 16 or newer"):
+        migrate(connection, MIGRATIONS)
 
 
 @pytest.mark.parametrize(
