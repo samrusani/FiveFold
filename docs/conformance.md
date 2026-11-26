@@ -93,6 +93,9 @@ The runner drops replies between the MCP SDK and the simulated caller, so the
 SDK exchange finishes and the connection stays open. Both reply-drop cases
 work with the write and probe alone.
 
+Each case allows up to 10 s to connect and initialize the fixture.
+The `evidence_wait_ms` interval starts after initialization.
+
 To add the pre-commit case, list it under `supported_cases` and supply a
 `pre_commit` object with three tool declarations in the same
 `{"name": "...", "arguments": {...}}` format. `arm` prepares the next write and
