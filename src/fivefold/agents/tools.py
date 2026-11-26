@@ -55,8 +55,6 @@ from fivefold.domain.api import (
 )
 from fivefold.domain.json_storage import encodable_json
 from fivefold.domain.report import FinalReport
-from fivefold.gateway import wire
-from fivefold.gateway.records import Refusal, RefusalReason
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Calls
 
@@ -112,7 +110,11 @@ def _gateway_tool(connection: ToolCaller, tool: types.Tool, timeouts: Timeouts) 
             message = "the MCP client cannot encode the arguments as JSON"
             if name in GATEWAY_WRITES or name == "submit_final_report":
                 return json.dumps(
-                    wire.refusal(Refusal(RefusalReason.INVALID_ARGS, message=message))
+                    {
+                        "result": "refused",
+                        "reason": "invalid_args",
+                        "details": {"message": message},
+                    }
                 )
             return json.dumps({"error": "invalid_args", "message": message})
         if name in GATEWAY_WRITES:
