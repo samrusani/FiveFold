@@ -12,8 +12,8 @@ The gateway reaches the simulator only through the simulator's API, over HTTP, w
 own credential (`SimulatorLink`). Its simulator client (`fivefold.gateway.sim_client`) is
 unchanged: the link takes the place of the harness's transport, logs each request as it
 sends it and each answer as it arrives, and fires F2 at `net.gw_sim.answer`. A request
-that gets no answer within its timeout, or fails on its connection, raises
-`TransportTimeout`, which the client reads as a timeout; a server error is a server error.
+that gets no answer within its timeout raises `TransportTimeout`. A failed connection
+raises `TransportError`. A malformed answer counts as a server error.
 
 `AgentHop`, a context-tier MCP middleware, logs every MCP message the agent sends, and the
 gateway's answers, on the `agent_gw` hop, and fires F4 and F12 at `net.agent_gw.request`.
@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
@@ -105,10 +106,10 @@ from fivefold.harness.reports import ReportSink
 from fivefold.harness.scheduler import Scheduler, SchedulerTimeout
 from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS
-from fivefold.harness.split.hops import SEQ_HEADER, Hops, answer_class
+from fivefold.harness.split.hops import SEQ_HEADER, Hops, logged_message
 from fivefold.harness.split.rundir import SplitRun
 from fivefold.harness.split.service import OpenRun, open_run, unavailable
-from fivefold.harness.transport import Envelope, Hop, Reply, TransportTimeout
+from fivefold.harness.transport import Envelope, Hop, Reply, TransportError, TransportTimeout
 
 DEFAULT_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*", "gateway:*")
 """Host headers the MCP endpoint accepts: the loopback names and the Compose service name.
@@ -149,6 +150,9 @@ async def _attestations_closed(request: Request, error: Exception) -> Response:
 # The gateway's end of the gw_sim hop ---------------------------------------------------------
 
 
+logger = logging.getLogger(__name__)
+
+
 class SimulatorLink:
     """The gateway's calls to the simulator's service, over HTTP, logged and faulted.
 
@@ -157,12 +161,19 @@ class SimulatorLink:
     """
 
     def __init__(
-        self, scheduler: Scheduler, hops: Hops, client: httpx.AsyncClient, *, secret: str
+        self,
+        scheduler: Scheduler,
+        hops: Hops,
+        client: httpx.AsyncClient,
+        *,
+        secret: str,
+        read_message: Callable[[int], tuple[Envelope, bool] | None],
     ) -> None:
         self._scheduler = scheduler
         self._hops = hops
         self._client = client
         self._secret = secret
+        self._read_message = read_message
 
     async def call(
         self,
@@ -179,10 +190,9 @@ class SimulatorLink:
     ) -> Reply:
         """Send one request and wait at most `timeout_ms` for its answer.
 
-        Raises `TransportTimeout` when none arrives in time, when the connection fails,
-        or when F2 drops the answer; the last waits out the timeout first, as a lost
-        answer would. A write is logged at `sent_vt`, its attempt's recorded send time
-        (`fivefold.harness.split.hops`).
+        Raises `TransportError` when the connection fails and `TransportTimeout` when
+        no answer arrives in time. F2 drops the answer and waits out the timeout. A write
+        is logged at `sent_vt`, its attempt's recorded send time.
         """
         request = self._hops.sent(
             hop=hop,
@@ -210,26 +220,40 @@ class SimulatorLink:
             raise TransportTimeout(
                 f"{api} to {receiver}: no answer within {timeout_ms} ms"
             ) from None
-        except httpx.HTTPError as error:
-            raise TransportTimeout(f"{api} to {receiver}: the connection failed: {error}") from None
-        answer_seq = response.headers.get(SEQ_HEADER)
-        if response.status_code >= 500 or answer_seq is None:
+        except httpx.DecodingError as error:
+            logger.warning("simulator %s returned a malformed response: %s", api, error)
             return Reply(dict(SERVER_ERROR))
-        reply_body = response.json()
-        answer = Envelope(
-            seq=int(answer_seq),
-            hop=hop,
-            kind="answer",
-            sender=receiver,
-            receiver=sender,
-            api=api,
-            correlation=request.seq,
-            intent_id=intent_id,
-            idempotency_key=idempotency_key,
-            answer_class=answer_class(api, reply_body),
-            body=reply_body,
-            sent_vt=self._scheduler.now,
-        )
+        except httpx.HTTPError as error:
+            logger.warning("simulator %s transport failed: %s", api, error)
+            raise TransportError(f"simulator: {type(error).__name__}") from None
+        answer_seq = response.headers.get(SEQ_HEADER)
+        if response.status_code >= 500:
+            return Reply(dict(SERVER_ERROR))
+        try:
+            if answer_seq is None or not answer_seq.isascii() or not answer_seq.isdecimal():
+                raise ValueError("missing or invalid simulator answer sequence")
+            seq = int(answer_seq)
+            if seq <= request.seq or seq > 2**63 - 1:
+                raise ValueError("simulator answer sequence is out of range")
+            reply_body = response.json()
+            found = self._read_message(seq)
+            if found is None:
+                raise ValueError("simulator answer sequence has no message")
+            answer, has_fate = found
+            if (
+                has_fate
+                or answer.hop != hop
+                or answer.kind != "answer"
+                or answer.sender != receiver
+                or answer.receiver != sender
+                or answer.api != api
+                or answer.correlation != request.seq
+                or answer.body != reply_body
+            ):
+                raise ValueError("simulator answer does not match its logged request")
+        except (ValueError, RecursionError) as error:
+            logger.warning("simulator %s returned a malformed answer: %s", api, error)
+            return Reply(dict(SERVER_ERROR))
         if self._hops.fire("net.gw_sim.answer", answer).dropped:
             self._hops.dropped(answer, "fault")
             await self._scheduler.sleep(max(0, deadline - self._scheduler.now))
@@ -656,7 +680,13 @@ class GatewayService:
         )
         client = httpx.AsyncClient(base_url=self._simulator_url, timeout=None)
         hops = Hops(scheduler, opened.log, FaultInjector(opened.plan))
-        link = SimulatorLink(scheduler, hops, client, secret=self.run.secret(GATEWAY))
+        link = SimulatorLink(
+            scheduler,
+            hops,
+            client,
+            secret=self.run.secret(GATEWAY),
+            read_message=lambda seq: logged_message(opened.conn, seq),
+        )
         simulator = SimClient(link, timeout_ms=params.dispatch_timeout_ms)
         dispatcher = Dispatcher(
             scheduler,

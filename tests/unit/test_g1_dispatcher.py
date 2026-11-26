@@ -81,7 +81,7 @@ class World:
         self.approvals.setdefault(approval_id, self.policy)
         return self._now(approval_id)
 
-    async def approval(self, approval_id: str) -> ApprovalNow:
+    async def approval(self, action: Action, approval_id: str) -> ApprovalNow:
         self.approval_checks += 1
         await self.scheduler.sleep(2 * HOP)
         return self._now(approval_id)

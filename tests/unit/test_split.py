@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import stat
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -14,25 +16,35 @@ import pytest
 import yaml
 from mcp.server import streamable_http as mcp_streamable_http
 
-from fivefold.domain.contracts import Contract
+from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.scenario import scenario_from_data
 from fivefold.faults.catalog import Action
 from fivefold.faults.plan import FaultInjector, Fired, parse_plan
+from fivefold.gateway.destination import FactNow
+from fivefold.gateway.dispatcher import Dispatcher
+from fivefold.gateway.memory import MemoryStore
 from fivefold.gateway.records import Action as GatewayAction
-from fivefold.gateway.records import Answer, Attempt, CheckRecord
+from fivefold.gateway.records import (
+    ActionResult,
+    Answer,
+    Attempt,
+    BasisCheck,
+    CheckRecord,
+    WriteCall,
+)
 from fivefold.gateway.sim_client import SimClient
-from fivefold.gateway.state_machine import ActionState, CheckKind, Reason
+from fivefold.gateway.state_machine import ActionState, CheckKind, GatewaySettings, Reason
 from fivefold.harness.clock import HostClock
 from fivefold.harness.log import MemoryHarnessLog, holds_nul
 from fivefold.harness.migrations import check_database_name
-from fivefold.harness.scheduler import HostScheduler, Scheduler
+from fivefold.harness.scheduler import ComponentFailed, HostScheduler, Scheduler
 from fivefold.harness.split import SERVICE_STOPPED
 from fivefold.harness.split import __main__ as split_main
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
 from fivefold.harness.split.gateway import Attestations, AttestationsClosed, SimulatorLink
-from fivefold.harness.split.hops import Hops, answer_class
+from fivefold.harness.split.hops import SEQ_HEADER, Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
     Config,
@@ -496,7 +508,10 @@ def _dispatched_order(sent_vt: int) -> tuple[GatewayAction, Attempt]:
     return action, attempt
 
 
-def test_the_gateway_logs_a_write_at_its_attempts_send_time() -> None:
+@pytest.mark.parametrize(
+    "response_kind", ["5xx", "non_json", "missing_seq", "invalid_seq", "unlogged_seq", "encoding"]
+)
+def test_the_gateway_logs_a_write_at_its_attempts_send_time(response_kind: str) -> None:
     """The gateway records a write's attempt, with its send time, in a transaction before
     it sends the write (0003); on the host's clock milliseconds pass before the link logs
     the request. The log takes the attempt's time, so the gateway's settle bounds and the
@@ -506,13 +521,26 @@ def test_the_gateway_logs_a_write_at_its_attempts_send_time() -> None:
     action, attempt = _dispatched_order(sent_vt=scheduler.now - 7)
 
     def simulator(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500)
+        if response_kind == "5xx":
+            return httpx.Response(500)
+        if response_kind == "non_json":
+            return httpx.Response(200, headers={SEQ_HEADER: "2"}, text="service unavailable")
+        if response_kind == "encoding":
+            raise httpx.DecodingError("invalid response encoding", request=request)
+        headers = {
+            "missing_seq": {},
+            "invalid_seq": {SEQ_HEADER: "unavailable"},
+            "unlogged_seq": {SEQ_HEADER: "2"},
+        }[response_kind]
+        return httpx.Response(200, headers=headers, json={})
 
     async def send() -> Answer:
         transport = httpx.MockTransport(simulator)
         async with httpx.AsyncClient(base_url="http://simulator", transport=transport) as client:
             hops = Hops(scheduler, log, FaultInjector())
-            link = SimulatorLink(scheduler, hops, client, secret="the-gateway's-secret")
+            link = SimulatorLink(
+                scheduler, hops, client, secret="fixture-secret", read_message=lambda _: None
+            )
             return await SimClient(link, timeout_ms=800).send(action, attempt, "APR-0001")
 
     answer = asyncio.run(send())
@@ -525,6 +553,145 @@ def test_the_gateway_logs_a_write_at_its_attempts_send_time() -> None:
     )
     assert request.sent_vt == attempt.sent_vt
     assert answer.reason is Reason.SERVER_ERROR
+
+
+class NoDependencies:
+    def keys(self, action: GatewayAction) -> Sequence[str]:
+        return ()
+
+    def check(self, action: GatewayAction, now: Mapping[str, FactNow], *, full: bool) -> BasisCheck:
+        return BasisCheck(exact_ok=True, sufficient_ok=True if full else None)
+
+
+def _dispatch_over_http(
+    contract: Contract, *, mismatched_approval: str | None = None
+) -> tuple[MemoryStore, list[str]]:
+    scheduler = Scheduler()
+    log = MemoryHarnessLog()
+    hops = Hops(scheduler, log, FaultInjector())
+    store = MemoryStore(
+        task_id="T-1",
+        intents={"REQ-1": "submit_purchase_order"},
+        contract=contract,
+        settings=GatewaySettings(
+            approval_wait_ms=5_000,
+            params=ContractParams(max_hop_latency_ms=50, commit_deadline_ms=1_000),
+            dispatch_timeout_ms=200,
+            max_attempts=3,
+            max_probes=3,
+        ),
+    )
+    effects: list[str] = []
+    messages: dict[int, tuple[Envelope, bool]] = {}
+    sends = 0
+    scope: dict[str, Any] = {}
+
+    def simulator(request: httpx.Request) -> httpx.Response:
+        nonlocal sends, scope
+        api = request.url.path.rsplit("/", 1)[1]
+        data = json.loads(request.content)
+        if api in {"request_approval", "get_approval_status"}:
+            if api == "request_approval":
+                scope = data["scope"]
+            body: Any = {
+                "answer": "approval",
+                "approval_id": "APR-0001",
+                "intent_id": "REQ-1",
+                "operation": "submit_purchase_order",
+                "scope": scope,
+                "status": "approved",
+                "requested_vt": 0,
+                "expires_at": 50_000,
+            }
+            if api == "get_approval_status" and mismatched_approval is not None:
+                if mismatched_approval == "scope":
+                    body["scope"] = {**scope, "max_quantity": 1}
+                elif mismatched_approval == "operation":
+                    body["operation"] = "reserve_inventory"
+                    body["scope"] = {"warehouse_id": "WH-1", "sku": "W-100", "max_quantity": 1}
+                else:
+                    body[mismatched_approval] = "different"
+        elif api == "submit_purchase_order":
+            sends += 1
+            if sends == 1 and mismatched_approval is None:
+                raise httpx.ConnectError("simulated connection failure", request=request)
+            effects.append("PO-0001")
+            body = {
+                "answer": "committed",
+                "effect_id": effects[-1],
+                "replay": False,
+                "intent_id": "REQ-1",
+                "operation": api,
+                "args": ORDER_ARGS,
+                "committed_vt": scheduler.now,
+            }
+        else:
+            assert api == "get_order_status"
+            body = {
+                "answer": "status",
+                "intent_id": "REQ-1",
+                "operation": "submit_purchase_order",
+                "effects": [],
+                "as_of_vt": scheduler.now,
+            }
+        answer = hops.sent(
+            hop="gw_sim",
+            kind="answer",
+            sender="simulator",
+            receiver="gateway",
+            api=api,
+            body=body,
+            correlation=int(request.headers[SEQ_HEADER]),
+        )
+        messages[answer.seq] = (answer, False)
+        return httpx.Response(200, headers={SEQ_HEADER: str(answer.seq)}, json=body)
+
+    async def main() -> None:
+        async with httpx.AsyncClient(
+            base_url="http://simulator", transport=httpx.MockTransport(simulator)
+        ) as client:
+            link = SimulatorLink(
+                scheduler, hops, client, secret="fixture-secret", read_message=messages.get
+            )
+            destination = SimClient(link, timeout_ms=200)
+            dispatcher = Dispatcher(scheduler, store, destination, NoDependencies())
+            result = store.propose(
+                WriteCall("REQ-1", "submit_purchase_order", "S-1", ORDER_ARGS, "REQ-1", (), ()),
+                scheduler.now,
+            )
+            assert isinstance(result, ActionResult)
+            dispatcher.drive(result.action_id)
+            await scheduler.run(deadline_ms=10_000)
+
+    if mismatched_approval is None:
+        asyncio.run(main())
+    else:
+        with pytest.raises(ComponentFailed, match="simulator returned a mismatched approval"):
+            asyncio.run(main())
+    return store, effects
+
+
+@pytest.mark.parametrize("contract", [Contract.C1, Contract.C2])
+def test_split_connection_failure_leaves_dispatched(contract: Contract) -> None:
+    store, effects = _dispatch_over_http(contract)
+    view = store.view("A-0001")
+    assert any(event.reason is Reason.TRANSPORT_ERROR for event in view.events)
+    if contract is Contract.C2:
+        assert view.action.state is ActionState.CONFIRMED
+        assert [attempt.idempotency_key for attempt in view.attempts] == ["A-0001", "A-0001"]
+        assert effects == ["PO-0001"]
+    else:
+        assert view.action.state is ActionState.FAILED
+        assert effects == []
+
+
+@pytest.mark.parametrize("field", ["approval_id", "intent_id", "operation", "scope"])
+def test_split_dispatch_stops_on_a_mismatched_approval(field: str) -> None:
+    store, effects = _dispatch_over_http(Contract.C2, mismatched_approval=field)
+    view = store.view("A-0001")
+    assert view.action.state is ActionState.AUTHORIZED
+    assert view.attempts == ()
+    assert effects == []
 
 
 def test_a_message_cannot_be_logged_as_sent_later_than_now() -> None:

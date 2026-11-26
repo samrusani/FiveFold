@@ -30,6 +30,27 @@ def recorder(fired: list[tuple[int, str]], scheduler: Scheduler, name: str) -> C
     return lambda: fired.append((scheduler.now, name))
 
 
+def test_component_cancellation_wins_after_wait_for_timer_fires() -> None:
+    scheduler = Scheduler()
+
+    async def cleanup_after_cancellation() -> None:
+        try:
+            await scheduler.sleep(100)
+        except asyncio.CancelledError:
+            await scheduler.sleep(100)
+            raise
+
+    async def main() -> None:
+        task = scheduler.spawn(
+            "gateway", scheduler.wait_for(cleanup_after_cancellation(), 1), name="request"
+        )
+        scheduler.call_at(2, lambda: scheduler.crash("gateway"))
+        await scheduler.run()
+        assert task.cancelled()
+
+    run(main)
+
+
 # The clock ---------------------------------------------------------------------------------
 
 

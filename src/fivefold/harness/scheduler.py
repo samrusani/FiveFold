@@ -190,10 +190,12 @@ class Scheduler:
                 inner.cancel()
 
         timer = self.call_later(timeout_ms, expire, label="timeout")
+        task = asyncio.current_task()
+        cancellations = task.cancelling() if task is not None else 0
         try:
             return await inner
         except asyncio.CancelledError:
-            if expired:
+            if expired and (task is None or task.cancelling() <= cancellations):
                 raise SchedulerTimeout(f"no result within {timeout_ms} virtual ms") from None
             raise
         finally:

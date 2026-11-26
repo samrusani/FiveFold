@@ -229,7 +229,7 @@ class Dispatcher:
         due = grant.requested_vt + self._store.settings.approval_wait_ms
         seen = view.last_seq
         try:
-            approval = await self._destination.approval(grant.approval_id)
+            approval = await self._destination.approval(action, grant.approval_id)
         except Unreachable:
             await self._retry_later()
             return
@@ -283,7 +283,7 @@ class Dispatcher:
         view = self._store.view(action.action_id)
         if view.grant is None:
             raise RuntimeError(f"{action.action_id} has no grant to check")
-        approval = await self._destination.approval(view.grant.approval_id)
+        approval = await self._destination.approval(action, view.grant.approval_id)
         basis: BasisCheck | None = None
         if kind is not CheckKind.AUTHORITY_ONLY:
             facts = await self._facts(action)
@@ -299,9 +299,9 @@ class Dispatcher:
         if grant is None:
             raise RuntimeError(f"{action.action_id} sends with no grant")
         answer = await self._destination.send(action, attempt, grant.approval_id)
-        if answer.reason is not Reason.TIMEOUT:
-            # A timeout is no answer, so the point after the answer is reached only when
-            # one arrived (0006: a crash there voids the answer just received).
+        if answer.reason not in (Reason.TIMEOUT, Reason.TRANSPORT_ERROR):
+            # The point after the answer is reached only when an answer arrived
+            # (0006: a crash there voids the answer just received).
             self._hook("gw.dispatch.after_answer", action)
         self._store.answer(action.action_id, attempt.attempt_no, answer, self._now())
 

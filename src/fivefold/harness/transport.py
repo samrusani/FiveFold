@@ -68,6 +68,10 @@ class TransportTimeout(Exception):
     """
 
 
+class TransportError(Exception):
+    """The link failed before it could return an answer."""
+
+
 @dataclass(frozen=True)
 class Envelope:
     """One message, as the receiver gets it."""
@@ -117,7 +121,7 @@ class Calls(Protocol):
         sent_vt: int | None = None,
     ) -> Reply:
         """Send a request and return its answer. Raises `TransportTimeout` when no answer
-        arrives within `timeout_ms`.
+        arrives within `timeout_ms`, or `TransportError` when the link fails.
 
         `sent_vt` is when the sender recorded the send, if it did: the gateway records
         each write attempt with its send time before it sends it (0003). The harness's

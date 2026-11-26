@@ -55,6 +55,7 @@ from fivefold.gateway.records import (
     Resolution,
     StaleFact,
     WriteCall,
+    check_text,
     frozen,
 )
 from fivefold.gateway.state_machine import (
@@ -635,11 +636,12 @@ def retry(
         elif approval is not ApprovalStatus.APPROVED:
             raise ValueError(f"a consumed grant's approval cannot be {check.approval}")
         stale = check.basis.stale if check.basis is not None else ()
+        expiry = _expiry_details(check) if approval is ApprovalStatus.EXPIRED else NO_DETAILS
         escalation, note = _escalate(
             action,
             EscalationTrigger.RETRY_CHECK_FAILED,
             vt,
-            {"approval": check.approval, "stale": stale, **_expiry_details(check)},
+            {"approval": approval, "stale": stale, **expiry},
         )
         return Change(action, (note,), grant=observed, escalation=escalation)
     sent, event = _move(view, _S.DISPATCHED, Reason.RETRY, vt, {"attempt_no": attempt_no})
@@ -752,9 +754,13 @@ def attest(
     escalation = view.escalation
     if escalation is None or escalation.resolved_vt is not None:
         raise StepRefused(f"{action.action_id} has no open escalation")
+    if not actor.strip():
+        raise ValueError("an attestation names the human who made it")
+    check_text(actor, "the actor")
     if resolution is Resolution.COMMITTED:
-        if effect_id is None:
+        if effect_id is None or not effect_id.strip():
             raise ValueError("an attestation of a commit names the effect")
+        check_text(effect_id, "the effect id")
         details = {"effect_id": effect_id, "actor": actor}
         moved, event = _move(view, _S.CONFIRMED, Reason.HUMAN_ATTESTED, vt, details)
         moved = replace(moved, effect_id=effect_id)
