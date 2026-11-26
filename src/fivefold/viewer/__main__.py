@@ -73,7 +73,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         app = create_app(RunSource(args.dsn, registry), args.static, extra_hosts=args.allow_host)
     except ValueError as error:
         parser.error(str(error))
-    print(f"Viewer on http://{args.host}:{args.port}/ (registry {registry})", flush=True)
+    address = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    print(f"Viewer on http://{address}:{args.port}/ (registry {registry})", flush=True)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 

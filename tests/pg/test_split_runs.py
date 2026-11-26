@@ -506,10 +506,16 @@ def test_a_lost_reply_then_a_lost_session_reaches_the_gateway_once_per_live_sess
         assert str(evaluation.verdict) == "fail"
 
 
-@pytest.mark.parametrize("hop", ["gw_sim", "agent_gw"])
-def test_a_request_delivered_twice_is_one_order_in_g2(split: Split, hop: str) -> None:
+@pytest.mark.parametrize(
+    ("hop", "drop_original"), [("gw_sim", False), ("agent_gw", False), ("gw_sim", True)]
+)
+def test_an_f4_copy_is_one_order_in_g2(split: Split, hop: str, drop_original: bool) -> None:
     point = f"net.{hop}.request"
-    ran = run_split(split, "G2", [{"fault": "F4", **_order_plan(point)[0]}])
+    trigger = _order_plan(point)[0]
+    plan = [{"fault": "F4", **trigger}]
+    if drop_original:
+        plan.append({"fault": "F12", **trigger})
+    ran = run_split(split, "G2", plan)
     _check_records(split, ran)
     assert str(score_run(ran.run, admin_dsn=split.admin).verdict) == "pass"
     with split.connect() as conn:
@@ -524,7 +530,10 @@ def test_a_request_delivered_twice_is_one_order_in_g2(split: Split, hop: str) ->
         ).fetchall()
     assert effects == [("PO-0001",)]
     assert copies == [(hop, ORDER, "delivered", "dropped", "answer_to_copy")]
-    assert fault == [("F4", point, True, "REQ-1")]
+    expected = [("F4", point, True, "REQ-1")]
+    if drop_original:
+        expected.append(("F12", point, False, "REQ-1"))
+    assert sorted(fault) == sorted(expected)
 
 
 # A human's attestation over the admin API ---------------------------------------------------------

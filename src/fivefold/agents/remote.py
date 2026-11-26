@@ -28,14 +28,16 @@ In G1 and G2 run it where your own agent would run: in a container on the Docker
 `fivefold-agent`, as the Compose service `agent` does, which reaches the gateway at
 `http://gateway:8000/mcp` and nothing else (0008).
 
-MCP SDK calls used (mcp 2.3.0): `mcp.client.streamable_http.streamable_http_client(url)`,
+MCP SDK calls used (mcp 2.3.0):
+`mcp.client.streamable_http.streamable_http_client(url, http_client=)`,
 an async context manager that yields the read and write streams
 (`mcp/client/streamable_http.py`); `ClientSession(read, write)` as an async context
 manager, with `initialize`, `list_tools` and `call_tool`; `MCPError.code`; and
 `mcp_types.CONNECTION_CLOSED` and `INTERNAL_ERROR`, the codes a call gets when its
 connection closed and when the server answered with an error status. Checked in
 langgraph-checkpoint 4.3.2: `langgraph.checkpoint.memory.InMemorySaver`. Checked in httpx
-0.28.1: `AsyncClient(base_url=, timeout=)`, `post(url, json=, headers=)` and `HTTPError`.
+0.28.1 and httpx2 2.16.0: `AsyncClient(timeout=, trust_env=False)`. The simulator client
+also uses `base_url=`, `post(url, json=, headers=)` and `HTTPError` from httpx.
 """
 
 from __future__ import annotations

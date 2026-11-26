@@ -75,6 +75,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
+import psycopg
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPASGIApp, StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
@@ -167,7 +168,7 @@ class SimulatorLink:
         client: httpx.AsyncClient,
         *,
         secret: str,
-        read_message: Callable[[int], tuple[Envelope, bool] | None],
+        read_message: Callable[[int, str], tuple[Envelope, bool] | None],
     ) -> None:
         self._scheduler = scheduler
         self._hops = hops
@@ -236,7 +237,9 @@ class SimulatorLink:
             if seq <= request.seq or seq > 2**63 - 1:
                 raise ValueError("simulator answer sequence is out of range")
             reply_body = response.json()
-            found = self._read_message(seq)
+            if problem := json_storage_problem(reply_body):
+                raise ValueError(f"the simulator answer is refused: {problem}")
+            found = self._read_message(seq, response.text)
             if found is None:
                 raise ValueError("simulator answer sequence has no message")
             answer, has_fate = found
@@ -248,10 +251,9 @@ class SimulatorLink:
                 or answer.receiver != sender
                 or answer.api != api
                 or answer.correlation != request.seq
-                or answer.body != reply_body
             ):
                 raise ValueError("simulator answer does not match its logged request")
-        except (ValueError, RecursionError) as error:
+        except (ValueError, RecursionError, psycopg.DataError) as error:
             logger.warning("simulator %s returned a malformed answer: %s", api, error)
             return Reply(dict(SERVER_ERROR))
         if self._hops.fire("net.gw_sim.answer", answer).dropped:
@@ -687,7 +689,7 @@ class GatewayService:
             hops,
             client,
             secret=self.run.secret(GATEWAY),
-            read_message=lambda seq: logged_message(opened.conn, seq),
+            read_message=lambda seq, body: logged_message(opened.conn, seq, body_text=body),
         )
         simulator = SimClient(link, timeout_ms=params.dispatch_timeout_ms)
         dispatcher = Dispatcher(

@@ -8,17 +8,21 @@ import re
 import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from unittest.mock import AsyncMock, Mock
 
 import httpx
+import httpx2
 import mcp_types.jsonrpc as jsonrpc
 import pytest
 import yaml
 from mcp.server import streamable_http as mcp_streamable_http
+from mcp.shared.exceptions import MCPError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import Message
 
+from fivefold.agents import remote
 from fivefold.domain.contracts import Contract, ContractParams
 from fivefold.domain.scenario import scenario_from_data
 from fivefold.faults.catalog import Action
@@ -35,7 +39,7 @@ from fivefold.gateway.records import (
     CheckRecord,
     WriteCall,
 )
-from fivefold.gateway.sim_client import SimClient
+from fivefold.gateway.sim_client import MismatchedApproval, SimClient
 from fivefold.gateway.state_machine import ActionState, CheckKind, GatewaySettings, Reason
 from fivefold.harness.clock import HostClock, VirtualClock
 from fivefold.harness.log import MemoryHarnessLog, holds_nul
@@ -48,7 +52,7 @@ from fivefold.harness.split import simulator as simulator_http
 from fivefold.harness.split.__main__ import main
 from fivefold.harness.split.credentials import AGENT, GATEWAY, HARNESS, Callers, bearer, issue
 from fivefold.harness.split.faults import SPLIT_POINTS, SplitRefused, check_split
-from fivefold.harness.split.gateway import Attestations, AttestationsClosed, SimulatorLink
+from fivefold.harness.split.gateway import AgentHop, Attestations, AttestationsClosed, SimulatorLink
 from fivefold.harness.split.hops import SEQ_HEADER, Hops, answer_class
 from fivefold.harness.split.lifecycle import default_database, start_run
 from fivefold.harness.split.rundir import (
@@ -60,6 +64,7 @@ from fivefold.harness.split.rundir import (
     write_run,
 )
 from fivefold.harness.transport import Envelope
+from fivefold.sim.endpoint import endpoint
 
 START_S = 30.0
 """How long a wait in these tests may take at most, in wall-clock seconds."""
@@ -654,7 +659,11 @@ def test_the_gateway_logs_a_write_at_its_attempts_send_time(response_kind: str) 
         async with httpx.AsyncClient(base_url="http://simulator", transport=transport) as client:
             hops = Hops(scheduler, log, FaultInjector())
             link = SimulatorLink(
-                scheduler, hops, client, secret="fixture-secret", read_message=lambda _: None
+                scheduler,
+                hops,
+                client,
+                secret="fixture-secret",
+                read_message=lambda _seq, _body: None,
             )
             return await SimClient(link, timeout_ms=800).send(action, attempt, "APR-0001")
 
@@ -766,7 +775,11 @@ def _dispatch_over_http(
             base_url="http://simulator", transport=httpx.MockTransport(simulator)
         ) as client:
             link = SimulatorLink(
-                scheduler, hops, client, secret="fixture-secret", read_message=messages.get
+                scheduler,
+                hops,
+                client,
+                secret="fixture-secret",
+                read_message=lambda seq, _body: messages.get(seq),
             )
             destination = SimClient(link, timeout_ms=200)
             dispatcher = Dispatcher(scheduler, store, destination, NoDependencies())
@@ -781,8 +794,11 @@ def _dispatch_over_http(
     if mismatched_approval is None:
         asyncio.run(main())
     else:
-        with pytest.raises(ComponentFailed, match="simulator returned a mismatched approval"):
+        with pytest.raises(
+            ComponentFailed, match="simulator returned a mismatched approval"
+        ) as failed:
             asyncio.run(main())
+        assert isinstance(failed.value.__cause__, MismatchedApproval)
     return store, effects
 
 
@@ -894,3 +910,122 @@ def test_the_attestation_gate_settles_after_its_bound_if_one_never_logs() -> Non
 )
 def test_a_nul_anywhere_in_a_json_value_is_found(value: object, holds: bool) -> None:
     assert holds_nul(value) is holds
+
+
+@pytest.mark.parametrize("mismatch", ["has_fate", "correlation"])
+def test_the_gateway_refuses_an_answer_with_wrong_correlation_or_a_fate(mismatch: str) -> None:
+    log = MemoryHarnessLog()
+    scheduler = HostScheduler(HostClock(HostClock.host_ms()))
+    hops = Hops(scheduler, log, FaultInjector())
+    answers: dict[int, tuple[Envelope, bool]] = {}
+
+    def simulator(request: httpx.Request) -> httpx.Response:
+        correlation = int(request.headers[SEQ_HEADER])
+        answer = hops.sent(
+            hop="gw_sim",
+            kind="answer",
+            sender="simulator",
+            receiver="gateway",
+            api="get_budget",
+            body={"sample": 1},
+            correlation=correlation if mismatch != "correlation" else correlation + 1,
+        )
+        if mismatch == "has_fate":
+            hops.delivered(answer)
+        answers[answer.seq] = (answer, mismatch == "has_fate")
+        return httpx.Response(200, headers={SEQ_HEADER: str(answer.seq)}, json=answer.body)
+
+    async def check() -> None:
+        async with httpx.AsyncClient(
+            base_url="http://simulator", transport=httpx.MockTransport(simulator)
+        ) as client:
+            link = SimulatorLink(
+                scheduler,
+                hops,
+                client,
+                secret="fixture-secret",
+                read_message=lambda seq, _body: answers.get(seq),
+            )
+            reply = await link.call(
+                hop="gw_sim",
+                sender="gateway",
+                receiver="simulator",
+                api="get_budget",
+                body={"cost_center": "CC-OPS"},
+                timeout_ms=500,
+            )
+        assert reply.body == {"answer": "server_error"}
+        assert log.messages[-1].fate == ("delivered" if mismatch == "has_fate" else None)
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_approval_polling_requires_a_positive_interval(value: int) -> None:
+    with pytest.raises(ValueError, match="poll_ms must be positive"):
+        endpoint(Mock(), Scheduler(), poll_ms=value)
+
+
+@pytest.mark.parametrize("field", ["occurrence", "copy_delay_ms"])
+def test_boolean_fault_fields_are_refused_as_integers(field: str) -> None:
+    plan = _entry("F4", "net.gw_sim.request")
+    if field == "occurrence":
+        plan["at"][field] = True
+    else:
+        plan["params"] = {field: True}
+    with pytest.raises(ValueError, match=field):
+        parse_plan([plan])
+
+
+def test_the_split_gateway_refuses_nonfinite_mcp_arguments_before_logging() -> None:
+    log = MemoryHarnessLog()
+    hops = Hops(Scheduler(), log, FaultInjector())
+    service = Mock()
+    service.serving.hops = hops
+    ctx = Mock(
+        method="tools/call",
+        request_id=1,
+        params={"name": "get_quote", "arguments": {"supplier_id": float("nan")}},
+    )
+    handler = AsyncMock()
+    with pytest.raises(MCPError, match="finite UTF-8 JSON") as caught:
+        asyncio.run(AgentHop(service)(ctx, handler))
+    assert caught.value.code == jsonrpc.INVALID_PARAMS
+    assert not log.messages
+    handler.assert_not_awaited()
+
+
+@pytest.mark.parametrize("config", ["B0", "G2"])
+def test_remote_clients_ignore_the_proxy_environment(
+    config: Literal["B0", "G2"], dev_data: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+    opened = []
+
+    class Disconnected(Exception):
+        pass
+
+    def client(**kwargs: Any) -> None:
+        assert kwargs["trust_env"] is False
+        opened.append(True)
+        raise Disconnected("fixture ended before connecting")
+
+    agent = remote.RemoteAgent(
+        scenario=scenario_from_data(dev_data),
+        config=config,
+        contract=Contract.C2,
+        gateway_url="http://localhost:8000/mcp",
+        simulator_url="http://localhost:8100",
+        secret="fixture-secret",
+    )
+    error: type[Exception]
+    if config == "B0":
+        monkeypatch.setattr(httpx, "AsyncClient", client)
+        error = Disconnected
+    else:
+        monkeypatch.setattr(httpx2, "AsyncClient", client)
+        error = ConnectionError
+    with pytest.raises(error, match="fixture ended before connecting"):
+        asyncio.run(remote.run_remote_agent(agent))
+    assert opened == [True]

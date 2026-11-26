@@ -51,8 +51,8 @@ TOKEN_BUDGET_TEXT: Final = "Token budget used up."
 SPEND_CAP_TEXT: Final = "Spend cap reached."
 REFUSED: Final = "fivefold_refused"
 SPEND_CAP: Final = "spend_cap"
-BUDGET_TEXTS: Final = (BUDGET_TEXT, TOKEN_BUDGET_TEXT)
-"""The last message of a worker whose steps or tokens ran out."""
+STEP_BUDGET: Final = "step_budget"
+TOKEN_BUDGET: Final = "token_budget"
 
 CallLog = Callable[[], Callable[[AIMessage], None]]
 """The harness's model-call log: called as a model call starts, it returns what to call
@@ -83,9 +83,12 @@ def budget_end(message: BaseMessage) -> str | None:
     ended as `budget`."""
     if isinstance(message, AIMessage) and not message.tool_calls:
         content = message.content
-        if isinstance(content, str) and content in BUDGET_TEXTS:
-            return content
-        if content == SPEND_CAP_TEXT and message.response_metadata.get(REFUSED) == SPEND_CAP:
+        reason = message.response_metadata.get(REFUSED)
+        if reason == STEP_BUDGET and content == BUDGET_TEXT:
+            return BUDGET_TEXT
+        if reason == TOKEN_BUDGET and content == TOKEN_BUDGET_TEXT:
+            return TOKEN_BUDGET_TEXT
+        if reason == SPEND_CAP and content == SPEND_CAP_TEXT:
             return SPEND_CAP_TEXT
     return None
 
@@ -123,9 +126,17 @@ def build_graph(
         messages = state["messages"]
         steps = sum(1 for message in messages if isinstance(message, AIMessage))
         if steps >= max_steps:
-            return {"messages": [AIMessage(content=BUDGET_TEXT)]}
+            return {
+                "messages": [
+                    AIMessage(content=BUDGET_TEXT, response_metadata={REFUSED: STEP_BUDGET})
+                ]
+            }
         if max_tokens is not None and tokens_used(messages) >= max_tokens:
-            return {"messages": [AIMessage(content=TOKEN_BUDGET_TEXT)]}
+            return {
+                "messages": [
+                    AIMessage(content=TOKEN_BUDGET_TEXT, response_metadata={REFUSED: TOKEN_BUDGET})
+                ]
+            }
         answered = on_call() if on_call is not None else None
         reply = await bound.ainvoke(messages)
         if answered is not None:

@@ -137,15 +137,16 @@ class GatewayAdmin:
 
         Raises `UnknownEscalation` for an id no action has; `EscalationResolved` for an
         escalation already resolved; `BeforeSettleTime` for "not committed" before S past
-        the action's latest send; and `ValueError` for an effect id that does not fit the
-        resolution. The two refusals are `StepRefused`, raised once the store refused.
+        the action's latest send; and `ValueError` if a commit lacks its effect id or a
+        `not_committed` attestation contains an effect id. The two refusals are
+        `StepRefused`, raised once the store refused.
         """
         if not actor.strip():
             raise ValueError("an attestation names the human who made it")
         check_text(actor, "the actor")
         if effect_id is not None:
             if not effect_id.strip():
-                raise ValueError("an attestation of a commit names the effect")
+                raise ValueError("an effect id, when supplied, must be nonempty")
             check_text(effect_id, "the effect id")
         escalation = self._store.snapshot().escalations.get(escalation_id)
         if escalation is None:

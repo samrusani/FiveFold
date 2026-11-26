@@ -177,11 +177,9 @@ def test_a_refused_call_ends_the_worker_as_budget_and_is_no_step() -> None:
     assert steps == []
 
 
-def test_only_a_final_message_with_a_budget_text_ends_a_worker_as_budget() -> None:
-    assert [budget_end(AIMessage(text)) for text in (BUDGET_TEXT, TOKEN_BUDGET_TEXT)] == [
-        BUDGET_TEXT,
-        TOKEN_BUDGET_TEXT,
-    ]
+def test_model_text_does_not_end_a_worker_as_budget_by_itself() -> None:
+    assert budget_end(AIMessage(BUDGET_TEXT)) is None
+    assert budget_end(AIMessage(TOKEN_BUDGET_TEXT)) is None
     call = {"name": "get_quote", "args": {}, "id": "c-1"}
     assert budget_end(AIMessage(BUDGET_TEXT, tool_calls=[call])) is None
     assert budget_end(AIMessage([{"type": "text", "text": BUDGET_TEXT}])) is None

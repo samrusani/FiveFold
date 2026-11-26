@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 import socket
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Iterator, Sequence
 from decimal import Decimal
 from typing import Any, Final
 
@@ -147,7 +147,7 @@ ENVIRONMENT: Final = (
 
 
 @pytest.fixture(autouse=True)
-def sealed(monkeypatch: pytest.MonkeyPatch) -> None:
+def sealed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Close every way to the network, stop every provider model from answering, and give
     each provider a dummy key and no other setting from the environment."""
 
@@ -171,6 +171,15 @@ def sealed(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(first, DUMMY_KEY)
         for name in others:
             monkeypatch.delenv(name, raising=False)
+
+    from langsmith.utils import get_env_var
+
+    clear_env_cache = get_env_var.cache_clear  # type: ignore[attr-defined]
+    clear_env_cache()
+    try:
+        yield
+    finally:
+        clear_env_cache()
 
 
 def price_file(provider: str) -> PriceFile:

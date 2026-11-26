@@ -221,10 +221,9 @@ class TemporalHost:
             except RPCError as error:
                 if error.status != RPCStatusCode.NOT_FOUND:
                     raise
-            finally:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                self.workflows.pop(execution, None)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.workflows.pop(execution, None)
 
         await asyncio.gather(*(finish(execution) for execution in executions))
 

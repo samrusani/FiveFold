@@ -389,6 +389,26 @@ def test_a_provider_error_closes_the_cap_if_priced(priced: bool) -> None:
     asyncio.run(call())
 
 
+def test_cancelling_a_priced_call_closes_the_cap() -> None:
+    events: list[str] = []
+    meter = SpendMeter(Decimal(1), prices("1", "1"))
+    model = live_model(Stalled(), meter, events)
+
+    async def call() -> None:
+        pending = asyncio.create_task(model.ainvoke("Order W-100."))
+        async with asyncio.timeout(5):
+            while "hold" not in events:
+                await asyncio.sleep(0)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert meter.unknown is not None and meter.calls == 0
+        assert refusal(await model.ainvoke("Order W-100.")) == SPEND_CAP
+        assert events.count("hold") == 1
+
+    asyncio.run(call())
+
+
 @pytest.mark.parametrize("limit_s", [0.0, -1.0, float("inf"), float("nan")])
 def test_a_live_run_needs_a_call_limit_above_zero(limit_s: float) -> None:
     meter = SpendMeter(Decimal(1), prices())

@@ -10,6 +10,7 @@ live runs without the flag, the spend cap or a price included, before it connect
 from __future__ import annotations
 
 import sys
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, NoReturn
@@ -17,12 +18,14 @@ from typing import Any, NoReturn
 import psycopg
 import pytest
 
+from fivefold.agents.live import SpendMeter
 from fivefold.domain.contracts import Contract
+from fivefold.domain.prices import price_file_from_text
 from fivefold.domain.scenario import load_scenario_file, scenario_from_data
 from fivefold.harness.cells import load_expected
 from fivefold.harness.dbos_worker import DBOSInfrastructureError
 from fivefold.harness.demo import DEV_001, DEV_002
-from fivefold.harness.models import SCRIPTED
+from fivefold.harness.models import SCRIPTED, Live
 from fivefold.harness.run import CONFIGS, ORIGINAL_CONFIGS
 from fivefold.harness.study import (
     MAX_SEED,
@@ -32,6 +35,7 @@ from fivefold.harness.study import (
     check_out,
     check_study,
     database_name,
+    end_line,
     main,
     select_cells,
     study_episodes,
@@ -491,3 +495,21 @@ def test_baseline_infrastructure_error_has_one_line(
         f"study failed: handoff timed out (in episode 1, none-C2-{baseline}-seed-7)\n"
     )
     assert not out.exists()
+
+
+def test_the_study_end_line_explains_unknown_spend(tmp_path: Path) -> None:
+    price_file = price_file_from_text(
+        "price_date: 2026-11-15\nprices:\n  fake:\n    m:\n"
+        "      input_usd_per_million_tokens: 1\n      output_usd_per_million_tokens: 1\n"
+    )
+    spend = SpendMeter(Decimal(1), price_file)
+    spend.failed_call("fake:m", price_file.price("fake", "m"))
+    study = Study(
+        load_scenario_file(DEV_001),
+        (Episode(1, NoFault(Contract.C2, "B0"), 7), Episode(2, NoFault(Contract.C2, "B0"), 8)),
+        Live("fake", "m", spend=spend),
+        load_expected(),
+    )
+    assert end_line(study, 1, tmp_path).startswith(
+        "The study stopped after 1 of 2 episodes because spend became unknown."
+    )

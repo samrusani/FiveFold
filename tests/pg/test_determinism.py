@@ -111,7 +111,9 @@ def test_f9_workers_with_equal_virtual_retry_times_ignore_host_jitter(
                 arrivals.append(scheduler_run.scheduler.now)
                 if len(arrivals) == 2:
                     gate.set()
-                await gate.wait()
+                # A wall-clock timer in this loop would hold virtual time and
+                # prevent the second worker from reaching the gate.
+                await scheduler_run.scheduler.wait_for(gate.wait(), timeout_ms=20_000)
 
         original_call = Transport.call
         original_tool = GatewayConnection.call_tool

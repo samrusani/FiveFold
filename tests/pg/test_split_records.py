@@ -6,11 +6,18 @@ split run records its clock origin once; and its agent's model adapter is `exter
 
 from __future__ import annotations
 
+import asyncio
+
+import httpx
 import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
 
+from fivefold.faults.plan import FaultInjector
 from fivefold.harness.log import EVENT_STAMP_LOCK_KEY, MessageRecord, RunRecord, SharedPgHarnessLog
+from fivefold.harness.scheduler import Scheduler
+from fivefold.harness.split.gateway import SimulatorLink
+from fivefold.harness.split.hops import SEQ_HEADER, Hops, logged_message
 
 pytestmark = pytest.mark.pg
 
@@ -98,3 +105,48 @@ def test_the_clock_origin_is_one_row_written_once(migrated_database: str) -> Non
             conn.execute("UPDATE harness.clock_origin SET origin_ms = 3000")
         row = conn.execute("SELECT origin_ms FROM harness.clock_origin").fetchone()
     assert row == (1000,)
+
+
+def test_an_exponent_answer_matches_its_postgresql_jsonb_record(migrated_database: str) -> None:
+    async def send() -> None:
+        with _harness(migrated_database) as conn:
+            scheduler = Scheduler()
+            hops = Hops(scheduler, SharedPgHarnessLog(conn), FaultInjector())
+
+            def simulator(request: httpx.Request) -> httpx.Response:
+                answer = hops.sent(
+                    hop="gw_sim",
+                    kind="answer",
+                    sender="simulator",
+                    receiver="gateway",
+                    api="get_budget",
+                    body={"sample": 1e23},
+                    correlation=int(request.headers[SEQ_HEADER]),
+                )
+                assert logged_message(conn, answer.seq, body_text='{"sample": 9e22}') is None
+                return httpx.Response(200, headers={SEQ_HEADER: str(answer.seq)}, json=answer.body)
+
+            async with httpx.AsyncClient(
+                base_url="http://simulator", transport=httpx.MockTransport(simulator)
+            ) as client:
+                link = SimulatorLink(
+                    scheduler,
+                    hops,
+                    client,
+                    secret="fixture-secret",
+                    read_message=lambda seq, body: logged_message(conn, seq, body_text=body),
+                )
+                reply = await link.call(
+                    hop="gw_sim",
+                    sender="gateway",
+                    receiver="simulator",
+                    api="get_budget",
+                    body={"cost_center": "CC-OPS"},
+                    timeout_ms=500,
+                )
+            assert reply.body == {"sample": 1e23}
+            assert conn.execute(
+                "SELECT fate FROM harness.message_log WHERE kind = 'answer'"
+            ).fetchone() == ("delivered",)
+
+    asyncio.run(send())
