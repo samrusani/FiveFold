@@ -1039,7 +1039,6 @@ def _cost_table(rows: Sequence[Row], prices: PriceFile | None) -> list[str]:
                     usd(total),
                     cost_per_passing_run(total, passing),
                 ],
-                prose_columns=(0,),
             )
         )
     return [*lines, ""]
@@ -1097,11 +1096,8 @@ def _runs(count: int) -> str:
     return f"{count} run" if count == 1 else f"{count} runs"
 
 
-def _table_row(cells: Sequence[str], *, prose_columns: tuple[int, ...] = ()) -> str:
-    escaped = (
-        _prose(cell) if index in prose_columns else _cell(cell) for index, cell in enumerate(cells)
-    )
-    return "| " + " | ".join(escaped) + " |"
+def _table_row(cells: Sequence[str]) -> str:
+    return "| " + " | ".join(_prose(cell) for cell in cells) + " |"
 
 
 def _table_rule(columns: int) -> str:
@@ -1114,5 +1110,5 @@ def _cell(text: str) -> str:
 
 
 def _prose(text: str) -> str:
-    """Render a run label as literal text on the report's list line."""
-    return re.sub(r"([#<>\[\]*_`~&])", r"\\\1", _cell(text))
+    """Render a label literally. Underscores inside words already render as text."""
+    return re.sub(r"([#<>\[\]*`~&]|(?<!\w)_|_(?!\w))", r"\\\1", _cell(text))
