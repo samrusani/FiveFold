@@ -54,7 +54,9 @@ from types import TracebackType
 import anyio
 import mcp_types as types
 from mcp.shared.message import ServerMessageMetadata, SessionMessage
+from pydantic_core import PydanticSerializationError
 
+from fivefold.domain.json_storage import encodable_json
 from fivefold.harness.log import NUL_REFUSED, DropReason, Kind, holds_nul
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Envelope, Transport, answer_to_copy
@@ -181,12 +183,27 @@ class Outbox:
         self._theirs = theirs
 
     async def send(self, item: SessionMessage, /) -> None:
-        body = item.message.model_dump(mode="json", by_alias=True, exclude_none=True)
+        message = item.message
+        try:
+            body = message.model_dump(mode="json", by_alias=True, exclude_none=True)
+        except (PydanticSerializationError, RecursionError, ValueError):
+            if self._sender != self._link.agent:
+                raise
+            self._refuse(
+                getattr(message, "method", None),
+                getattr(message, "id", None),
+                "it cannot be stored as JSON",
+            )
+            return
         method = body.get("method")
         message_id = body.get("id")
-        if self._sender == self._link.agent and holds_nul(body):
-            self._refuse(method, message_id)
-            return
+        if self._sender == self._link.agent:
+            if holds_nul(body):
+                self._refuse(method, message_id, NUL_REFUSED)
+                return
+            if not encodable_json(body):
+                self._refuse(method, message_id, "it cannot be stored as JSON")
+                return
         kind: Kind
         correlation: int | None = None
         api: str | None = None
@@ -247,16 +264,14 @@ class Outbox:
         if envelope is not None and kind == "request":
             self._own.sent[message_id] = (envelope.seq, api, intent_id)
 
-    def _refuse(self, method: object, message_id: object) -> None:
+    def _refuse(self, method: object, message_id: object, why: str) -> None:
         """Refuse a message of the agent's that holds a NUL character, which the harness's
         log cannot store (`fivefold.harness.log.holds_nul`): nothing is logged or sent. A
         request gets the split gateway's answer, invalid params, at once, in the agent's
         own inbox; a notification is dropped."""
         if not isinstance(method, str) or not isinstance(message_id, int | str):
             return
-        error = types.ErrorData(
-            code=types.INVALID_PARAMS, message=f"the message is refused: {NUL_REFUSED}"
-        )
+        error = types.ErrorData(code=types.INVALID_PARAMS, message=f"the message is refused: {why}")
         refusal = types.JSONRPCError(jsonrpc="2.0", id=message_id, error=error)
         self._link.client_read.deliver(SessionMessage(refusal))
 

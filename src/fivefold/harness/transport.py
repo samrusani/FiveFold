@@ -301,7 +301,9 @@ class Transport:
         dropped = False
         copies: list[Fired] = []
         approval_status = envelope.body.get("status") if isinstance(envelope.body, dict) else None
-        for fired in self._faults.at(point, fields, approval_status=approval_status):
+        for fired in self._faults.at(
+            point, fields, approval_status=approval_status, memory_target=envelope.body
+        ):
             action = fired.planned.kind.action
             if action is Action.DUPLICATE:
                 copies.append(fired)

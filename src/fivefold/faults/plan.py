@@ -66,7 +66,7 @@ A fault that the chosen run cannot inject is refused before the run starts.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -523,12 +523,23 @@ class Fired:
 class FaultInjector:
     """Counts matching events at each point and fires planned faults on time."""
 
-    def __init__(self, plan: Sequence[PlannedFault] = ()) -> None:
+    def __init__(
+        self,
+        plan: Sequence[PlannedFault] = (),
+        *,
+        has_memory_to_correct: Callable[[object], bool] | None = None,
+    ) -> None:
         self._plan = tuple(plan)
+        self._has_memory_to_correct = has_memory_to_correct
         self._counts = [0] * len(self._plan)
 
     def at(
-        self, point: str, fields: Mapping[str, object], *, approval_status: object = None
+        self,
+        point: str,
+        fields: Mapping[str, object],
+        *,
+        approval_status: object = None,
+        memory_target: object = None,
     ) -> list[Fired]:
         """Report reaching `point` with an event's `fields`; return the faults that fire.
 
@@ -547,6 +558,12 @@ class FaultInjector:
                 elif fields.get("api") != Operation.SUBMIT_PURCHASE_ORDER:
                     continue
             if any(str(fields.get(key)) != str(value) for key, value in planned.at.match.items()):
+                continue
+            if (
+                planned.fault is FaultId.F8
+                and self._has_memory_to_correct is not None
+                and not self._has_memory_to_correct(memory_target)
+            ):
                 continue
             self._counts[index] += 1
             if self._counts[index] == planned.at.occurrence:

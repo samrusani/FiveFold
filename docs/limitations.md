@@ -186,6 +186,8 @@ The nightly row is from a local run. Times are TLC elapsed time and exclude setu
 
 ## Known limits
 
+`based_on` and `effect_ids` have no separate item limit. They must fit the tool transport, its JSON encoder and the run's PostgreSQL records. FiveFold checks encodability before applying an order, including the derived order amount. A trigger for F8 can reach an order whose supplier has no memory fact. The trigger is recorded and there is no fact correction.
+
 Version 0.2.0 includes F8 on the memory scenario. It includes B1, B2, the MCP lost-reply conformance test, run shrinking and the bounded TLA+ gateway model. The shrinker supports scored, in-process scripted B0, G1 and G2 failures. [Roadmap](plan.md#roadmap)
 
 1. **Race windows at C0 to C2.** G2 checks the approval and the inputs, then sends, and the destination commits later. A revocation or a price change in between lets the order commit on dead authority or a stale price. So G2 fails property 2 under F6 late, and property 3 under F7 late, `price_up`, at C0 to C2, by design ([plan](plan.md), Risks; 0002, rule 21; 0006). C3 closes both windows in the simulator, whose C3 destination checks the basis and the approval atomically at commit (0005). A real destination closes them only if it does the same. One that checks versions only, as with an ETag, leaves the authority race open (0005, Alternatives considered).

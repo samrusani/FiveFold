@@ -52,7 +52,9 @@ from pydantic import (
     StrictInt,
     StringConstraints,
     ValidationError,
+    model_validator,
 )
+from pydantic_core import PydanticSerializationError
 
 from fivefold.domain.api import (
     FactRead,
@@ -68,9 +70,11 @@ from fivefold.domain.api import (
     within_wait_limit,
 )
 from fivefold.domain.identity import InvalidArgs, action_key, normalize, target_of
+from fivefold.domain.json_storage import encodable_json, purchase_amount
 from fivefold.domain.report import FinalReport, InvalidReport, parse_report, validation_messages
 from fivefold.domain.rules import Operation, dependencies
 from fivefold.gateway import wire
+from fivefold.gateway.codec import storable
 from fivefold.gateway.destination import Unreachable
 from fivefold.gateway.dispatcher import Dispatcher
 from fivefold.gateway.records import (
@@ -121,6 +125,11 @@ class PurchaseOrderArgs(WriteArgs):
     unit_price_minor: Minor
     currency: AnyCaseCurrency
     cost_center: Id
+
+    @model_validator(mode="after")
+    def _encodable_amount(self) -> PurchaseOrderArgs:
+        purchase_amount(self.quantity, self.unit_price_minor)
+        return self
 
 
 class ReservationArgs(WriteArgs):
@@ -331,8 +340,20 @@ class GatewayTools:
                 else Operation.RESERVE_INVENTORY
             )
             try:
+                kept = storable(arguments)
+                if not encodable_json(kept):
+                    return self._invalid(operation, {}, "the arguments cannot be stored as JSON")
+            except RecursionError:
+                return self._invalid(operation, {}, "the arguments cannot be stored as JSON")
+            if not encodable_json(dict(arguments)):
+                return self._invalid(
+                    operation, arguments, "the arguments cannot be encoded as JSON"
+                )
+            try:
                 args = model.model_validate(dict(arguments))
                 normal = normalize(operation, args.model_dump())
+            except (PydanticSerializationError, RecursionError):
+                return self._invalid(operation, arguments, "the arguments cannot be normalized")
             except ValidationError as error:
                 return self._invalid(operation, arguments, "; ".join(validation_messages(error)))
             except InvalidArgs as error:

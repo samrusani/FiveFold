@@ -53,6 +53,7 @@ from fivefold.domain.api import (
     SubmitPurchaseOrder,
     WaitLimit,
 )
+from fivefold.domain.json_storage import encodable_json
 from fivefold.domain.report import FinalReport
 from fivefold.harness.scheduler import Scheduler
 from fivefold.harness.transport import Calls
@@ -105,11 +106,23 @@ def _gateway_tool(connection: ToolCaller, tool: types.Tool, timeouts: Timeouts) 
     name = tool.name
 
     async def call(**arguments: Any) -> str:
+        if not _mcp_encodable(name, arguments):
+            message = "the MCP client cannot encode the arguments as JSON"
+            if name in GATEWAY_WRITES or name == "submit_final_report":
+                return json.dumps(
+                    {
+                        "result": "refused",
+                        "reason": "invalid_args",
+                        "details": {"message": message},
+                    }
+                )
+            return json.dumps({"error": "invalid_args", "message": message})
         if name in GATEWAY_WRITES:
             timeout = timeouts.tool_wait_ms + timeouts.t_ms
         else:
-            wait_ms = int(arguments.get("wait_ms", 0) or 0)
-            timeout = min(wait_ms, timeouts.max_wait_ms) + timeouts.t_ms
+            wait_ms = arguments.get("wait_ms", 0)
+            wait = max(0, min(wait_ms, timeouts.max_wait_ms)) if type(wait_ms) is int else 0
+            timeout = wait + timeouts.t_ms
         result = await connection.call_tool(name, arguments, timeout)
         text = "".join(c.text for c in result.content if isinstance(c, types.TextContent))
         if result.is_error and _error_code(text) == "gateway_timeout":
@@ -122,6 +135,22 @@ def _gateway_tool(connection: ToolCaller, tool: types.Tool, timeouts: Timeouts) 
         description=tool.description or name,
         args_schema=dict(tool.input_schema),
     )
+
+
+def _mcp_encodable(name: str, arguments: dict[str, Any]) -> bool:
+    # ClientSession serializes the request before sending, and the in-process link
+    # serializes its JSON-RPC envelope. Check the same shapes before calling either.
+    try:
+        request = types.CallToolRequest(
+            params=types.CallToolRequestParams(name=name, arguments=arguments)
+        )
+        data = request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        message = types.JSONRPCRequest(
+            jsonrpc="2.0", id=0, method=data["method"], params=data["params"]
+        )
+        return encodable_json(message.model_dump(mode="json", by_alias=True, exclude_none=True))
+    except (ValueError, RecursionError):
+        return False
 
 
 def _error_code(text: str) -> str | None:

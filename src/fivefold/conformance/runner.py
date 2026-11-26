@@ -33,6 +33,9 @@ from fivefold.conformance.fixture import (
 from fivefold.harness.clock import wall_ms, within
 from fivefold.harness.rng import Generators, credential
 
+CONNECTION_TIMEOUT_S = 10.0
+"""Wall time allowed to connect and negotiate MCP before collecting evidence."""
+
 
 class Verdict(StrEnum):
     PASS = "pass"
@@ -125,7 +128,11 @@ async def run_case(fixture: Fixture, case: Case, values: dict[str, JsonValue]) -
     protocol = None
     seconds = fixture.evidence_wait_ms / 1000
     try:
-        async with connect(fixture, seconds) as client:
+        async with (
+            asyncio.timeout(CONNECTION_TIMEOUT_S) as timeout,
+            connect(fixture, CONNECTION_TIMEOUT_S) as client,
+        ):
+            timeout.reschedule(None)
             protocol = client.protocol_version
             attempt = Attempt(client.session, fixture, values, evidence)
             try:
@@ -150,6 +157,8 @@ async def run_case(fixture: Fixture, case: Case, values: dict[str, JsonValue]) -
         else:
             reason = "settled count or effect differs from the declaration"
         return CaseResult(case, Verdict.FAIL, reason, protocol, evidence)
+    except TimeoutError:
+        return CaseResult(case, Verdict.ERROR, "fixture connection timed out", protocol, evidence)
     except Exception:
         # Transport and SDK exceptions may contain fixture arguments or reply bodies.
         return CaseResult(case, Verdict.ERROR, "fixture connection failed", protocol, evidence)

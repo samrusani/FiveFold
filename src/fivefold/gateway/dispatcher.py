@@ -355,7 +355,11 @@ class Dispatcher:
         a crash after the check records no attempt, and one after the record sends
         nothing.
         """
-        fired = self._faults.at(point, {"intent_id": action.intent_id, "api": action.operation})
+        fired = self._faults.at(
+            point,
+            {"intent_id": action.intent_id, "api": action.operation},
+            memory_target=action.args,
+        )
         if not fired:
             return
         if self._on_fault is None:

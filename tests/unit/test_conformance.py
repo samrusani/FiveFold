@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import select
 import subprocess
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from fivefold.conformance.fixture import EFFECT, NAMESPACE, OPERATION, Case
+from fivefold.conformance import runner
+from fivefold.conformance.fixture import EFFECT, NAMESPACE, OPERATION, Case, Fixture, Probe
 
 SERVER = Path(__file__).resolve().parents[1] / "fixtures" / "mcp_conformance_server.py"
 REPLY_CASES = [Case.LOST_REPLY, Case.DUPLICATE]
@@ -95,6 +98,36 @@ def test_help_names_module() -> None:
         check=True,
     )
     assert result.stdout.splitlines()[0].startswith("usage: python -m fivefold.conformance ")
+
+
+def test_the_fixture_connects_before_the_evidence_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = declaration({"kind": "stdio", "command": sys.executable}, [Case.DUPLICATE])
+    raw["evidence_wait_ms"] = 600
+    fixture = Fixture.model_validate(raw)
+    connections: list[float] = []
+    deadlines: list[float | None] = []
+
+    @asynccontextmanager
+    async def connect(source: Fixture, seconds: float) -> AsyncIterator[SimpleNamespace]:
+        assert source is fixture
+        connections.append(seconds)
+        yield SimpleNamespace(protocol_version="test", session=object())
+
+    def timeout(seconds: float | None) -> asyncio.Timeout:
+        deadlines.append(seconds)
+        return asyncio.timeout(seconds)
+
+    async def execute(attempt: runner.Attempt, case: Case) -> Probe:
+        assert case is Case.DUPLICATE
+        return Probe(count=1, matches=True)
+
+    monkeypatch.setattr(runner, "connect", connect)
+    monkeypatch.setattr(runner, "asyncio", SimpleNamespace(timeout=timeout))
+    monkeypatch.setattr(runner.Attempt, "execute", execute)
+    result = asyncio.run(runner.run_case(fixture, Case.DUPLICATE, {}))
+    assert result.verdict is runner.Verdict.PASS
+    assert connections == [10.0]
+    assert deadlines == [10.0, 0.6]
 
 
 @pytest.mark.parametrize("kind", ["stdio", "streamable_http"])

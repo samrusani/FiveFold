@@ -348,6 +348,8 @@ class InprocRun:
                 if isinstance(error.__cause__, TemporalInfrastructureError):
                     raise error.__cause__ from None
                 raise
+            finally:
+                await self._temporal_workers.stop()
 
     async def _execute_dbos(self) -> RunResult:
         import sys
@@ -419,18 +421,6 @@ class InprocRun:
                 seed=spec.seed,
             ),
         )
-        self.faults = FaultInjector(plan)
-        generators = Generators(spec.seed)
-        self.transport = Transport(
-            self.scheduler,
-            self.log,
-            generators.get("latency"),
-            max_hop_latency_ms=params.max_hop_latency_ms,
-            faults=self.faults,
-        )
-        self.transport.observe(self._agent_points)
-        self.transport.observe(self._gateway_answers)
-        self.transport.before_send(self._before_tool_call)
         gateway = spec.config in GATEWAY_CONFIGS
         credentials = (GATEWAY,) if gateway else _worker_names(self._agent_workers)
         config = SimConfig.preset(
@@ -443,6 +433,18 @@ class InprocRun:
         )
         self.resolver = self._resolver(PgEffectsLedger(harness_conn))
         self.effects = SimulatorFaults(self.scheduler, self.simulator.control, self.log, scenario)
+        self.faults = FaultInjector(plan, has_memory_to_correct=self.effects.has_memory_to_correct)
+        generators = Generators(spec.seed)
+        self.transport = Transport(
+            self.scheduler,
+            self.log,
+            generators.get("latency"),
+            max_hop_latency_ms=params.max_hop_latency_ms,
+            faults=self.faults,
+        )
+        self.transport.observe(self._agent_points)
+        self.transport.observe(self._gateway_answers)
+        self.transport.before_send(self._before_tool_call)
         self.transport.apply_faults_with(
             lambda fired, envelope: self.effects.apply(fired, message_context(envelope.body))
         )
