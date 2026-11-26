@@ -63,7 +63,8 @@ COPY --chown=fivefold:fivefold pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project
 
 COPY --chown=fivefold:fivefold scripts/temporal_cli.py scripts/temporal_cli.py
-RUN python3 scripts/temporal_cli.py install
+COPY --chown=fivefold:fivefold src/fivefold/_temporal_cli.py src/fivefold/_temporal_cli.py
+RUN PYTHONPATH=src python3 scripts/temporal_cli.py install
 
 COPY --from=formal-tools /opt/java /opt/java
 COPY --from=formal-tools --chown=fivefold:fivefold /app/.tla/tla2tools.jar .tla/tla2tools.jar

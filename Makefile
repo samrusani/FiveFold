@@ -16,10 +16,10 @@ setup: ## Install the locked dependencies into .venv
 	$(UV) sync --locked
 
 temporal-setup: ## Install the checksum-verified Temporal CLI for B1 tests
-	python3 scripts/temporal_cli.py install
+	PYTHONPATH=src python3 scripts/temporal_cli.py install
 
 check-temporal: ## Check the Temporal CLI version required by B1
-	python3 scripts/temporal_cli.py check
+	PYTHONPATH=src python3 scripts/temporal_cli.py check
 
 tla-setup: ## Install the checksum-verified TLC jar (0021)
 	python3 scripts/tla_tools.py install
