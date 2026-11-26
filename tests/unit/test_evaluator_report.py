@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import itertools
+import json
 import re
 import shutil
 import subprocess
@@ -25,7 +26,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from langchain_core.messages.ai import UsageMetadata
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from fivefold.agents.live import SpendMeter, live_name, parse_live_name
 from fivefold.domain.contracts import Contract, ContractParams
@@ -301,7 +302,7 @@ def save(directory: Path, name: str, result: RunResult) -> Path:
 # The CSV ---------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r"])
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r", "\n", "  =", "  +", " -", " @"])
 def test_csv_marks_text_with_formula_prefixes_and_preserves_numeric_cells(prefix: str) -> None:
     value = prefix + "note"
     original = make_result(seed=-7)
@@ -311,6 +312,13 @@ def test_csv_marks_text_with_formula_prefixes_and_preserves_numeric_cells(prefix
     (normal,) = csv_rows(runs_csv([original]))
     assert row == {**normal, "model": "'" + value, "code_version": "'" + value}
     assert row["seed"] == "-7"
+
+
+def test_csv_leaves_unresolved_wall_latency_blank() -> None:
+    entry = recovered(None)
+    entry = entry.model_copy(update={"latency_wall_ms": 42})
+    (row,) = csv_rows(runs_csv([make_result(recovery=[entry])]))
+    assert row["recovery_wall_ms_max"] == ""
 
 
 def test_the_csv_has_a_header_and_one_row_per_run() -> None:
@@ -513,6 +521,15 @@ def test_the_report_says_what_was_run() -> None:
         " replayed, and its cost prices them at its own model's prices.",
         "",
     ]
+
+
+def test_report_escapes_run_labels_and_table_pipes() -> None:
+    report = markdown_report(
+        [make_result(scenario_id="[scenario]", model=r"m\|pipe", adapter="**adapter**")]
+    )
+    body = section(report, "What was run")
+    assert any(r"\[scenario\]" in line for line in body)
+    assert any(r"m\\\|pipe through the \*\*adapter\*\* adapter" in line for line in body)
 
 
 def test_verdicts_are_counted_by_configuration_and_contract_level_with_denominators() -> None:
@@ -936,6 +953,42 @@ def test_the_tokens_are_in_the_csv_and_summed_by_configuration() -> None:
     assert totals[-2:] == [["tokens_in", "0", "10000"], ["tokens_out", "0", "450"]]
 
 
+def test_report_labels_render_as_text_in_the_run_summary_and_cost_table() -> None:
+    label = "[sample](https://example.invalid)"
+    result = make_result(
+        scenario_id="# sample", code_version=label, model=f"fake:{label}", adapter="live"
+    )
+    prices = price_file_from_text(
+        f"price_date: 2026-11-26\nprices:\n  fake:\n    '{label}':\n"
+        "      input_usd_per_million_tokens: 1\n"
+        "      output_usd_per_million_tokens: 2\n"
+    )
+    report = markdown_report([result], prices)
+    overview = section(report, "What was run")
+    assert r"- Code versions: \[sample\](https://example.invalid) (1 run)." in overview
+    assert f"  - \\# sample, {DIGEST} (1 run)." in overview
+    assert any(
+        line.startswith(r"| fake:\[sample\](https://example.invalid) |")
+        for line in section(report, "Cost")
+    )
+
+
+@pytest.mark.parametrize("value", ["7", 7.0, True])
+def test_results_refuse_integer_coercion(value: object) -> None:
+    data = make_result().model_dump(mode="json")
+    data["run"]["seed"] = value
+    with pytest.raises(ValidationError, match="valid integer"):
+        RunResult.model_validate_json(json.dumps(data))
+
+
+@pytest.mark.parametrize(("parent", "point"), [("parent-run", None), (None, 12)])
+def test_results_require_both_branch_fields(parent: str | None, point: int | None) -> None:
+    data = make_result().model_dump(mode="json")
+    data["run"].update(parent_run_id=parent, branch_point=point)
+    with pytest.raises(ValidationError, match="must be set together"):
+        RunResult.model_validate_json(json.dumps(data))
+
+
 def test_a_run_s_cost_is_its_tokens_at_its_model_s_prices_exactly() -> None:
     """7,000 input tokens at 0.15 USD and 350 output tokens at 0.6 USD per million cost
     1,050 plus 210 millionths of a USD."""
@@ -985,6 +1038,16 @@ def test_a_cost_that_needs_more_digits_than_exact_has_is_refused_not_rounded() -
     with pytest.raises(ReportError, match="needs more than 50 significant digits"):
         run_cost(live(metrics=tokens(3, 0)), prices)
     assert run_cost(live(metrics=tokens(0, 9)), prices) == 0
+
+
+def test_a_cost_that_overflows_uses_its_own_message() -> None:
+    price = ModelPrice(
+        input_usd_per_million_tokens=Decimal("1e+1000000"),
+        output_usd_per_million_tokens=Decimal(0),
+    )
+    priced = PriceFile(price_date=date(2026, 11, 15), prices={"fake": {"m": price}})
+    with pytest.raises(ReportError, match="exceeds the decimal exponent range"):
+        run_cost(live(metrics=tokens(1, 0)), priced)
 
 
 def test_the_cost_per_passing_run_is_exact_when_the_division_ends_and_about_otherwise() -> None:

@@ -13,7 +13,8 @@ always be enforced (`fivefold.agents.live`). A price file is YAML:
 
 - `price_date`: the day the prices were read, as a date.
 - `prices`: for each provider and model, the price in USD per million input tokens and per
-  million output tokens. A price is an exact decimal, at least 0: an integer, a decimal
+  million output tokens. A price is an exact decimal from 0 to 1,000,000,000 USD, with at
+  most 21 fractional places: an integer, a decimal
   such as `0.15`, or either one quoted. Quote model names: YAML reads some unquoted names,
   such as `1:30`, as numbers.
 
@@ -53,6 +54,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from yaml.constructor import ConstructorError
 
 MILLION: Final = Decimal(1_000_000)
+MAX_FILE_PRICE: Final = Decimal(1_000_000_000)
+MAX_PRICE_PLACES: Final = 21
 
 Usd = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
 """An amount in USD: an exact decimal, at least 0."""
@@ -146,7 +149,10 @@ def _decimal_integer(loader: _PriceLoader, node: yaml.ScalarNode) -> int:
     if _DECIMAL_INTEGER.fullmatch(text) is None:
         problem = f"{text} is not a decimal integer: YAML reads it in another base"
         raise _NotADecimal(None, None, problem, node.start_mark)
-    return int(text.replace("_", ""))
+    digits = text.replace("_", "")
+    if len(digits.lstrip("+-")) > 10:
+        raise _NotADecimal(None, None, "an integer in the price file is too large", node.start_mark)
+    return int(digits)
 
 
 _PriceLoader.add_constructor("tag:yaml.org,2002:float", _exact_decimal)
@@ -163,14 +169,27 @@ def price_file_from_text(text: str, where: str = "the price file") -> PriceFile:
     except yaml.YAMLError as error:
         raise PriceFileError(f"{where} is not valid YAML: {_one_line(error)}") from None
     try:
-        return PriceFile.model_validate(data)
+        priced = PriceFile.model_validate(data)
     except ValidationError as error:
         raise PriceFileError(f"{where} is not a price file: {_one_line(error)}") from None
+    for provider, models in priced.prices.items():
+        for model, one in models.items():
+            for amount in (one.input_usd_per_million_tokens, one.output_usd_per_million_tokens):
+                exponent = amount.as_tuple().exponent
+                assert isinstance(exponent, int)  # ModelPrice already requires a finite Decimal.
+                if amount > MAX_FILE_PRICE or not -MAX_PRICE_PLACES <= exponent <= 9:
+                    message = (
+                        f"{where}: {provider}:{model} prices must be at most"
+                        f" {MAX_FILE_PRICE:,} USD per million tokens, with a decimal exponent"
+                        f" from {-MAX_PRICE_PLACES} to 9"
+                    )
+                    raise PriceFileError(_one_line(message))
+    return priced
 
 
-def _one_line(error: Exception) -> str:
-    """`error`'s message with every run of whitespace, line breaks included, as one space."""
-    return " ".join(str(error).split())
+def _one_line(value: str | Exception) -> str:
+    """Render a message on one line."""
+    return " ".join(str(value).split())
 
 
 def load_price_file(path: Path) -> PriceFile:

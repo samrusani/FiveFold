@@ -104,6 +104,18 @@ def test_a_file_that_is_not_a_price_file_is_refused_in_one_line(text: str, probl
     assert "\n" not in str(refused.value), "a command prints the refusal as one line"
 
 
+def test_a_price_bound_error_is_one_line_even_with_a_multiline_label() -> None:
+    text = (
+        "price_date: 2026-11-26\nprices:\n  fake:\n"
+        '    "model\\nname":\n'
+        "      input_usd_per_million_tokens: 1e10\n"
+        "      output_usd_per_million_tokens: 0\n"
+    )
+    with pytest.raises(PriceFileError, match="fake:model name prices must be at most") as refused:
+        price_file_from_text(text)
+    assert "\n" not in str(refused.value)
+
+
 def test_an_unquoted_decimal_price_keeps_every_digit() -> None:
     """A YAML float would keep about 17 significant digits; a price keeps all of them,
     quoted or not, and a call costs exactly what they say."""
@@ -157,6 +169,12 @@ def test_a_number_that_is_not_a_finite_decimal_as_written_is_refused_in_one_line
         prices(written)
     assert why in str(refused.value)
     assert "\n" not in str(refused.value)
+
+
+@pytest.mark.parametrize("written", ["'1e+1000000'", "'1e-22'", "'0e+1000000'", "1000000001"])
+def test_prices_outside_the_file_bounds_are_refused(written: str) -> None:
+    with pytest.raises(PriceFileError, match="at most 1,000,000,000 USD"):
+        prices(written)
 
 
 def test_a_model_missing_from_the_price_file_is_refused() -> None:
