@@ -552,11 +552,12 @@ def _managed_oid(
             _mark_database(conn, name, expected_marker)
             print(f"Adopted database {name} through {history[-1][0]}.")
             return oid
-    remedy = (
-        "Fix its owner or rename the database"
-        if expected_marker == REGISTRY_DATABASE_COMMENT
-        else "Drop it and FiveFold will create it again"
-    )
+    if expected_marker == REGISTRY_DATABASE_COMMENT:
+        remedy = "Fix its owner or rename the database"
+    elif _special_kind(name) in (DEVELOPMENT_DATABASE_COMMENT, TEMPLATE_DATABASE_COMMENT):
+        remedy = "Drop it and FiveFold will create it again"
+    else:
+        remedy = "Use another database name"
     raise MigrationError(f"the database {name} is not an owned {expected_marker}. {remedy}")
 
 
@@ -576,7 +577,10 @@ def _migrate_managed(
         )
     if _managed_oid(conn, admin_dsn, name, migrations, marker) is None:
         if not create:
-            raise MigrationError(f"the database {name} does not exist. Create it through FiveFold")
+            raise MigrationError(
+                f"the database {name} does not exist."
+                " Use make db-reset for the development database"
+            )
         _create_database(conn, name)
         _mark_database(conn, name, marker)
     with psycopg.connect(make_conninfo(admin_dsn, dbname=name), autocommit=True) as database:
@@ -611,10 +615,7 @@ def _prepare_template(conn: Connection, admin_dsn: str, template: str, migration
             conn, admin_dsn, template, migrations, TEMPLATE_DATABASE_COMMENT, create=True
         )
     except MigrationError as error:
-        raise MigrationError(
-            f"the template database {template} cannot be used: {error}; drop it, and the"
-            " next run makes it again"
-        ) from None
+        raise MigrationError(f"the template database {template} cannot be used: {error}") from None
 
 
 def registry_database(environ: Mapping[str, str] | None = None) -> str:
@@ -714,6 +715,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m fivefold.harness.migrations",
         description="Create the component roles and apply database migrations.",
+        epilog="migrate and reset can adopt an unmarked database as a development database "
+        "if the administrator owns it and its history matches a prefix of FiveFold's shipped "
+        "migrations. reset recreates the development database.",
     )
     parser.add_argument(
         "command",
@@ -733,7 +737,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--db-dir",
         type=Path,
         default=DB_DIR,
-        help="directory holding bootstrap.sql and migrations/ (default: bundled data)",
+        help="directory holding bootstrap.sql, migrations/ and registry/ (default: bundled data)",
     )
     args = parser.parse_args(argv)
     admin_dsn: str = args.dsn

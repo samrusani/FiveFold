@@ -12,6 +12,7 @@ import pytest
 from psycopg import sql
 
 from fivefold.harness.migrations import (
+    REGISTRY_ENV,
     MigrationError,
     create_database,
     create_run_database,
@@ -120,7 +121,7 @@ def test_preparation_leaves_a_database_it_cannot_adopt_untouched(
                 "SELECT * FROM public.schema_migration ORDER BY filename"
             ).fetchall()
     before = catalog(admin_dsn, name)
-    remedy = "rename the database" if kind == "registry" else "FiveFold will create it again"
+    remedy = "rename the database" if kind == "registry" else "Use another database name"
     with pytest.raises(MigrationError, match=remedy):
         prepare(kind, admin_dsn, name)
     assert catalog(admin_dsn, name) == before
@@ -151,7 +152,7 @@ def test_cli_requires_ownership_and_accepts_an_old_development_prefix(
     database = create_database(admin_dsn, name)
     argv = [command, "--dsn", admin_dsn, "--database", name]
     assert main(argv) == 1
-    assert "Drop it and FiveFold will create it again" in capsys.readouterr().err
+    assert "Use another database name" in capsys.readouterr().err
     assert catalog(admin_dsn, name) is not None
     with psycopg.connect(database.dsn, autocommit=True) as conn:
         migrate(conn, prefix(DB_DIR / "migrations", tmp_path / "old", 17))
@@ -185,3 +186,31 @@ def test_a_marked_template_is_never_a_run_replacement(
             replace=True,
         )
     assert catalog(admin_dsn, name) == before
+
+
+@pytest.mark.parametrize("recognition", ["name", "marker"])
+def test_migrate_uses_the_registry_directory(
+    recognition: str,
+    named_database: str,
+    admin_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = named_database
+    registry = DB_DIR / "registry"
+    legacy = prefix(registry, tmp_path / "registry", 2)
+    if recognition == "name":
+        database = create_database(admin_dsn, name)
+        with psycopg.connect(database.dsn, autocommit=True) as conn:
+            migrate(conn, legacy)
+        monkeypatch.setenv(REGISTRY_ENV, name)
+    else:
+        prepare_registry(admin_dsn, legacy, name)
+    assert main(["migrate", "--dsn", admin_dsn, "--database", name]) == 0
+    identity = catalog(admin_dsn, name)
+    assert identity is not None and identity[1] == "FiveFold registry database"
+    with psycopg.connect(admin_dsn, dbname=name) as conn:
+        applied = conn.execute(
+            "SELECT filename FROM public.schema_migration ORDER BY filename"
+        ).fetchall()
+    assert applied == [(file.name,) for file in discover(registry)]
