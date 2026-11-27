@@ -76,6 +76,8 @@ class ReasonCode(StrEnum):
     STALE_INPUT = "stale_input"
     """Property 3: the dependency's rule fails between the cited version and the fact
     just before the commit."""
+    QUOTE_TERMS_MISMATCH = "quote_terms_mismatch"
+    """Property 3: the order's terms differ from the quote it cites (0025)."""
     MISSING_EFFECT = "missing_effect"
     """Property 4: a required intent has no acceptable effect at the end, and no excuse."""
     NO_REPORT = "no_report"

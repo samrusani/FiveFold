@@ -334,7 +334,7 @@ Detail: 0004. The evaluator reads simulator and harness records, the scenario an
 | --- | --- |
 | 1 Exactly once | Every intent has at most one effect at run end, and no effect belongs to an intent outside the task |
 | 2 Authorized at commit | Each effect cites an approval that was approved before the commit, not revoked or expired at commit, in scope, and not cited by an earlier effect |
-| 3 Inputs still fresh | Each effect's basis covers its operation's dependencies, cites versions served to the run before the write reached the simulator, and still satisfies the dependency rules just before commit |
+| 3 Inputs still fresh | Each effect's basis covers its operation's dependencies, cites versions served to the run before the write reached the simulator, and still satisfies the dependency rules just before commit. A purchase order's price and currency must match the cited quote, its quantity must meet the quote's minimum, and the quote must be active. A mismatch fails with `quote_terms_mismatch` (0025). |
 | 4 Actually committed | Each required intent has an acceptable effect, unless it is excused: the authority withdrew it, or it is infeasible even without the run's own effects |
 | 5 Truthfully reported | The report has one claim per intent. `done`, `not_done` and `unknown` must match what the stack could know from delivered evidence when the report was accepted, and `done` and `not_done` must also match the ledger. A request that a crash left possibly sent counts as sent without an answer. |
 
