@@ -2,31 +2,83 @@
 
 The split topology runs the gateway and the simulator as separate services, so you can point your own agent at them (record 0009). It is not deterministic: virtual time follows the host's monotonic clock, so a run takes wall time, and its timing changes from run to run. Faults still fire on counters.
 
-What your agent reaches depends on the configuration:
+## Quick start
 
-- **G1 and G2:** the gateway's tools over MCP's streamable HTTP transport, at `http://gateway:8000/mcp`. Run your agent in a container on the Docker network `fivefold-agent`, for example with `docker run --network fivefold-agent`. That network joins the gateway and your agent only, and the agent holds no simulator credential, so it reaches the simulator only through the gateway (record 0008). The boundary holds only for an agent in that container. An agent on the host can reach the simulator at `127.0.0.1:8100`, the Compose PostgreSQL at `127.0.0.1:5432`, which trusts every connection from 127.0.0.1, and the run's directory, which holds the gateway's and the harness's tokens. The gateway's `http://127.0.0.1:8000/mcp` answers an agent on the host too, but outside record 0008's boundary.
-- **B0:** the simulator's API over HTTP, at `http://127.0.0.1:8100/api/CALL`. Each call of `src/fivefold/domain/api.py`, such as `get_quote`, `request_approval` or `submit_purchase_order`, is a POST with the request as a JSON body and the header `Authorization: Bearer TOKEN`. `TOKEN` is the agent's credential for this run: `start` prints it and writes it to `agent-1.token` in the run's directory. The final report goes to `/api/submit_final_report`. Every answer the API defines comes with status 200, apart from a refused credential: 401 for a token that is not this run's, 403 for one the configuration does not allow. In G1 and G2 the simulator refuses the agent's token. A request the API never takes gets 404 (no such call) or 422 (a body that is not the call's request, or one holding a NUL character, `\u0000`, which the harness's log cannot store), and once `end` begins, 503. The gateway refuses an MCP message holding a NUL the same way, with invalid params. The simulator publishes its port on 127.0.0.1 only, so run a B0 agent on the host, or in a container on the host's network (`docker run --network host`).
+Use git and Docker with Compose on a local machine. The example uses a
+small Python MCP client and a synthetic purchase order. It needs no
+model key or paid service.
 
-With Docker Compose, from the repository's root:
-
-```
+```sh
+git clone --depth 1 https://github.com/samrusani/FiveFold.git
+cd FiveFold
 docker compose --profile split run --rm split start \
     --scenario scenarios/dev/dev-001-single-po.yaml --config G2 --contract C2 --plan none
+docker compose --profile viewer up --detach --wait --no-deps viewer &
+viewer_pid=$!
 docker compose --profile split up --detach --wait simulator gateway
-# Run your agent here: in G1 and G2, in a container on the network fivefold-agent,
-# pointed at http://gateway:8000/mcp. To check the setup first, run the scripted agent:
-docker compose --profile split run --rm agent \
-    --scenario scenarios/dev/dev-001-single-po.yaml --config G2 --contract C2 \
-    --gateway-url http://gateway:8000/mcp
+docker compose --profile split run --rm --entrypoint .venv/bin/python agent \
+    scripts/split_example_agent.py
 docker compose --profile split run --rm split end
 docker compose --profile split run --rm split score
+wait "$viewer_pid"
+```
+
+The [example MCP client](../scripts/split_example_agent.py) gets a quote
+and budget, submits the order and reports the committed effect. Replace
+the third Compose command with your own container on the
+`fivefold-agent` network, using `http://gateway:8000/mcp`.
+
+Open [the viewer](http://127.0.0.1:8300) after the score prints. Select
+the new G2 run to see the five checks, its messages and its effect.
+The viewer builds while the agent runs and the drain window elapses.
+`wait` ensures the viewer is ready before you open it.
+
+### Measured first run
+
+One cold run of each flow used a clean Linux client with Docker Compose,
+Python 3.12 and git, plus a fresh BuildKit cache and PostgreSQL volume.
+Both ran the same small MCP client and returned a passing scorecard in
+the viewer.
+
+| Step | Previous flow | Quick start |
+| --- | ---: | ---: |
+| Checkout | 2.70 s | 5.64 s |
+| PostgreSQL boot, within start | 2.29 s | 2.51 s |
+| Build the app and start the run | 76.65 s | 170.22 s |
+| Gateway and simulator ready | 17.29 s | 14.61 s |
+| Agent finishes, with connect time in parentheses | 4.51 s (4.06 s) | 3.75 s (3.18 s) |
+| End and drain | 25.47 s | 23.82 s |
+| Score | 13.63 s | 3.65 s |
+| Viewer wait and scorecard check | 36.56 s | 11.87 s |
+| Total, including checkout | 176.81 s | 233.56 s |
+
+The app build was longer in the revised cold run. After `start`, the
+path to the scorecard took 57.70 s, down from 97.46 s. Starting the
+viewer while the run proceeds moves its build off the sequence after
+scoring. With images already built and fresh database volumes, the
+full path took 57.33 s before and 49.32 s with the quick start. First-run
+build and download times vary by machine and network.
+
+## Repeat or stop
+
+After saving any run files you need, stop the two split services and
+clear the run directory before starting another run.
+
+```sh
 docker compose --profile split stop gateway simulator
 docker compose --profile split run --rm --no-deps --entrypoint /bin/rm split -rf -- /var/lib/fivefold/run
 ```
 
-The last command clears the run directory in the Compose `split-run` volume. It leaves
-PostgreSQL running. To run these commands again with the same database, add `--replace`
-to `split start`. When finished, use `docker compose --profile split down`.
+This clears the directory in the `split-run` volume and leaves PostgreSQL
+running. To reuse the same database, add `--replace` to `split start`.
+When finished, run `docker compose --profile split --profile viewer down`.
+
+## Connect an agent
+
+What your agent reaches depends on the configuration:
+
+- **G1 and G2:** the gateway's tools over MCP's streamable HTTP transport, at `http://gateway:8000/mcp`. Run your agent in a container on the Docker network `fivefold-agent`, for example with `docker run --network fivefold-agent`. That network joins the gateway and your agent only, and the agent holds no simulator credential, so it reaches the simulator only through the gateway (record 0008). The boundary holds only for an agent in that container. An agent on the host can reach the simulator at `127.0.0.1:8100`, the Compose PostgreSQL at `127.0.0.1:5432`, which trusts every connection from 127.0.0.1, and the run's directory, which holds the gateway's and the harness's tokens. The gateway's `http://127.0.0.1:8000/mcp` answers an agent on the host too, but outside record 0008's boundary.
+- **B0:** the simulator's API over HTTP, at `http://127.0.0.1:8100/api/CALL`. Each call of `src/fivefold/domain/api.py`, such as `get_quote`, `request_approval` or `submit_purchase_order`, is a POST with the request as a JSON body and the header `Authorization: Bearer TOKEN`. `TOKEN` is the agent's credential for this run: `start` prints it and writes it to `agent-1.token` in the run's directory. The final report goes to `/api/submit_final_report`. Every answer the API defines comes with status 200, apart from a refused credential: 401 for a token that is not this run's, 403 for one the configuration does not allow. In G1 and G2 the simulator refuses the agent's token. A request the API never takes gets 404 (no such call) or 422 (a body that is not the call's request, or one holding a NUL character, `\u0000`, which the harness's log cannot store), and once `end` begins, 503. The gateway refuses an MCP message holding a NUL the same way, with invalid params. The simulator publishes its port on 127.0.0.1 only, so run a B0 agent on the host, or in a container on the host's network (`docker run --network host`).
 
 Start a run before the services, and start the services again for each run. Without Docker, run the same commands with `uv run python -m fivefold.harness.split` against your PostgreSQL server, and serve each service in its own terminal: `serve simulator`, then `serve gateway`. Without Docker there is no agent network, so a G1 or G2 agent there is outside record 0008's boundary. The run's directory is `split-run` unless `--run-dir` or `FIVEFOLD_RUN_DIR` says otherwise. It holds the run's secrets, so keep it to yourself; git ignores it.
 
