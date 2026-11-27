@@ -17,7 +17,19 @@ Status: M0 done, 14 Nov 2026. M1 and M2 done, 15 Nov 2026. M3 done but for T6's 
 
 Version 0.2.0 includes the scripted Temporal baseline B1 (record 0018), the scripted DBOS baseline B2 (record 0020) and the MCP lost-reply conformance test (record 0019).
 
-The [bounded TLA+ gateway model](adr/0021-tla-gateway-model.md) and [run shrinking](adr/0022-run-shrinking.md) first shipped in 0.2.0a3. CI and nightly workflows check the model. F8 runs on the dedicated memory scenario. Its scored runs use in-repo memory. The record also defines a separate optional AliceMemory exercise. Receipt export is planned for v0.3.
+The [bounded TLA+ gateway model](adr/0021-tla-gateway-model.md) and [run shrinking](adr/0022-run-shrinking.md) first shipped in 0.2.0a3. CI and nightly workflows check the model. F8 runs on the dedicated memory scenario. Its scored runs use in-repo memory. The record also defines a separate optional AliceMemory exercise.
+
+### Next releases
+
+1. Complete the scoring changes in records 0025 and 0026, item 1. Replay
+   the expected cells and check the saved results. Propose records 0027
+   and 0028 for the evaluation protocol and second domain. Verify the
+   path from a fresh installation to a scored run of an external agent.
+2. After the protocol is accepted, run the external evaluation on a
+   tagged pre-release. Review the results and evidence before publishing
+   the preprint, write-up and results site together.
+3. Add receipt export for v0.3 after the launch. It needs its own
+   accepted decision record.
 
 ## Teams
 
