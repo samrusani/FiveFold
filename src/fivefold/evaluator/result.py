@@ -18,7 +18,7 @@ import json
 from enum import StrEnum
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, model_validator
 
 from fivefold.domain.report import ClaimStatus
 from fivefold.evaluator.evidence import Knowledge, Settlement
@@ -268,7 +268,7 @@ class RunSummary(ResultModel):
 
     run_id: str
     scenario_id: str
-    scenario_digest: str
+    scenario_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     config: str
     contract: str
     seed: StrictInt

@@ -231,6 +231,28 @@ def test_the_policy_plays_the_whole_task() -> None:
     assert replies[-1].content == "Done."
 
 
+@pytest.mark.parametrize("kind", ["surrogate", "large_integer", "deep_value"])
+def test_an_unreadable_reply_does_not_enter_the_cassette(kind: str) -> None:
+    recorder = CassetteRecorder(SCRIPTED)
+    request = "ab" * 32
+    recorder.record("agent-1", request, AIMessage(content="first"))
+    previous = recorder.calls
+    value: Any
+    if kind == "surrogate":
+        value = chr(0xD800)
+    elif kind == "large_integer":
+        value = 10**4999
+    else:
+        value = None
+        for _ in range(200):
+            value = [value]
+    reply = AIMessage(content="", response_metadata={"sample": value})
+    with pytest.raises(CassetteError, match="cannot be stored"):
+        recorder.record("agent-1", request, reply)
+    assert recorder.calls == previous
+    assert Cassette.from_text(recorder.cassette(HEADER).text()).calls == previous
+
+
 def test_the_wrapper_returns_what_the_wrapped_model_returns() -> None:
     plain, _ = asyncio.run(converse(scripted()))
     recorder = CassetteRecorder(SCRIPTED)

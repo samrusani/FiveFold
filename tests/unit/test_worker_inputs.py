@@ -7,10 +7,13 @@ from unittest.mock import create_autospec
 
 import mcp_types as types
 import pytest
-from pydantic import JsonValue, ValidationError
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from fivefold.agents.tools import Timeouts, gateway_tools
-from fivefold.domain.api import FactRead, SubmitPurchaseOrder
+from fivefold.agents.tools import Timeouts, baseline_tools, gateway_tools
+from fivefold.domain.api import FactRead, SubmitPurchaseOrder, Version, VirtualMs
 from fivefold.domain.scenario import load_scenario_file
 from fivefold.faults.plan import FaultInjector, Fired, parse_plan
 from fivefold.gateway.tools import PurchaseOrderArgs
@@ -160,3 +163,49 @@ def test_f8_waits_for_a_memory_fact_without_logging_or_counting_the_missing_one(
     control.correct_memory.assert_called_once_with(
         "memory/S-1/W-100", changes, actor="fault-plan", vt=0
     )
+
+
+@pytest.mark.parametrize("integer_type", [Version, VirtualMs])
+def test_version_and_virtual_ms_must_fit_the_existing_json_encoder(integer_type: Any) -> None:
+    adapter = TypeAdapter(integer_type)
+    with pytest.raises(ValidationError, match="too large for the run's JSON records"):
+        adapter.validate_python(10**4999)
+    assert adapter.validate_python(20) == 20
+
+
+def test_a_b0_order_with_an_unencodable_version_returns_a_tool_error() -> None:
+    transport = create_autospec(Transport, instance=True)
+    tools = baseline_tools(transport, Scheduler(), Timeouts(10, 20), worker="agent-1", status=False)
+    workflow = StateGraph(MessagesState)
+    workflow.add_node("tools", ToolNode(tools))
+    workflow.add_edge(START, "tools")
+    workflow.add_edge("tools", END)
+    graph = workflow.compile()
+    call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "type": "tool_call",
+                "name": "submit_purchase_order",
+                "id": "call-1",
+                "args": {
+                    "intent_id": "REQ-1",
+                    "approval_id": "APR-0001",
+                    "supplier_id": "S-1",
+                    "sku": "W-100",
+                    "quantity": 10,
+                    "unit_price_minor": 540,
+                    "currency": "USD",
+                    "cost_center": "CC-OPS",
+                    "basis": {"quote/S-1/W-100": 10**4999},
+                },
+            },
+        ],
+    )
+    state = asyncio.run(graph.ainvoke({"messages": [call]}))
+    message = state["messages"][-1]
+    assert isinstance(message, ToolMessage)
+    assert message.status == "error"
+    assert message.name == "submit_purchase_order" and message.tool_call_id == "call-1"
+    assert "invalid arguments" in message.content
+    transport.call.assert_not_called()

@@ -130,6 +130,43 @@ def test_the_fixture_connects_before_the_evidence_interval(monkeypatch: pytest.M
     assert deadlines == [10.0, 0.6]
 
 
+def test_delayed_reply_can_arrive_after_the_connection_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner, "CONNECTION_TIMEOUT_S", 0.8)
+    with connection(
+        "streamable_http", "deduplicating", tmp_path / "calls.jsonl", "--reply-delay-ms", "1000"
+    ) as transport:
+        fixture = Fixture.model_validate(declaration(transport, [Case.DUPLICATE]))
+        result = asyncio.run(runner.run(fixture, 7))
+
+    row = next(row for row in result.cases if row.case is Case.DUPLICATE)
+    assert row.verdict is runner.Verdict.PASS, row
+    assert row.evidence.settled_count == 1
+
+
+def test_connection_without_a_handshake_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = Fixture.model_validate(
+        declaration({"kind": "stdio", "command": sys.executable}, [Case.DUPLICATE])
+    )
+
+    @asynccontextmanager
+    async def stalled_connect(source: Fixture, seconds: float) -> AsyncIterator[None]:
+        await asyncio.Event().wait()
+        yield
+
+    monkeypatch.setattr(runner, "CONNECTION_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(runner, "connect", stalled_connect)
+
+    async def bounded_run() -> runner.CaseResult:
+        return await asyncio.wait_for(runner.run_case(fixture, Case.DUPLICATE, {}), 1)
+
+    result = asyncio.run(bounded_run())
+    assert result.verdict is runner.Verdict.ERROR
+    assert result.reason == "fixture connection timed out"
+    assert result.evidence.writes_sent == 0
+
+
 @pytest.mark.parametrize("kind", ["stdio", "streamable_http"])
 @pytest.mark.parametrize("server", ["deduplicating", "repeating"])
 def test_reply_drops_need_no_fixture_hooks(kind: str, server: str, tmp_path: Path) -> None:

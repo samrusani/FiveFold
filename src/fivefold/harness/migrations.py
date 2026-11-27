@@ -314,9 +314,10 @@ def _database_identity(conn: Connection, name: str) -> tuple[int, str | None, bo
 
 
 def _special_kind(name: str) -> str | None:
-    if name in (TEMPLATE_DATABASE, template_database()):
+    template, registry = _configured_database_names()
+    if name in (TEMPLATE_DATABASE, template):
         return TEMPLATE_DATABASE_COMMENT
-    if name in (REGISTRY_DATABASE, registry_database()):
+    if name in (REGISTRY_DATABASE, registry):
         return REGISTRY_DATABASE_COMMENT
     if name == DEVELOPMENT_DATABASE:
         return DEVELOPMENT_DATABASE_COMMENT
@@ -344,10 +345,27 @@ def template_database(environ: Mapping[str, str] | None = None) -> str:
 
     `environ` defaults to the process environment.
     """
+    template, _ = _configured_database_names(environ)
+    return template
+
+
+def _configured_database_names(environ: Mapping[str, str] | None = None) -> tuple[str, str]:
     env = os.environ if environ is None else environ
-    name = env.get(TEMPLATE_ENV) or TEMPLATE_DATABASE
-    check_database_name(name)
-    return name
+    template = env.get(TEMPLATE_ENV) or TEMPLATE_DATABASE
+    registry = env.get(REGISTRY_ENV) or REGISTRY_DATABASE
+    check_database_name(template)
+    check_database_name(registry)
+    if template in (REGISTRY_DATABASE, DEVELOPMENT_DATABASE):
+        raise MigrationError(
+            f"{TEMPLATE_ENV} names the reserved database {template}. Choose another name"
+        )
+    if registry in (TEMPLATE_DATABASE, DEVELOPMENT_DATABASE):
+        raise MigrationError(
+            f"{REGISTRY_ENV} names the reserved database {registry}. Choose another name"
+        )
+    if template == registry:
+        raise MigrationError(f"{TEMPLATE_ENV} and {REGISTRY_ENV} must name distinct databases")
+    return template, registry
 
 
 def prepare_template(admin_dsn: str, migrations: Path, name: str | None = None) -> str:
@@ -552,7 +570,7 @@ def _managed_oid(
             _mark_database(conn, name, expected_marker)
             print(f"Adopted database {name} through {history[-1][0]}.")
             return oid
-    if expected_marker == REGISTRY_DATABASE_COMMENT:
+    if REGISTRY_DATABASE_COMMENT in (marker, expected_marker):
         remedy = "Fix its owner or rename the database"
     elif _special_kind(name) in (DEVELOPMENT_DATABASE_COMMENT, TEMPLATE_DATABASE_COMMENT):
         remedy = "Drop it and FiveFold will create it again"
@@ -623,10 +641,8 @@ def registry_database(environ: Mapping[str, str] | None = None) -> str:
 
     `environ` defaults to the process environment.
     """
-    env = os.environ if environ is None else environ
-    name = env.get(REGISTRY_ENV) or REGISTRY_DATABASE
-    check_database_name(name)
-    return name
+    _, registry = _configured_database_names(environ)
+    return registry
 
 
 def prepare_registry(admin_dsn: str, directory: Path, name: str | None = None) -> str:

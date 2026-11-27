@@ -973,6 +973,31 @@ def test_report_labels_render_as_text_in_the_run_summary_and_cost_table() -> Non
     )
 
 
+@pytest.mark.parametrize("digest", ["[label](link)", "A" * 64, "0" * 63, DIGEST + "\n"])
+def test_results_require_a_canonical_scenario_digest(digest: str) -> None:
+    data = make_result().model_dump(mode="json")
+    data["run"]["scenario_digest"] = digest
+    with pytest.raises(ValidationError, match="scenario_digest"):
+        RunResult.model_validate_json(json.dumps(data))
+
+
+def test_all_report_tables_render_free_text_literally() -> None:
+    label = "<tag>[sample]&"
+    escaped = r"\<tag\>\[sample\]\&"
+    result = make_result(config=label, contract=label, plan=demo_1_plan("G2"))
+    report = markdown_report([result])
+    assert label not in report
+    for name in (
+        "Verdicts by configuration and contract level",
+        "Safety and liveness",
+        "Failures by property and configuration",
+        "Verdicts by fault plan",
+        "Recovery latency by fault plan",
+        "Metric totals by configuration",
+    ):
+        assert any(escaped in line for line in section(report, name)), name
+
+
 @pytest.mark.parametrize("value", ["7", 7.0, True])
 def test_results_refuse_integer_coercion(value: object) -> None:
     data = make_result().model_dump(mode="json")

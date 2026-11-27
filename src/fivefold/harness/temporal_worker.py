@@ -21,6 +21,8 @@ from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from fivefold._temporal_cli import VERSION as CLI_VERSION
+from fivefold._temporal_cli import verify_executable
 from fivefold.harness.baseline_worker import (
     BaselineInfrastructureError,
     BaselineWorkers,
@@ -43,7 +45,6 @@ if TYPE_CHECKING:
     from fivefold.harness.run import InprocRun
 
 TASK_QUEUE = "fivefold-b1"
-CLI_VERSION = "1.10.1"  # The same release as scripts/temporal_cli.py.
 CLI_HELP = (
     f"Temporal CLI {CLI_VERSION} is required. Run make temporal-setup or set "
     "FIVEFOLD_TEMPORAL_CLI to the pinned binary."
@@ -67,6 +68,12 @@ def temporal_cli_path() -> Path:
     path = Path(os.environ.get("FIVEFOLD_TEMPORAL_CLI", ".temporal/temporal")).resolve()
     if not path.is_file():
         raise TemporalInfrastructureError(CLI_HELP)
+    try:
+        verify_executable(path)
+    except OSError:
+        raise TemporalInfrastructureError(CLI_HELP) from None
+    except ValueError as error:
+        raise TemporalInfrastructureError(f"{CLI_HELP} ({error})") from None
     return path
 
 

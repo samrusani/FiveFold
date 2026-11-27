@@ -34,7 +34,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
-from pydantic import JsonValue, PrivateAttr, ValidationError
+from pydantic import JsonValue, PrivateAttr, TypeAdapter
 
 from fivefold.recorder.cassette import (
     Call,
@@ -51,6 +51,8 @@ from fivefold.recorder.cassette import (
     tool_schemas,
 )
 
+_CALLS = TypeAdapter(dict[str, tuple[Call, ...]])
+
 
 class CassetteRecorder:
     """Collects one run's model calls, in the order the model answers them."""
@@ -66,11 +68,14 @@ class CassetteRecorder:
 
     def record(self, worker: str, request: str, reply: AIMessage) -> None:
         """Record that `worker` asked the request whose hash is `request`, and the reply."""
-        response = response_json(reply)
         try:
-            self._calls.append(Call(worker=worker, request=request, response=response))
-        except ValidationError:
+            call = Call(worker=worker, request=request, response=response_json(reply))
+            # Keep the same object and list enclosing a call in Cassette.from_text.
+            text = canonical_json({"calls": [call.model_dump()]})
+            _CALLS.validate_json(text.encode("utf-8"))
+        except (ValueError, RecursionError):
             raise CassetteError("the reply cannot be stored in the cassette format") from None
+        self._calls.append(call)
 
     def cassette(self, run: RunHeader) -> Cassette:
         """The cassette of the calls so far, recorded from `run`."""

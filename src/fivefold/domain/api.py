@@ -64,8 +64,8 @@ Quantity = Annotated[StrictInt, Field(ge=1), AfterValidator(json_integer)]
 Minor = Annotated[StrictInt, Field(ge=0), AfterValidator(json_integer)]
 """An amount of money in minor units, such as cents."""
 
-Version = Annotated[StrictInt, Field(ge=1)]
-VirtualMs = Annotated[StrictInt, Field(ge=0)]
+Version = Annotated[StrictInt, Field(ge=1), AfterValidator(json_integer)]
+VirtualMs = Annotated[StrictInt, Field(ge=0), AfterValidator(json_integer)]
 
 
 @dataclass(frozen=True)
