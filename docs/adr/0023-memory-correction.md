@@ -49,6 +49,12 @@ read-refusal shape. The tool list depends on the scenario. Both routes
 list `get_memory` only in memory-enabled scenarios. The dev-001 tool list
 is unchanged.
 
+**Amended on 26 Nov 2026 by [0026, item 1](0026-readings-from-the-v020-audit.md#1-memory-and-feasibility-h5).**
+In a memory-enabled scenario, a purchase order is a feasible option only
+if its supplier and SKU have the memory fact it needs. The scenario
+loader checks this on the initial facts. Property 4 checks it on the
+facts at run end with the run's own effects removed.
+
 ### The fault and its points
 
 A correction appends a version at the fault's virtual time. The next

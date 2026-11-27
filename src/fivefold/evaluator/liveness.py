@@ -44,9 +44,9 @@ from fivefold.domain.authority import (
     scope_mismatches,
 )
 from fivefold.domain.scenario import (
-    Authority,
     Intent,
     ReservationAccept,
+    Scenario,
     feasible_together,
 )
 from fivefold.evaluator.checks import effects_by_intent, property_result
@@ -81,7 +81,7 @@ def check_actually_committed(
         if excuse is None:
             if facts is None:
                 facts = facts_without_effects(records)
-            excuse = _infeasible(intent, records.scenario.authority, facts)
+            excuse = _infeasible(intent, records.scenario, facts)
         if excuse is not None:
             excused.append(excuse)
             continue
@@ -187,10 +187,12 @@ def _authority_withdrawn(
 
 
 def _infeasible(
-    intent: Intent, authority: Authority, facts: dict[str, dict[str, object]]
+    intent: Intent, scenario: Scenario, facts: dict[str, dict[str, object]]
 ) -> ExcusedIntent | None:
     try:
-        feasible = feasible_together([intent], authority, facts)
+        feasible = feasible_together(
+            [intent], scenario.authority, facts, memory_enabled=scenario.memory_enabled
+        )
     except ValueError as error:
         raise RecordsError(f"the facts at the end, for {intent.id}: {error}") from error
     if feasible:
